@@ -5491,6 +5491,11 @@ MidiClip* PianoRollWindow::aiBridgeCurrentMidiClip() const
 	return m_editor->m_midiClip;
 }
 
+void PianoRollWindow::aiBridgeSetCurrentMidiClip(MidiClip* clip)
+{
+	setCurrentMidiClip(clip);
+}
+
 
 
 

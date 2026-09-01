@@ -73,7 +73,7 @@ AiBridge::~AiBridge()
 gui::PluginView *AiBridge::instantiateView(QWidget *parent)
 {
 	auto *view = new AiBridgeView(this);
-	view->setParent(parent);
+	Q_UNUSED(parent);
 	return view;
 }
 

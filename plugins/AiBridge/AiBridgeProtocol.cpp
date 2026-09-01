@@ -1,6 +1,8 @@
 #include "AiBridgeProtocol.h"
+#include "AiBridgeMutationTypes.h"
 
 #include <QJsonDocument>
+#include <QJsonArray>
 #include <QSet>
 
 #include <cmath>
@@ -32,6 +34,62 @@ bool hasOnlyKeys(const QJsonObject &object, const QSet<QString> &allowed)
 	return true;
 }
 
+bool validPaging(const QJsonObject &parameters)
+{
+	if (!hasOnlyKeys(parameters, {QStringLiteral("offset"), QStringLiteral("limit")})) return false;
+	for (const auto key : {QStringLiteral("offset"), QStringLiteral("limit")})
+		if (parameters.contains(key) && (!isInteger(parameters.value(key)) || parameters.value(key).toInt() < 0 || parameters.value(key).toInt() > 256)) return false;
+	return true;
+}
+
+bool parseNote(const QJsonValue &value)
+{
+	if (!value.isObject()) return false;
+	const auto object = value.toObject();
+	if (!hasOnlyKeys(object, {QStringLiteral("position_ticks"), QStringLiteral("length_ticks"), QStringLiteral("key"), QStringLiteral("volume"), QStringLiteral("panning"), QStringLiteral("note_type")})) return false;
+	for (const auto &key : {QStringLiteral("position_ticks"), QStringLiteral("length_ticks"), QStringLiteral("key"), QStringLiteral("volume"), QStringLiteral("panning")})
+		if (!object.contains(key) || !isInteger(object.value(key))) return false;
+	AiBridgeCopiedNote note;
+	note.position_ticks = object.value(QStringLiteral("position_ticks")).toVariant().toLongLong();
+	note.length_ticks = object.value(QStringLiteral("length_ticks")).toVariant().toLongLong();
+	note.key = object.value(QStringLiteral("key")).toInt();
+	note.volume = object.value(QStringLiteral("volume")).toInt();
+	note.panning = object.value(QStringLiteral("panning")).toInt();
+	note.note_type = object.value(QStringLiteral("note_type")).toString();
+	return AiBridgeMutationTypes::validateNoteInput(note).success();
+}
+
+bool validSelection(const QJsonValue &value)
+{
+	if (!value.isObject()) return false;
+	const auto object = value.toObject();
+	AiBridgeNoteSelection selection;
+	for (const auto &key : {QStringLiteral("position_start"), QStringLiteral("position_end")})
+		if (object.contains(key) && !isInteger(object.value(key))) return false;
+	if (object.contains(QStringLiteral("position_start"))) selection.position_start=object.value(QStringLiteral("position_start")).toVariant().toLongLong();
+	if (object.contains(QStringLiteral("position_end"))) selection.position_end=object.value(QStringLiteral("position_end")).toVariant().toLongLong();
+	for (const auto &key : {QStringLiteral("key_min"), QStringLiteral("key_max")})
+		if (object.contains(key) && (!isInteger(object.value(key)) || object.value(key).toInt()<0 || object.value(key).toInt()>127)) return false;
+	if (object.contains(QStringLiteral("key_min"))) selection.key_min=object.value(QStringLiteral("key_min")).toInt();
+	if (object.contains(QStringLiteral("key_max"))) selection.key_max=object.value(QStringLiteral("key_max")).toInt();
+	if (object.contains(QStringLiteral("exact")))
+	{
+		if (!object.value(QStringLiteral("exact")).isObject()) return false;
+		const auto exactObject=object.value(QStringLiteral("exact")).toObject();
+		AiBridgeExactNote exact;
+		for (const auto &key : {QStringLiteral("position"), QStringLiteral("length"), QStringLiteral("key"), QStringLiteral("volume"), QStringLiteral("panning")})
+			if (exactObject.contains(key) && !isInteger(exactObject.value(key))) return false;
+		if (exactObject.contains(QStringLiteral("position"))) exact.position=exactObject.value(QStringLiteral("position")).toVariant().toLongLong();
+		if (exactObject.contains(QStringLiteral("length"))) exact.length=exactObject.value(QStringLiteral("length")).toVariant().toLongLong();
+		if (exactObject.contains(QStringLiteral("key"))) exact.key=exactObject.value(QStringLiteral("key")).toInt();
+		if (exactObject.contains(QStringLiteral("volume"))) exact.volume=exactObject.value(QStringLiteral("volume")).toInt();
+		if (exactObject.contains(QStringLiteral("panning"))) exact.panning=exactObject.value(QStringLiteral("panning")).toInt();
+		if (exactObject.contains(QStringLiteral("note_type"))) { if (!exactObject.value(QStringLiteral("note_type")).isString()) return false; exact.note_type=exactObject.value(QStringLiteral("note_type")).toString(); }
+		selection.exact=exact;
+	}
+	return AiBridgeMutationTypes::validateSelection(selection,true).success();
+}
+
 } // namespace
 
 AiBridgeProtocolParseResult AiBridgeProtocol::parseRequest(const QByteArray &frame)
@@ -61,20 +119,75 @@ AiBridgeProtocolParseResult AiBridgeProtocol::parseRequest(const QByteArray &fra
 	if (!object.contains(QStringLiteral("action")) || !object.value(QStringLiteral("action")).isString())
 		return failure(QStringLiteral("invalid_action"), QStringLiteral("action must be a string"));
 	const auto action = object.value(QStringLiteral("action")).toString();
-	if (!QSet<QString>{QStringLiteral("get_context"), QStringLiteral("set_tempo"), QStringLiteral("adjust_current_track_volume"), QStringLiteral("add_note_to_current_clip")}.contains(action))
+	if (!QSet<QString>{QStringLiteral("get_context"), QStringLiteral("set_tempo"), QStringLiteral("adjust_current_track_volume"), QStringLiteral("add_note_to_current_clip"), QStringLiteral("get_windows"), QStringLiteral("set_window_geometry"), QStringLiteral("focus_window"), QStringLiteral("arrange_windows"), QStringLiteral("get_project_structure"), QStringLiteral("list_tracks"), QStringLiteral("list_clips"), QStringLiteral("get_clip"), QStringLiteral("open_clip_in_piano_roll"), QStringLiteral("add_notes"), QStringLiteral("delete_notes"), QStringLiteral("transpose_notes"), QStringLiteral("move_notes"), QStringLiteral("duplicate_region")}.contains(action))
 		return failure(QStringLiteral("unknown_action"), QStringLiteral("Action is not allowlisted"));
 	if (!object.contains(QStringLiteral("parameters")) || !object.value(QStringLiteral("parameters")).isObject())
 		return failure(QStringLiteral("invalid_parameters"), QStringLiteral("parameters must be an object"));
 
 	const auto parameters = object.value(QStringLiteral("parameters")).toObject();
+	const auto requestFailure = [&](const QString &code, const QString &message)
+	{
+		return AiBridgeProtocolParseResult{false, code, message, {2, requestId, action, parameters}};
+	};
 	if (action == QStringLiteral("get_context") && !parameters.isEmpty())
-		return failure(QStringLiteral("unknown_parameter"), QStringLiteral("get_context accepts no parameters"));
+		return requestFailure(QStringLiteral("unknown_parameter"), QStringLiteral("get_context accepts no parameters"));
 	if (action == QStringLiteral("set_tempo") && (!hasOnlyKeys(parameters, {QStringLiteral("bpm")}) || !isInteger(parameters.value(QStringLiteral("bpm")))))
-		return failure(QStringLiteral("invalid_parameter"), QStringLiteral("set_tempo requires integer bpm"));
+		return requestFailure(QStringLiteral("invalid_parameter"), QStringLiteral("set_tempo requires integer bpm"));
 	if (action == QStringLiteral("adjust_current_track_volume") && (!hasOnlyKeys(parameters, {QStringLiteral("delta")}) || !parameters.value(QStringLiteral("delta")).isDouble()))
-		return failure(QStringLiteral("invalid_parameter"), QStringLiteral("adjust_current_track_volume requires numeric delta"));
+		return requestFailure(QStringLiteral("invalid_parameter"), QStringLiteral("adjust_current_track_volume requires numeric delta"));
 	if (action == QStringLiteral("add_note_to_current_clip") && (!hasOnlyKeys(parameters, {QStringLiteral("key"), QStringLiteral("position"), QStringLiteral("length"), QStringLiteral("velocity")}) || !isInteger(parameters.value(QStringLiteral("key"))) || !isInteger(parameters.value(QStringLiteral("position"))) || !isInteger(parameters.value(QStringLiteral("length"))) || !isInteger(parameters.value(QStringLiteral("velocity")))))
-		return failure(QStringLiteral("invalid_parameter"), QStringLiteral("add_note_to_current_clip requires integer note parameters"));
+		return requestFailure(QStringLiteral("invalid_parameter"), QStringLiteral("add_note_to_current_clip requires integer note parameters"));
+	if ((action == QStringLiteral("focus_window") || action == QStringLiteral("set_window_geometry")) && (!parameters.value(QStringLiteral("id")).isString()))
+		return requestFailure(QStringLiteral("invalid_parameter"), QStringLiteral("window action requires string id"));
+	if (action == QStringLiteral("focus_window") && !hasOnlyKeys(parameters, {QStringLiteral("id")}))
+		return requestFailure(QStringLiteral("unknown_parameter"), QStringLiteral("focus_window accepts only id"));
+	if (action == QStringLiteral("set_window_geometry") && (!hasOnlyKeys(parameters, {QStringLiteral("id"), QStringLiteral("x"), QStringLiteral("y"), QStringLiteral("width"), QStringLiteral("height")}) || !isInteger(parameters.value(QStringLiteral("x"))) || !isInteger(parameters.value(QStringLiteral("y"))) || !isInteger(parameters.value(QStringLiteral("width"))) || !isInteger(parameters.value(QStringLiteral("height")))))
+		return requestFailure(QStringLiteral("invalid_parameter"), QStringLiteral("set_window_geometry requires integer geometry"));
+	if (action == QStringLiteral("get_windows") && !parameters.isEmpty())
+		return requestFailure(QStringLiteral("unknown_parameter"), QStringLiteral("get_windows accepts no parameters"));
+	if (action == QStringLiteral("arrange_windows") && (!hasOnlyKeys(parameters, {QStringLiteral("strategy")}) || !parameters.value(QStringLiteral("strategy")).isString()))
+		return requestFailure(QStringLiteral("invalid_parameter"), QStringLiteral("arrange_windows requires strategy"));
+	if (action == QStringLiteral("get_project_structure") && !parameters.isEmpty()) return requestFailure(QStringLiteral("unknown_parameter"), QStringLiteral("get_project_structure accepts no parameters"));
+	if (action == QStringLiteral("list_tracks") && !validPaging(parameters)) return requestFailure(QStringLiteral("invalid_parameter"), QStringLiteral("list_tracks paging is invalid"));
+	if (action == QStringLiteral("list_clips") && (!parameters.contains(QStringLiteral("track_id")) || !parameters.value(QStringLiteral("track_id")).isString())) return requestFailure(QStringLiteral("invalid_parameter"), QStringLiteral("list_clips requires track_id"));
+	if (action == QStringLiteral("get_clip") && (!parameters.contains(QStringLiteral("clip_id")) || !parameters.value(QStringLiteral("clip_id")).isString())) return requestFailure(QStringLiteral("invalid_parameter"), QStringLiteral("get_clip requires clip_id"));
+	if ((action == QStringLiteral("list_clips") || action == QStringLiteral("get_clip")) && (parameters.contains(QStringLiteral("offset")) || parameters.contains(QStringLiteral("limit"))))
+	{
+		QJsonObject paging = parameters;
+		paging.remove(action == QStringLiteral("list_clips") ? QStringLiteral("track_id") : QStringLiteral("clip_id"));
+		if (!validPaging(paging)) return requestFailure(QStringLiteral("invalid_parameter"), QStringLiteral("paging is invalid"));
+	}
+	if (action == QStringLiteral("list_clips") && !hasOnlyKeys(parameters, {QStringLiteral("track_id"), QStringLiteral("offset"), QStringLiteral("limit")})) return requestFailure(QStringLiteral("unknown_parameter"), QStringLiteral("list_clips contains an unknown parameter"));
+	if (action == QStringLiteral("get_clip") && !hasOnlyKeys(parameters, {QStringLiteral("clip_id"), QStringLiteral("offset"), QStringLiteral("limit")})) return requestFailure(QStringLiteral("unknown_parameter"), QStringLiteral("get_clip contains an unknown parameter"));
+	if (action == QStringLiteral("open_clip_in_piano_roll") && (!hasOnlyKeys(parameters, {QStringLiteral("clip_id")}) || !parameters.value(QStringLiteral("clip_id")).isString())) return requestFailure(QStringLiteral("invalid_parameter"), QStringLiteral("open_clip_in_piano_roll requires clip_id"));
+	if (action == QStringLiteral("add_notes"))
+	{
+		if (!hasOnlyKeys(parameters, {QStringLiteral("clip_id"), QStringLiteral("notes"), QStringLiteral("expected_content_hash")}) || !parameters.value(QStringLiteral("clip_id")).isString() || !parameters.value(QStringLiteral("notes")).isArray())
+			return requestFailure(QStringLiteral("invalid_parameter"), QStringLiteral("add_notes requires clip_id and notes"));
+		const auto notes = parameters.value(QStringLiteral("notes")).toArray();
+		if (notes.isEmpty() || notes.size() > 256)
+			return requestFailure(QStringLiteral("invalid_parameter"), QStringLiteral("add_notes accepts 1 to 256 notes"));
+		for (const auto &note : notes)
+			if (!parseNote(note)) return requestFailure(QStringLiteral("invalid_note"), QStringLiteral("add_notes contains an invalid note"));
+	}
+	if (action == QStringLiteral("delete_notes") || action == QStringLiteral("transpose_notes") || action == QStringLiteral("move_notes"))
+	{
+		QSet<QString> allowed{QStringLiteral("clip_id"), QStringLiteral("selection"), QStringLiteral("expected_content_hash")};
+		const auto valueKey = action == QStringLiteral("transpose_notes") ? QStringLiteral("semitones") : QStringLiteral("delta_ticks");
+		if (action != QStringLiteral("delete_notes")) allowed.insert(valueKey);
+		if (!hasOnlyKeys(parameters, allowed) || !parameters.value(QStringLiteral("clip_id")).isString() || !validSelection(parameters.value(QStringLiteral("selection"))))
+			return requestFailure(QStringLiteral("invalid_parameter"), QStringLiteral("mutation selection is invalid"));
+		if (action != QStringLiteral("delete_notes") && (!parameters.contains(valueKey) || !isInteger(parameters.value(valueKey))))
+			return requestFailure(QStringLiteral("invalid_parameter"), QStringLiteral("mutation delta must be an integer"));
+	}
+	if (action == QStringLiteral("duplicate_region"))
+	{
+		if (!hasOnlyKeys(parameters, {QStringLiteral("clip_id"), QStringLiteral("source_start"), QStringLiteral("source_end"), QStringLiteral("destination_start"), QStringLiteral("expected_content_hash")}) || !parameters.value(QStringLiteral("clip_id")).isString())
+			return requestFailure(QStringLiteral("invalid_parameter"), QStringLiteral("duplicate_region requires clip_id and bounds"));
+		for (const auto &key : {QStringLiteral("source_start"), QStringLiteral("source_end"), QStringLiteral("destination_start")})
+			if (!parameters.contains(key) || !isInteger(parameters.value(key)))
+				return requestFailure(QStringLiteral("invalid_parameter"), QStringLiteral("duplicate_region bounds must be integers"));
+	}
 
 	return {true, QStringLiteral("ok"), QStringLiteral("Request accepted"), {2, requestId, action, parameters}};
 }
@@ -88,7 +201,10 @@ QByteArray AiBridgeProtocol::serializeResponse(const AiBridgeProtocolResponse &r
 		{QStringLiteral("code"), response.code},
 		{QStringLiteral("message"), response.message}};
 	if (!response.data.isUndefined()) object.insert(QStringLiteral("data"), response.data);
-	return QJsonDocument(object).toJson(QJsonDocument::Compact) + '\n';
+	const auto frame = QJsonDocument(object).toJson(QJsonDocument::Compact) + '\n';
+	if (frame.size() <= MaxFrameBytes) return frame;
+	QJsonObject error{{QStringLiteral("version"), response.version}, {QStringLiteral("request_id"), response.requestId}, {QStringLiteral("success"), false}, {QStringLiteral("code"), QStringLiteral("result_too_large")}, {QStringLiteral("message"), QStringLiteral("response exceeds 64 KiB frame limit")}};
+	return QJsonDocument(error).toJson(QJsonDocument::Compact) + '\n';
 }
 
 } // namespace lmms

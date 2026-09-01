@@ -18,12 +18,23 @@ private slots:
 		}
 	}
 
+	void acceptsPhase3CMutationActions()
+	{
+		const auto requests = {
+			QByteArray("{\"version\":2,\"request_id\":\"r\",\"action\":\"add_notes\",\"parameters\":{\"clip_id\":\"c\",\"notes\":[{\"position_ticks\":0,\"length_ticks\":120,\"key\":60,\"volume\":100,\"panning\":0,\"note_type\":\"regular\"}]}}\n"),
+			QByteArray("{\"version\":2,\"request_id\":\"r\",\"action\":\"delete_notes\",\"parameters\":{\"clip_id\":\"c\",\"selection\":{\"position_start\":0,\"position_end\":120}}}\n"),
+			QByteArray("{\"version\":2,\"request_id\":\"r\",\"action\":\"transpose_notes\",\"parameters\":{\"clip_id\":\"c\",\"selection\":{\"key_min\":0,\"key_max\":127},\"semitones\":1}}\n"),
+			QByteArray("{\"version\":2,\"request_id\":\"r\",\"action\":\"move_notes\",\"parameters\":{\"clip_id\":\"c\",\"selection\":{\"position_start\":0,\"position_end\":120},\"delta_ticks\":1}}\n"),
+			QByteArray("{\"version\":2,\"request_id\":\"r\",\"action\":\"duplicate_region\",\"parameters\":{\"clip_id\":\"c\",\"source_start\":0,\"source_end\":120,\"destination_start\":120}}\n")
+		};
+		for (const auto &frame : requests)
+			QVERIFY2(lmms::AiBridgeProtocol::parseRequest(frame).success, frame.constData());
+	}
+
 	void rejectsMalformedAndUnknownFields()
 	{
 		for (const QByteArray frame : {QByteArray("not json\n"), QByteArray("{\"version\":2,\"request_id\":\"r\",\"action\":\"nope\",\"parameters\":{}}\n"), QByteArray("{\"version\":2,\"request_id\":\"r\",\"action\":\"get_context\",\"parameters\":{},\"extra\":1}\n")})
-		{
 			QVERIFY(!lmms::AiBridgeProtocol::parseRequest(frame).success);
-		}
 	}
 
 	void enforcesVersionIdTypesAndFrameLimit()
@@ -40,6 +51,28 @@ private slots:
 		QVERIFY(frame.endsWith('\n'));
 		QVERIFY(frame.contains("\"request_id\":\"r1\""));
 		QVERIFY(frame.contains("\"data\":42"));
+	}
+
+	void replacesOversizedResultsWithBoundedError()
+	{
+		for (const auto action : {"get_project_structure", "list_tracks", "list_clips", "get_clip"})
+		{
+			QJsonObject data{{"action", action}, {"items", QString(70000, QLatin1Char('x'))}};
+			const auto frame = lmms::AiBridgeProtocol::serializeResponse({2, action, true, "ok", "done", data});
+			QVERIFY(frame.size() <= lmms::AiBridgeProtocol::MaxFrameBytes);
+			QVERIFY(frame.endsWith('\n'));
+			QVERIFY(frame.contains("\"success\":false"));
+			QVERIFY(frame.contains("\"code\":\"result_too_large\""));
+			QVERIFY(!frame.contains("70000"));
+		}
+	}
+
+	void preservesRequestIdOnParameterFailure()
+	{
+		const auto result = lmms::AiBridgeProtocol::parseRequest(
+			"{\"version\":2,\"request_id\":\"bad-selection\",\"action\":\"transpose_notes\",\"parameters\":{\"clip_id\":\"c\",\"selection\":{\"exact\":{\"key\":60}},\"semitones\":12}}\n");
+		QVERIFY(!result.success);
+		QCOMPARE(result.request.requestId, QStringLiteral("bad-selection"));
 	}
 };
 

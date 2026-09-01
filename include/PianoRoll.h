@@ -51,6 +51,8 @@ namespace lmms
 
 class MidiClip;
 class AiBridgeContext;
+class AiBridgeProjectContext;
+class AiBridgeProjectActions;
 
 
 namespace gui
@@ -609,7 +611,10 @@ private slots:
 
 private:
 	LMMS_EXPORT MidiClip* aiBridgeCurrentMidiClip() const;
+	LMMS_EXPORT void aiBridgeSetCurrentMidiClip(MidiClip* clip);
 	friend class ::lmms::AiBridgeContext;
+	friend class ::lmms::AiBridgeProjectContext;
+	friend class ::lmms::AiBridgeProjectActions;
 
 	void clipRenamed();
 	void focusInEvent(QFocusEvent * event) override;

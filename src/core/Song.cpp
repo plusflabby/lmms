@@ -850,6 +850,7 @@ AutomatedValueMap Song::automatedValuesAt(TimePos time, int clipNum) const
 void Song::clearProject()
 {
 	using gui::getGUI;
+	emit projectAboutToChange();
 
 	Engine::projectJournal()->setJournalling( false );
 

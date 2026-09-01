@@ -464,6 +464,7 @@ private:
 	friend class gui::ControllerRackView;
 
 signals:
+	void projectAboutToChange();
 	void projectLoaded();
 	void playbackStateChanged();
 	void playbackPositionJumped();
