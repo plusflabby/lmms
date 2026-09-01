@@ -50,6 +50,7 @@ namespace lmms
 
 
 class MidiClip;
+class AiBridgeContext;
 
 
 namespace gui
@@ -607,6 +608,9 @@ private slots:
 	void importMidiClip();
 
 private:
+	LMMS_EXPORT MidiClip* aiBridgeCurrentMidiClip() const;
+	friend class ::lmms::AiBridgeContext;
+
 	void clipRenamed();
 	void focusInEvent(QFocusEvent * event) override;
 	void showEvent(QShowEvent* se) override;

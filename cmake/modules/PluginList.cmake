@@ -23,6 +23,7 @@ ENDIF()
 
 SET(LMMS_PLUGIN_LIST
 	${MINIMAL_LIST}
+	AiBridge
 	Amplifier
 	BassBooster
 	BitInvader
