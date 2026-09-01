@@ -5,12 +5,10 @@
 #include <QVariant>
 #include <optional>
 
+#include "AiBridgeContext.h"
+
 namespace lmms
 {
-
-class InstrumentTrack;
-class MidiClip;
-class Song;
 
 struct AiBridgeActionResult
 {
@@ -30,26 +28,10 @@ struct AiBridgeActionResult
 	}
 };
 
-class AiBridgeContext
-{
-public:
-	AiBridgeContext();
-
-	Song *song() const { return m_song; }
-	InstrumentTrack *instrumentTrack() const { return m_instrumentTrack; }
-	MidiClip *midiClip() const { return m_midiClip; }
-	bool hasSong() const { return m_song != nullptr; }
-	bool hasMidiClip() const { return m_midiClip != nullptr; }
-
-private:
-	Song *m_song = nullptr;
-	InstrumentTrack *m_instrumentTrack = nullptr;
-	MidiClip *m_midiClip = nullptr;
-};
-
 class AiBridgeActions
 {
 public:
+	static AiBridgeContextSnapshot getContextSnapshot();
 	static AiBridgeActionResult setSongTempo(AiBridgeContext &context, int bpm);
 	static AiBridgeActionResult adjustCurrentInstrumentVolume(AiBridgeContext &context,
 		float delta);

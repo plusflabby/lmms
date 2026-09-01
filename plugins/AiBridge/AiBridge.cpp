@@ -60,7 +60,15 @@ public:
 	}
 };
 
-AiBridge::AiBridge() : ToolPlugin(&aibridge_plugin_descriptor, nullptr) {}
+AiBridge::AiBridge() : ToolPlugin(&aibridge_plugin_descriptor, nullptr), m_ipcServer(this)
+{
+	m_ipcServer.start();
+}
+
+AiBridge::~AiBridge()
+{
+	m_ipcServer.stop();
+}
 
 gui::PluginView *AiBridge::instantiateView(QWidget *parent)
 {

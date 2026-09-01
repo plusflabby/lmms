@@ -12,6 +12,7 @@ set(LMMS_TESTS
 	src/core/RelativePathsTest.cpp
 	src/core/TimelineTest.cpp
 	src/plugins/AiBridgeActionsTest.cpp
+	src/plugins/AiBridgeContextTest.cpp
 	src/tracks/AutomationTrackTest.cpp
 )
 
@@ -24,8 +25,13 @@ foreach(LMMS_TEST_SRC IN LISTS LMMS_TESTS)
 
 	# TODO CMake 3.12: Propagate usage requirements by linking to lmmsobjs
 	target_include_directories(${LMMS_TEST_NAME} PRIVATE $<TARGET_PROPERTY:lmmsobjs,INCLUDE_DIRECTORIES>)
-	if(LMMS_TEST_NAME STREQUAL "AiBridgeActionsTest")
+	if(LMMS_TEST_NAME MATCHES "^AiBridge(Actions|Context)Test$")
 		target_include_directories(${LMMS_TEST_NAME} PRIVATE ${CMAKE_SOURCE_DIR}/plugins/AiBridge)
+	endif()
+	if(LMMS_TEST_NAME STREQUAL "AiBridgeContextTest")
+		target_sources(${LMMS_TEST_NAME} PRIVATE
+			${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeActions.cpp
+			${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeContext.cpp)
 	endif()
 
 	target_static_libraries("${LMMS_TEST_NAME}" PRIVATE lmmsobjs)
