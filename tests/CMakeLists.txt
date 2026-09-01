@@ -1,4 +1,5 @@
 include(CTest)
+find_package(Qt${QT_VERSION_MAJOR} COMPONENTS Network REQUIRED)
 
 set(CMAKE_INCLUDE_CURRENT_DIR ON)
 set(CMAKE_AUTOMOC ON)
@@ -13,6 +14,8 @@ set(LMMS_TESTS
 	src/core/TimelineTest.cpp
 	src/plugins/AiBridgeActionsTest.cpp
 	src/plugins/AiBridgeContextTest.cpp
+	src/plugins/AiBridgeProtocolTest.cpp
+	src/plugins/AiBridgeIpcServerTest.cpp
 	src/tracks/AutomationTrackTest.cpp
 )
 
@@ -25,7 +28,7 @@ foreach(LMMS_TEST_SRC IN LISTS LMMS_TESTS)
 
 	# TODO CMake 3.12: Propagate usage requirements by linking to lmmsobjs
 	target_include_directories(${LMMS_TEST_NAME} PRIVATE $<TARGET_PROPERTY:lmmsobjs,INCLUDE_DIRECTORIES>)
-	if(LMMS_TEST_NAME MATCHES "^AiBridge(Actions|Context)Test$")
+	if(LMMS_TEST_NAME MATCHES "^AiBridge(Actions|Context|Protocol|IpcServer)Test$")
 		target_include_directories(${LMMS_TEST_NAME} PRIVATE ${CMAKE_SOURCE_DIR}/plugins/AiBridge)
 	endif()
 	if(LMMS_TEST_NAME STREQUAL "AiBridgeContextTest")
@@ -33,12 +36,26 @@ foreach(LMMS_TEST_SRC IN LISTS LMMS_TESTS)
 			${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeActions.cpp
 			${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeContext.cpp)
 	endif()
+	if(LMMS_TEST_NAME STREQUAL "AiBridgeProtocolTest")
+		target_sources(${LMMS_TEST_NAME} PRIVATE
+			${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeProtocol.cpp)
+	endif()
+	if(LMMS_TEST_NAME STREQUAL "AiBridgeIpcServerTest")
+		target_sources(${LMMS_TEST_NAME} PRIVATE
+			${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeActions.cpp
+			${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeContext.cpp
+			${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeIpcServer.cpp
+			${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeProtocol.cpp)
+	endif()
 
 	target_static_libraries("${LMMS_TEST_NAME}" PRIVATE lmmsobjs)
 	target_link_libraries(${LMMS_TEST_NAME} PRIVATE
 		${QT_LIBRARIES}
 		${QT_QTTEST_LIBRARY}
 	)
+	if(LMMS_TEST_NAME STREQUAL "AiBridgeIpcServerTest")
+		target_link_libraries(${LMMS_TEST_NAME} PRIVATE Qt${QT_VERSION_MAJOR}::Network)
+	endif()
 
 	target_compile_features(${LMMS_TEST_NAME} PRIVATE cxx_std_20)
 	target_compile_definitions(${LMMS_TEST_NAME} PRIVATE LMMS_TESTING)
