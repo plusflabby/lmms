@@ -5,6 +5,7 @@
 #include <QJsonObject>
 #include <QJsonArray>
 #include <QMetaObject>
+#include <optional>
 
 #include "AiBridgeActions.h"
 #include "AiBridgeProjectActions.h"
@@ -29,6 +30,26 @@ QJsonObject clipJson(const AiBridgeClipValue& v)
 QJsonObject pageJson(const AiBridgePage& p)
 {
 	return {{"total",p.total},{"offset",p.offset},{"limit",p.limit},{"has_more",p.hasMore}};
+}
+QJsonObject constructionTrackJson(const AiBridgeTrackConstructionValue &v)
+{
+	return {{"track_id",v.trackId},{"name",v.name},{"type",v.type},{"index",v.index},{"volume",v.volume},{"panning",v.panning}};
+}
+QJsonObject constructionClipJson(const AiBridgeClipConstructionValue &v)
+{
+	return {{"clip_id",v.clipId},{"track_id",v.trackId},{"name",v.name},{"type",v.type},{"start_ticks",v.startTicks},{"length_ticks",v.lengthTicks},{"auto_resize",v.autoResize},{"content_hash",v.contentHash}};
+}
+QJsonObject trackPropertiesJson(const AiBridgeTrackPropertyValue &v)
+{
+	return {{"track_id",v.trackId},{"volume",v.volume},{"panning",v.panning}};
+}
+QJsonObject clipPropertiesJson(const AiBridgeClipPropertyValue &v)
+{
+	return {{"clip_id",v.clipId},{"track_id",v.trackId},{"start_ticks",v.startTicks},{"length_ticks",v.lengthTicks},{"auto_resize",v.autoResize},{"content_hash",v.contentHash}};
+}
+QJsonObject instrumentJson(const AiBridgeInstrumentValue &v)
+{
+	return {{"instrument_id",v.instrumentId},{"display_name",v.displayName},{"description",v.description},{"available",v.available}};
 }
 
 AiBridgeCopiedNote copiedNote(const QJsonValue &value)
@@ -182,7 +203,7 @@ void AiBridgeIpcServer::executeRequest(const AiBridgeProtocolRequest &request)
 	}
 	else
 	{
-		if (request.action == QStringLiteral("get_project_structure") || request.action == QStringLiteral("list_tracks") || request.action == QStringLiteral("list_clips") || request.action == QStringLiteral("get_clip") || request.action == QStringLiteral("open_clip_in_piano_roll"))
+		if (request.action == QStringLiteral("get_project_structure") || request.action == QStringLiteral("list_tracks") || request.action == QStringLiteral("list_clips") || request.action == QStringLiteral("get_clip") || request.action == QStringLiteral("open_clip_in_piano_roll") || request.action == QStringLiteral("list_instruments") || request.action == QStringLiteral("create_instrument_track") || request.action == QStringLiteral("rename_track") || request.action == QStringLiteral("create_midi_clip") || request.action == QStringLiteral("set_clip_properties") || request.action == QStringLiteral("set_track_instrument") || request.action == QStringLiteral("set_track_properties"))
 		{
 			const auto& p = request.parameters;
 			const int offset = p.value(QStringLiteral("offset")).toInt();
@@ -192,7 +213,14 @@ void AiBridgeIpcServer::executeRequest(const AiBridgeProtocolRequest &request)
 			else if (request.action == QStringLiteral("list_tracks")) result = AiBridgeProjectActions::listTracks(offset,limit);
 			else if (request.action == QStringLiteral("list_clips")) result = AiBridgeProjectActions::listClips(p.value(QStringLiteral("track_id")).toString(),offset,limit);
 			else if (request.action == QStringLiteral("get_clip")) result = AiBridgeProjectActions::getClip(p.value(QStringLiteral("clip_id")).toString(),offset,limit);
-			else result = AiBridgeProjectActions::openClipInPianoRoll(p.value(QStringLiteral("clip_id")).toString());
+			else if (request.action == QStringLiteral("open_clip_in_piano_roll")) result = AiBridgeProjectActions::openClipInPianoRoll(p.value(QStringLiteral("clip_id")).toString());
+			else if (request.action == QStringLiteral("list_instruments")) result = AiBridgeProjectActions::listInstruments(offset,limit);
+			else if (request.action == QStringLiteral("create_instrument_track")) result = AiBridgeProjectActions::createInstrumentTrack(p.contains(QStringLiteral("name")) ? std::optional<QString>(p.value(QStringLiteral("name")).toString()) : std::nullopt);
+			else if (request.action == QStringLiteral("rename_track")) result = AiBridgeProjectActions::renameTrack(p.value(QStringLiteral("track_id")).toString(),p.value(QStringLiteral("name")).toString());
+			else if (request.action == QStringLiteral("create_midi_clip")) result = AiBridgeProjectActions::createMidiClip(p.value(QStringLiteral("track_id")).toString(),p.value(QStringLiteral("start_ticks")).toVariant().toLongLong(),p.contains(QStringLiteral("length_ticks")) ? std::optional<qint64>(p.value(QStringLiteral("length_ticks")).toVariant().toLongLong()) : std::nullopt,p.value(QStringLiteral("auto_resize")).toBool(false));
+			else if (request.action == QStringLiteral("set_clip_properties")) result = AiBridgeProjectActions::setClipProperties(p.value(QStringLiteral("clip_id")).toString(),p.contains(QStringLiteral("start_ticks")) ? std::optional<qint64>(p.value(QStringLiteral("start_ticks")).toVariant().toLongLong()) : std::nullopt,p.contains(QStringLiteral("length_ticks")) ? std::optional<qint64>(p.value(QStringLiteral("length_ticks")).toVariant().toLongLong()) : std::nullopt,p.contains(QStringLiteral("auto_resize")) ? std::optional<bool>(p.value(QStringLiteral("auto_resize")).toBool()) : std::nullopt,p.contains(QStringLiteral("expected_content_hash")) ? std::optional<QString>(p.value(QStringLiteral("expected_content_hash")).toString()) : std::nullopt,p.contains(QStringLiteral("expected_start_ticks")) ? std::optional<qint64>(p.value(QStringLiteral("expected_start_ticks")).toVariant().toLongLong()) : std::nullopt);
+			else if (request.action == QStringLiteral("set_track_instrument")) result = AiBridgeProjectActions::setTrackInstrument(p.value(QStringLiteral("track_id")).toString(),p.value(QStringLiteral("instrument_id")).toString());
+			else result = AiBridgeProjectActions::setTrackProperties(p.value(QStringLiteral("track_id")).toString(),p.contains(QStringLiteral("volume")) ? std::optional<int>(p.value(QStringLiteral("volume")).toInt()) : std::nullopt,p.contains(QStringLiteral("panning")) ? std::optional<int>(p.value(QStringLiteral("panning")).toInt()) : std::nullopt);
 			QJsonObject data;
 			if (request.action == QStringLiteral("get_project_structure"))
 			{
@@ -201,6 +229,11 @@ void AiBridgeIpcServer::executeRequest(const AiBridgeProtocolRequest &request)
 			}
 			else if (request.action == QStringLiteral("list_tracks")) { QJsonArray items; for(const auto& item:result.tracks)items.append(trackJson(item)); data=pageJson(result.page);data.insert("tracks",items); }
 			else if (request.action == QStringLiteral("list_clips")) { QJsonArray items; for(const auto& item:result.clips)items.append(clipJson(item)); data=pageJson(result.page);data.insert("clips",items); }
+			else if (request.action == QStringLiteral("list_instruments")) { QJsonArray items; for(const auto& item:result.instruments)items.append(instrumentJson(item)); data=pageJson(result.page);data.insert("instruments",items); }
+			else if (request.action == QStringLiteral("create_instrument_track") || request.action == QStringLiteral("rename_track") || request.action == QStringLiteral("set_track_instrument")) data=constructionTrackJson(result.track);
+			else if (request.action == QStringLiteral("create_midi_clip")) data=constructionClipJson(result.constructionClip);
+			else if (request.action == QStringLiteral("set_clip_properties")) data=clipPropertiesJson(result.clipProperties);
+			else if (request.action == QStringLiteral("set_track_properties")) data=trackPropertiesJson(result.trackProperties);
 			else { data=clipJson(result.clip); data.insert("content_hash",result.clip.contentHash); data.insert("auto_resize",result.clip.autoResize); data.insert("total",result.page.total);data.insert("offset",result.page.offset);data.insert("limit",result.page.limit);data.insert("has_more",result.page.hasMore); QJsonArray notes;for(const auto& n:result.clip.notes)notes.append(QJsonObject{{"position",n.position},{"length",n.length},{"key",n.key},{"volume",n.volume},{"panning",n.panning},{"note_type",n.noteType}});data.insert("notes",notes); if(request.action==QStringLiteral("open_clip_in_piano_roll")){const auto& c=result.context;data.insert("context",QJsonObject{{"clip_id",c.clipId},{"track_id",c.trackId},{"track_name",c.trackName},{"project_generation",static_cast<qint64>(c.projectGeneration)}});} }
 			response = {2,request.requestId,result.success,result.code,result.message,data};
 		}

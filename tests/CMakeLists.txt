@@ -20,6 +20,7 @@ set(LMMS_TESTS
 	src/plugins/AiBridgeViewTest.cpp
 	src/plugins/AiBridgeMutationTypesTest.cpp
 	src/plugins/AiBridgeProjectJournalTest.cpp
+	src/plugins/AiBridgeConstructionTypesTest.cpp
 	src/tracks/AutomationTrackTest.cpp
 )
 
@@ -39,6 +40,11 @@ foreach(LMMS_TEST_SRC IN LISTS LMMS_TESTS)
 		target_include_directories(${LMMS_TEST_NAME} PRIVATE ${CMAKE_SOURCE_DIR}/plugins/AiBridge)
 		target_sources(${LMMS_TEST_NAME} PRIVATE
 			${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeMutationTypes.cpp)
+	endif()
+	if(LMMS_TEST_NAME STREQUAL "AiBridgeConstructionTypesTest")
+		target_include_directories(${LMMS_TEST_NAME} PRIVATE ${CMAKE_SOURCE_DIR}/plugins/AiBridge)
+		target_sources(${LMMS_TEST_NAME} PRIVATE
+			${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeConstructionTypes.cpp)
 	endif()
 	if(LMMS_TEST_NAME STREQUAL "AiBridgeActionsTest")
 		target_include_directories(${LMMS_TEST_NAME} PRIVATE ${CMAKE_SOURCE_DIR}/plugins/AiBridge)

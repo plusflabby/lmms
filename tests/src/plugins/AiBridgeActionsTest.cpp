@@ -6,6 +6,8 @@
  */
 
 #include <QtTest>
+#include <limits>
+#include <optional>
 
 #include "AiBridgeActions.h"
 #include "AiBridgeProjectActions.h"
@@ -76,6 +78,47 @@ private slots:
 		const auto result = lmms::AiBridgeProjectActions::duplicateRegion(
 			QStringLiteral("missing"), 0, 480, 480);
 		QCOMPARE(result.code, QStringLiteral("stale_clip"));
+	}
+
+	void instrumentDiscoveryReturnsCopiedPage()
+	{
+		const auto result = lmms::AiBridgeProjectActions::listInstruments(0, 16);
+		QVERIFY(result.success);
+		QCOMPARE(result.page.offset, 0);
+		QVERIFY(result.page.limit <= 16);
+		for (const auto &instrument : result.instruments)
+		{
+			QVERIFY(!instrument.instrumentId.isEmpty());
+			QVERIFY(!instrument.displayName.isEmpty());
+		}
+	}
+
+	void trackCreationRejectsInvalidName()
+	{
+		const auto result = lmms::AiBridgeProjectActions::createInstrumentTrack(QString());
+		QCOMPARE(result.code, QStringLiteral("invalid_name"));
+	}
+
+	void trackRenameRejectsInvalidName()
+	{
+		const auto result = lmms::AiBridgeProjectActions::renameTrack(
+			QStringLiteral("missing"), QString());
+		QCOMPARE(result.code, QStringLiteral("invalid_name"));
+	}
+
+	void trackPropertiesRequireAProperty()
+	{
+		const auto result = lmms::AiBridgeProjectActions::setTrackProperties(
+			QStringLiteral("missing"), std::nullopt, std::nullopt);
+		QCOMPARE(result.code, QStringLiteral("invalid_parameter"));
+	}
+
+	void clipCreationRejectsOutOfRangePosition()
+	{
+		const auto result = lmms::AiBridgeProjectActions::createMidiClip(
+			QStringLiteral("missing"), std::numeric_limits<qint64>::max(),
+			std::nullopt, false);
+		QCOMPARE(result.code, QStringLiteral("invalid_clip_position"));
 	}
 
 };

@@ -5,6 +5,7 @@
 #include <QPointer>
 #include <QString>
 #include <QVector>
+#include "AiBridgeConstructionTypes.h"
 
 namespace lmms
 {
@@ -26,6 +27,10 @@ public:
  quint64 projectGeneration() const;
  AiBridgeProjectValue projectStructure() const;
  QVector<AiBridgeTrackValue> tracks(AiBridgePage&) const;
+ AiBridgeTrackValue trackSnapshot(Track*) const;
+ QString idForTrack(Track*) const;
+ QString idForClip(Clip*) const;
+ QVector<AiBridgeInstrumentValue> instruments(AiBridgePage&) const;
  QVector<AiBridgeClipValue> clips(const QString&, AiBridgePage&) const;
  AiBridgeClipValue clip(const QString&, AiBridgePage&) const;
  AiBridgeContextValue currentContext() const;

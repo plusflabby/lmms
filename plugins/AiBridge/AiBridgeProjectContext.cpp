@@ -11,6 +11,8 @@
 #include "InstrumentTrack.h"
 #include "MidiClip.h"
 #include "Note.h"
+#include "PluginFactory.h"
+#include "Plugin.h"
 #include "PianoRoll.h"
 #include "Song.h"
 #include "TimePos.h"
@@ -79,6 +81,22 @@ QVector<AiBridgeTrackValue> AiBridgeProjectContext::tracks(AiBridgePage& page) c
  QVector<AiBridgeTrackValue> result; if(!qt())return result; reconcile(); auto* song=Engine::getSong(); if(!song){page={};return result;}
  page.total=static_cast<int>(song->tracks().size()); page.limit=cap(page.limit); page.offset=qBound(0,page.offset,page.total); page.hasMore=page.offset+page.limit<page.total;
  for(int i=page.offset;i<qMin(page.total,page.offset+page.limit);++i){auto* track=song->tracks().at(i);AiBridgeTrackValue value{trackId(track),track->displayName(),typeName(track),i,track->numOfClips()};if(auto* instrument=dynamic_cast<InstrumentTrack*>(track)){value.hasVolume=true;value.volume=instrument->getVolume();}result.append(value);} return result;
+}
+AiBridgeTrackValue AiBridgeProjectContext::trackSnapshot(Track* track) const {
+ AiBridgeTrackValue value; if(!qt() || !track) return value; const auto id=trackId(track); value.id=id; value.name=track->displayName(); value.type=typeName(track); const auto &tracks=track->trackContainer()->tracks(); const auto position=std::find(tracks.begin(),tracks.end(),track); value.index=position==tracks.end() ? -1 : static_cast<int>(std::distance(tracks.begin(),position)); value.clipCount=track->numOfClips(); if(auto* instrument=dynamic_cast<InstrumentTrack*>(track)){value.hasVolume=true;value.volume=instrument->getVolume();} return value;
+}
+QString AiBridgeProjectContext::idForClip(Clip* clip) const { return qt() && clip ? clipId(clip) : QString(); }
+QString AiBridgeProjectContext::idForTrack(Track* track) const { return qt() && track ? trackId(track) : QString(); }
+QVector<AiBridgeInstrumentValue> AiBridgeProjectContext::instruments(AiBridgePage& page) const {
+ QVector<AiBridgeInstrumentValue> all; if(!qt() || !getPluginFactory()) { page={}; return all; }
+ for(const auto *descriptor : getPluginFactory()->descriptors(Plugin::Type::Instrument)) {
+  if(!descriptor || !descriptor->name || !descriptor->displayName || descriptor->subPluginFeatures) continue;
+  AiBridgeInstrumentValue value; value.instrumentId=QString::fromUtf8(descriptor->name); value.displayName=QString::fromUtf8(descriptor->displayName); if(descriptor->description) value.description=QString::fromUtf8(descriptor->description); value.available=true; all.append(value);
+ }
+ std::sort(all.begin(),all.end(),[](const auto&a,const auto&b){return a.instrumentId<b.instrumentId;});
+ all.erase(std::unique(all.begin(),all.end(),[](const auto&a,const auto&b){return a.instrumentId==b.instrumentId;}),all.end());
+ page.total=all.size(); page.limit=cap(page.limit); page.offset=qBound(0,page.offset,page.total); page.hasMore=page.offset+page.limit<page.total;
+ return all.mid(page.offset,page.limit);
 }
 QVector<AiBridgeClipValue> AiBridgeProjectContext::clips(const QString& trackValue,AiBridgePage& page) const {
  QVector<AiBridgeClipValue> result; if(!qt())return result; auto* track=resolveTrack(trackValue); if(!track){page={};return result;}

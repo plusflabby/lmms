@@ -31,6 +31,21 @@ private slots:
 			QVERIFY2(lmms::AiBridgeProtocol::parseRequest(frame).success, frame.constData());
 	}
 
+	void acceptsPhase3DConstructionActions()
+	{
+		const auto requests = {
+			QByteArray("{\"version\":2,\"request_id\":\"r\",\"action\":\"create_instrument_track\",\"parameters\":{\"name\":\"Strings\"}}\n"),
+			QByteArray("{\"version\":2,\"request_id\":\"r\",\"action\":\"rename_track\",\"parameters\":{\"track_id\":\"t\",\"name\":\"Strings\"}}\n"),
+			QByteArray("{\"version\":2,\"request_id\":\"r\",\"action\":\"create_midi_clip\",\"parameters\":{\"track_id\":\"t\",\"start_ticks\":0}}\n"),
+			QByteArray("{\"version\":2,\"request_id\":\"r\",\"action\":\"set_clip_properties\",\"parameters\":{\"clip_id\":\"c\",\"start_ticks\":120}}\n"),
+			QByteArray("{\"version\":2,\"request_id\":\"r\",\"action\":\"list_instruments\",\"parameters\":{\"limit\":16}}\n"),
+			QByteArray("{\"version\":2,\"request_id\":\"r\",\"action\":\"set_track_instrument\",\"parameters\":{\"track_id\":\"t\",\"instrument_id\":\"tripleoscillator\"}}\n"),
+			QByteArray("{\"version\":2,\"request_id\":\"r\",\"action\":\"set_track_properties\",\"parameters\":{\"track_id\":\"t\",\"volume\":100}}\n")
+		};
+		for (const auto &frame : requests)
+			QVERIFY2(lmms::AiBridgeProtocol::parseRequest(frame).success, frame.constData());
+	}
+
 	void rejectsMalformedAndUnknownFields()
 	{
 		for (const QByteArray frame : {QByteArray("not json\n"), QByteArray("{\"version\":2,\"request_id\":\"r\",\"action\":\"nope\",\"parameters\":{}}\n"), QByteArray("{\"version\":2,\"request_id\":\"r\",\"action\":\"get_context\",\"parameters\":{},\"extra\":1}\n")})
