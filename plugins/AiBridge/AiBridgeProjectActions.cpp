@@ -1,4 +1,5 @@
 #include "AiBridgeProjectActions.h"
+#include "AiBridgeAssetCatalog.h"
 
 #include <QApplication>
 #include <QThread>
@@ -71,6 +72,50 @@ AiBridgeProjectActionResult finishMutation(AiBridgeProjectContext &context,
 	result.mutation.track_id = result.clip.trackId;
 	return result;
 }
+}
+
+AiBridgeProjectActionResult AiBridgeProjectActions::listBundledSamples(const AiBridgeAssetFilter &filter)
+{
+	if (!qt()) return fail("wrong_thread", "sample discovery requires Qt application thread");
+	auto result = fail("ok", "bundled samples captured");
+	result.success = true;
+	result.samples = AiBridgeAssetCatalog::listBundledSamples(filter);
+	return result;
+}
+
+AiBridgeProjectActionResult AiBridgeProjectActions::loadBundledSample(
+	const QString &trackId, const QString &sampleId)
+{
+	if (!qt()) return fail("wrong_thread", "sample loading requires Qt application thread");
+	AiBridgeProjectContext context;
+	Track *base = context.resolveTrack(trackId);
+	if (!base) return fail("stale_track", "track is not live");
+	auto *track = dynamic_cast<InstrumentTrack *>(base);
+	if (!track) return fail("invalid_track_type", "track must be an instrument track");
+	AiBridgeAssetValidationResult validation;
+	const auto value = AudioFileProcessorAssetAdapter::load(track, sampleId, &validation);
+	if (!validation.valid) return fail(validation.code, validation.message);
+	auto result = fail("ok", "bundled sample loaded");
+	result.success = true;
+	result.assetLoad = value;
+	result.assetLoad.trackId = trackId;
+	return result;
+}
+
+AiBridgeProjectActionResult AiBridgeProjectActions::listBundledPresets(const AiBridgeAssetFilter &filter)
+{
+	if (!qt()) return fail("wrong_thread", "preset discovery requires Qt application thread");
+	auto result = fail("ok", "bundled presets captured");
+	result.success = true;
+	result.presets = AiBridgeAssetCatalog::listBundledPresets(filter);
+	return result;
+}
+
+AiBridgeProjectActionResult AiBridgeProjectActions::loadBundledPreset(
+	const QString &, const QString &)
+{
+	if (!qt()) return fail("wrong_thread", "preset loading requires Qt application thread");
+	return fail("asset_incompatible", "no safe bundled preset adapter is available");
 }
 
 AiBridgeProjectActionResult AiBridgeProjectActions::getProjectStructure()

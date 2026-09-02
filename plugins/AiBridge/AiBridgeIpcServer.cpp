@@ -11,6 +11,7 @@
 #include "AiBridgeProjectActions.h"
 #include "AiBridgeWindowActions.h"
 #include "AiBridgeWindowContext.h"
+#include "AiBridgeAssetTypes.h"
 
 namespace lmms
 {
@@ -50,6 +51,22 @@ QJsonObject clipPropertiesJson(const AiBridgeClipPropertyValue &v)
 QJsonObject instrumentJson(const AiBridgeInstrumentValue &v)
 {
 	return {{"instrument_id",v.instrumentId},{"display_name",v.displayName},{"description",v.description},{"available",v.available}};
+}
+
+QJsonObject samplePageJson(const AiBridgeAssetPage<AiBridgeSampleValue> &page)
+{
+	QJsonArray items;
+	for (const auto &item : page.items)
+		items.append(QJsonObject{{"asset_id", item.assetId}, {"display_name", item.displayName}, {"instrument_id", item.instrumentId}, {"category", item.category}, {"format", item.format}});
+	return QJsonObject{{"items", items}, {"total", page.total}, {"offset", page.offset}, {"limit", page.limit}, {"has_more", page.hasMore}};
+}
+
+QJsonObject presetPageJson(const AiBridgeAssetPage<AiBridgePresetValue> &page)
+{
+	QJsonArray items;
+	for (const auto &item : page.items)
+		items.append(QJsonObject{{"asset_id", item.assetId}, {"display_name", item.displayName}, {"instrument_id", item.instrumentId}, {"category", item.category}, {"format", item.format}});
+	return QJsonObject{{"items", items}, {"total", page.total}, {"offset", page.offset}, {"limit", page.limit}, {"has_more", page.hasMore}};
 }
 
 AiBridgeCopiedNote copiedNote(const QJsonValue &value)
@@ -203,12 +220,19 @@ void AiBridgeIpcServer::executeRequest(const AiBridgeProtocolRequest &request)
 	}
 	else
 	{
-		if (request.action == QStringLiteral("get_project_structure") || request.action == QStringLiteral("list_tracks") || request.action == QStringLiteral("list_clips") || request.action == QStringLiteral("get_clip") || request.action == QStringLiteral("open_clip_in_piano_roll") || request.action == QStringLiteral("list_instruments") || request.action == QStringLiteral("create_instrument_track") || request.action == QStringLiteral("rename_track") || request.action == QStringLiteral("create_midi_clip") || request.action == QStringLiteral("set_clip_properties") || request.action == QStringLiteral("set_track_instrument") || request.action == QStringLiteral("set_track_properties"))
+		if (request.action == QStringLiteral("get_project_structure") || request.action == QStringLiteral("list_tracks") || request.action == QStringLiteral("list_clips") || request.action == QStringLiteral("get_clip") || request.action == QStringLiteral("open_clip_in_piano_roll") || request.action == QStringLiteral("list_instruments") || request.action == QStringLiteral("create_instrument_track") || request.action == QStringLiteral("rename_track") || request.action == QStringLiteral("create_midi_clip") || request.action == QStringLiteral("set_clip_properties") || request.action == QStringLiteral("set_track_instrument") || request.action == QStringLiteral("set_track_properties") || request.action == QStringLiteral("list_bundled_samples") || request.action == QStringLiteral("load_bundled_sample") || request.action == QStringLiteral("list_bundled_presets") || request.action == QStringLiteral("load_bundled_preset"))
 		{
 			const auto& p = request.parameters;
 			const int offset = p.value(QStringLiteral("offset")).toInt();
 			const int limit = p.contains(QStringLiteral("limit")) ? p.value(QStringLiteral("limit")).toInt() : 64;
 			AiBridgeProjectActionResult result;
+			AiBridgeAssetFilter assetFilter;
+			assetFilter.instrumentId = p.value(QStringLiteral("instrument_id")).toString();
+			assetFilter.query = p.value(QStringLiteral("query")).toString();
+			assetFilter.category = p.value(QStringLiteral("category")).toString();
+			assetFilter.format = p.value(QStringLiteral("format")).toString();
+			assetFilter.offset = offset;
+			assetFilter.limit = limit;
 			if (request.action == QStringLiteral("get_project_structure")) result = AiBridgeProjectActions::getProjectStructure();
 			else if (request.action == QStringLiteral("list_tracks")) result = AiBridgeProjectActions::listTracks(offset,limit);
 			else if (request.action == QStringLiteral("list_clips")) result = AiBridgeProjectActions::listClips(p.value(QStringLiteral("track_id")).toString(),offset,limit);
@@ -219,6 +243,10 @@ void AiBridgeIpcServer::executeRequest(const AiBridgeProtocolRequest &request)
 			else if (request.action == QStringLiteral("rename_track")) result = AiBridgeProjectActions::renameTrack(p.value(QStringLiteral("track_id")).toString(),p.value(QStringLiteral("name")).toString());
 			else if (request.action == QStringLiteral("create_midi_clip")) result = AiBridgeProjectActions::createMidiClip(p.value(QStringLiteral("track_id")).toString(),p.value(QStringLiteral("start_ticks")).toVariant().toLongLong(),p.contains(QStringLiteral("length_ticks")) ? std::optional<qint64>(p.value(QStringLiteral("length_ticks")).toVariant().toLongLong()) : std::nullopt,p.value(QStringLiteral("auto_resize")).toBool(false));
 			else if (request.action == QStringLiteral("set_clip_properties")) result = AiBridgeProjectActions::setClipProperties(p.value(QStringLiteral("clip_id")).toString(),p.contains(QStringLiteral("start_ticks")) ? std::optional<qint64>(p.value(QStringLiteral("start_ticks")).toVariant().toLongLong()) : std::nullopt,p.contains(QStringLiteral("length_ticks")) ? std::optional<qint64>(p.value(QStringLiteral("length_ticks")).toVariant().toLongLong()) : std::nullopt,p.contains(QStringLiteral("auto_resize")) ? std::optional<bool>(p.value(QStringLiteral("auto_resize")).toBool()) : std::nullopt,p.contains(QStringLiteral("expected_content_hash")) ? std::optional<QString>(p.value(QStringLiteral("expected_content_hash")).toString()) : std::nullopt,p.contains(QStringLiteral("expected_start_ticks")) ? std::optional<qint64>(p.value(QStringLiteral("expected_start_ticks")).toVariant().toLongLong()) : std::nullopt);
+			else if (request.action == QStringLiteral("list_bundled_samples")) result = AiBridgeProjectActions::listBundledSamples(assetFilter);
+			else if (request.action == QStringLiteral("list_bundled_presets")) result = AiBridgeProjectActions::listBundledPresets(assetFilter);
+			else if (request.action == QStringLiteral("load_bundled_sample")) result = AiBridgeProjectActions::loadBundledSample(p.value(QStringLiteral("track_id")).toString(), p.value(QStringLiteral("asset_id")).toString());
+			else if (request.action == QStringLiteral("load_bundled_preset")) result = AiBridgeProjectActions::loadBundledPreset(p.value(QStringLiteral("track_id")).toString(), p.value(QStringLiteral("asset_id")).toString());
 			else if (request.action == QStringLiteral("set_track_instrument")) result = AiBridgeProjectActions::setTrackInstrument(p.value(QStringLiteral("track_id")).toString(),p.value(QStringLiteral("instrument_id")).toString());
 			else result = AiBridgeProjectActions::setTrackProperties(p.value(QStringLiteral("track_id")).toString(),p.contains(QStringLiteral("volume")) ? std::optional<int>(p.value(QStringLiteral("volume")).toInt()) : std::nullopt,p.contains(QStringLiteral("panning")) ? std::optional<int>(p.value(QStringLiteral("panning")).toInt()) : std::nullopt);
 			QJsonObject data;
@@ -234,6 +262,9 @@ void AiBridgeIpcServer::executeRequest(const AiBridgeProtocolRequest &request)
 			else if (request.action == QStringLiteral("create_midi_clip")) data=constructionClipJson(result.constructionClip);
 			else if (request.action == QStringLiteral("set_clip_properties")) data=clipPropertiesJson(result.clipProperties);
 			else if (request.action == QStringLiteral("set_track_properties")) data=trackPropertiesJson(result.trackProperties);
+			else if (request.action == QStringLiteral("list_bundled_samples")) data=samplePageJson(result.samples);
+			else if (request.action == QStringLiteral("list_bundled_presets")) data=presetPageJson(result.presets);
+			else if (request.action == QStringLiteral("load_bundled_sample") || request.action == QStringLiteral("load_bundled_preset")) data=QJsonObject{{"asset_id",result.assetLoad.assetId},{"track_id",result.assetLoad.trackId},{"track_name",result.assetLoad.trackName},{"instrument_id",result.assetLoad.instrumentId}};
 			else { data=clipJson(result.clip); data.insert("content_hash",result.clip.contentHash); data.insert("auto_resize",result.clip.autoResize); data.insert("total",result.page.total);data.insert("offset",result.page.offset);data.insert("limit",result.page.limit);data.insert("has_more",result.page.hasMore); QJsonArray notes;for(const auto& n:result.clip.notes)notes.append(QJsonObject{{"position",n.position},{"length",n.length},{"key",n.key},{"volume",n.volume},{"panning",n.panning},{"note_type",n.noteType}});data.insert("notes",notes); if(request.action==QStringLiteral("open_clip_in_piano_roll")){const auto& c=result.context;data.insert("context",QJsonObject{{"clip_id",c.clipId},{"track_id",c.trackId},{"track_name",c.trackName},{"project_generation",static_cast<qint64>(c.projectGeneration)}});} }
 			response = {2,request.requestId,result.success,result.code,result.message,data};
 		}

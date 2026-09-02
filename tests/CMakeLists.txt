@@ -21,6 +21,10 @@ set(LMMS_TESTS
 	src/plugins/AiBridgeMutationTypesTest.cpp
 	src/plugins/AiBridgeProjectJournalTest.cpp
 	src/plugins/AiBridgeConstructionTypesTest.cpp
+	src/plugins/AiBridgeAssetTypesTest.cpp
+	src/plugins/AiBridgeAssetCatalogTest.cpp
+	src/plugins/AiBridgeAssetAdaptersTest.cpp
+	src/plugins/AiBridgeAssetActionsTest.cpp
 	src/tracks/AutomationTrackTest.cpp
 )
 
@@ -46,11 +50,41 @@ foreach(LMMS_TEST_SRC IN LISTS LMMS_TESTS)
 		target_sources(${LMMS_TEST_NAME} PRIVATE
 			${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeConstructionTypes.cpp)
 	endif()
+	if(LMMS_TEST_NAME STREQUAL "AiBridgeAssetTypesTest")
+		target_include_directories(${LMMS_TEST_NAME} PRIVATE ${CMAKE_SOURCE_DIR}/plugins/AiBridge)
+		target_sources(${LMMS_TEST_NAME} PRIVATE
+			${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeAssetTypes.cpp)
+	endif()
+	if(LMMS_TEST_NAME STREQUAL "AiBridgeAssetCatalogTest")
+		target_include_directories(${LMMS_TEST_NAME} PRIVATE ${CMAKE_SOURCE_DIR}/plugins/AiBridge)
+		target_compile_definitions(${LMMS_TEST_NAME} PRIVATE LMMS_PHASE3E_SOURCE_ROOT="${CMAKE_SOURCE_DIR}")
+		target_sources(${LMMS_TEST_NAME} PRIVATE
+			${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeAssetCatalog.cpp)
+	endif()
+	if(LMMS_TEST_NAME STREQUAL "AiBridgeAssetAdaptersTest")
+		target_include_directories(${LMMS_TEST_NAME} PRIVATE
+			${CMAKE_SOURCE_DIR}/plugins/AiBridge
+			${CMAKE_SOURCE_DIR}/plugins/AudioFileProcessor)
+		target_sources(${LMMS_TEST_NAME} PRIVATE
+			${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeAssetAdapters.cpp
+			${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeAssetCatalog.cpp)
+	endif()
+	if(LMMS_TEST_NAME STREQUAL "AiBridgeAssetActionsTest")
+		target_include_directories(${LMMS_TEST_NAME} PRIVATE ${CMAKE_SOURCE_DIR}/plugins/AiBridge)
+		target_sources(${LMMS_TEST_NAME} PRIVATE
+			${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeProjectActions.cpp
+			${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeProjectContext.cpp
+			${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeAssetAdapters.cpp
+			${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeAssetCatalog.cpp
+			${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeMutationTypes.cpp)
+	endif()
 	if(LMMS_TEST_NAME STREQUAL "AiBridgeActionsTest")
 		target_include_directories(${LMMS_TEST_NAME} PRIVATE ${CMAKE_SOURCE_DIR}/plugins/AiBridge)
 		target_sources(${LMMS_TEST_NAME} PRIVATE
 			${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeProjectActions.cpp
 			${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeProjectContext.cpp
+			${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeAssetAdapters.cpp
+			${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeAssetCatalog.cpp
 			${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeMutationTypes.cpp)
 	endif()
 	if(LMMS_TEST_NAME STREQUAL "AiBridgeProjectJournalTest")
@@ -78,6 +112,8 @@ foreach(LMMS_TEST_SRC IN LISTS LMMS_TESTS)
 			${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeProtocol.cpp
 			${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeProjectContext.cpp
 			${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeProjectActions.cpp
+			${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeAssetAdapters.cpp
+			${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeAssetCatalog.cpp
 			${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeMutationTypes.cpp
 			${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeWindowContext.cpp
 			${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeWindowActions.cpp)
@@ -91,6 +127,8 @@ foreach(LMMS_TEST_SRC IN LISTS LMMS_TESTS)
 			${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeProtocol.cpp
 			${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeProjectContext.cpp
 			${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeProjectActions.cpp
+			${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeAssetAdapters.cpp
+			${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeAssetCatalog.cpp
 			${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeMutationTypes.cpp
 			${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeWindowContext.cpp
 			${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeWindowActions.cpp)

@@ -46,6 +46,18 @@ private slots:
 			QVERIFY2(lmms::AiBridgeProtocol::parseRequest(frame).success, frame.constData());
 	}
 
+	void acceptsPhase3EAssetActions()
+	{
+		const auto requests = {
+			QByteArray("{\"version\":2,\"request_id\":\"r\",\"action\":\"list_bundled_samples\",\"parameters\":{\"instrument_id\":\"audiofileprocessor\",\"limit\":64}}\n"),
+			QByteArray("{\"version\":2,\"request_id\":\"r\",\"action\":\"list_bundled_presets\",\"parameters\":{}}\n"),
+			QByteArray("{\"version\":2,\"request_id\":\"r\",\"action\":\"load_bundled_sample\",\"parameters\":{\"track_id\":\"t\",\"asset_id\":\"sample/audiofileprocessor/a.wav\"}}\n"),
+			QByteArray("{\"version\":2,\"request_id\":\"r\",\"action\":\"load_bundled_preset\",\"parameters\":{\"track_id\":\"t\",\"asset_id\":\"preset/zynaddsubfx/a.xiz\"}}\n")
+		};
+		for (const auto &frame : requests)
+			QVERIFY2(lmms::AiBridgeProtocol::parseRequest(frame).success, frame.constData());
+	}
+
 	void rejectsMalformedAndUnknownFields()
 	{
 		for (const QByteArray frame : {QByteArray("not json\n"), QByteArray("{\"version\":2,\"request_id\":\"r\",\"action\":\"nope\",\"parameters\":{}}\n"), QByteArray("{\"version\":2,\"request_id\":\"r\",\"action\":\"get_context\",\"parameters\":{},\"extra\":1}\n")})

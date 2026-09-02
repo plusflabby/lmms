@@ -3,9 +3,10 @@
 #include "AiBridgeProjectContext.h"
 #include "AiBridgeMutationTypes.h"
 #include "AiBridgeActions.h"
+#include "AiBridgeAssetAdapters.h"
 #include <optional>
 namespace lmms {
-struct AiBridgeProjectActionResult { bool success=false; QString code; QString message; AiBridgeProjectValue project; QVector<AiBridgeTrackValue> tracks; QVector<AiBridgeClipValue> clips; QVector<AiBridgeInstrumentValue> instruments; AiBridgeTrackConstructionValue track; AiBridgeClipConstructionValue constructionClip; AiBridgeTrackPropertyValue trackProperties; AiBridgeClipPropertyValue clipProperties; AiBridgeClipValue clip; AiBridgeContextValue context; AiBridgePage page; AiBridgeMutationResult mutation; };
+struct AiBridgeProjectActionResult { bool success=false; QString code; QString message; AiBridgeProjectValue project; QVector<AiBridgeTrackValue> tracks; QVector<AiBridgeClipValue> clips; QVector<AiBridgeInstrumentValue> instruments; AiBridgeTrackConstructionValue track; AiBridgeClipConstructionValue constructionClip; AiBridgeTrackPropertyValue trackProperties; AiBridgeClipPropertyValue clipProperties; AiBridgeClipValue clip; AiBridgeContextValue context; AiBridgePage page; AiBridgeMutationResult mutation; AiBridgeAssetPage<AiBridgeSampleValue> samples; AiBridgeAssetPage<AiBridgePresetValue> presets; AiBridgeAssetLoadValue assetLoad; };
 class AiBridgeProjectActions {
 public:
  static AiBridgeProjectActionResult getProjectStructure();
@@ -25,6 +26,10 @@ public:
  static AiBridgeProjectActionResult transposeNotes(const QString& clipId, const AiBridgeNoteSelection& selection, int semitones, const QString& expectedContentHash = {});
  static AiBridgeProjectActionResult moveNotes(const QString& clipId, const AiBridgeNoteSelection& selection, qint64 deltaTicks, const QString& expectedContentHash = {});
  static AiBridgeProjectActionResult duplicateRegion(const QString& clipId, qint64 sourceStart, qint64 sourceEnd, qint64 destinationStart, const QString& expectedContentHash = {});
+ static AiBridgeProjectActionResult listBundledSamples(const AiBridgeAssetFilter &filter);
+ static AiBridgeProjectActionResult loadBundledSample(const QString &trackId, const QString &sampleId);
+ static AiBridgeProjectActionResult listBundledPresets(const AiBridgeAssetFilter &filter);
+ static AiBridgeProjectActionResult loadBundledPreset(const QString &trackId, const QString &presetId);
 };
 }
 #endif
