@@ -25,6 +25,11 @@ bool isInteger(const QJsonValue &value)
 	return std::isfinite(number) && std::floor(number) == number;
 }
 
+bool isFiniteNumber(const QJsonValue &value)
+{
+	return value.isDouble() && std::isfinite(value.toDouble());
+}
+
 bool hasOnlyKeys(const QJsonObject &object, const QSet<QString> &allowed)
 {
 	for (auto it = object.constBegin(); it != object.constEnd(); ++it)
@@ -119,7 +124,7 @@ AiBridgeProtocolParseResult AiBridgeProtocol::parseRequest(const QByteArray &fra
 	if (!object.contains(QStringLiteral("action")) || !object.value(QStringLiteral("action")).isString())
 		return failure(QStringLiteral("invalid_action"), QStringLiteral("action must be a string"));
 	const auto action = object.value(QStringLiteral("action")).toString();
-	if (!QSet<QString>{QStringLiteral("get_context"), QStringLiteral("set_tempo"), QStringLiteral("adjust_current_track_volume"), QStringLiteral("add_note_to_current_clip"), QStringLiteral("get_windows"), QStringLiteral("set_window_geometry"), QStringLiteral("focus_window"), QStringLiteral("arrange_windows"), QStringLiteral("get_project_structure"), QStringLiteral("list_tracks"), QStringLiteral("list_clips"), QStringLiteral("get_clip"), QStringLiteral("open_clip_in_piano_roll"), QStringLiteral("add_notes"), QStringLiteral("delete_notes"), QStringLiteral("transpose_notes"), QStringLiteral("move_notes"), QStringLiteral("duplicate_region"), QStringLiteral("create_instrument_track"), QStringLiteral("rename_track"), QStringLiteral("create_midi_clip"), QStringLiteral("set_clip_properties"), QStringLiteral("list_instruments"), QStringLiteral("set_track_instrument"), QStringLiteral("set_track_properties"), QStringLiteral("list_bundled_samples"), QStringLiteral("load_bundled_sample"), QStringLiteral("list_bundled_presets"), QStringLiteral("load_bundled_preset")}.contains(action))
+	if (!QSet<QString>{QStringLiteral("get_context"), QStringLiteral("set_tempo"), QStringLiteral("adjust_current_track_volume"), QStringLiteral("add_note_to_current_clip"), QStringLiteral("get_windows"), QStringLiteral("set_window_geometry"), QStringLiteral("focus_window"), QStringLiteral("arrange_windows"), QStringLiteral("get_project_structure"), QStringLiteral("list_tracks"), QStringLiteral("list_clips"), QStringLiteral("get_clip"), QStringLiteral("open_clip_in_piano_roll"), QStringLiteral("add_notes"), QStringLiteral("delete_notes"), QStringLiteral("transpose_notes"), QStringLiteral("move_notes"), QStringLiteral("duplicate_region"), QStringLiteral("create_instrument_track"), QStringLiteral("rename_track"), QStringLiteral("create_midi_clip"), QStringLiteral("set_clip_properties"), QStringLiteral("list_instruments"), QStringLiteral("set_track_instrument"), QStringLiteral("set_track_properties"), QStringLiteral("list_bundled_samples"), QStringLiteral("load_bundled_sample"), QStringLiteral("list_bundled_presets"), QStringLiteral("load_bundled_preset"), QStringLiteral("get_mixer_structure"), QStringLiteral("create_mixer_channel"), QStringLiteral("delete_mixer_channel"), QStringLiteral("set_mixer_channel_properties"), QStringLiteral("route_track_to_mixer_channel"), QStringLiteral("create_mixer_route"), QStringLiteral("delete_mixer_route"), QStringLiteral("set_mixer_route_properties"), QStringLiteral("list_native_effects"), QStringLiteral("add_effect"), QStringLiteral("remove_effect"), QStringLiteral("move_effect"), QStringLiteral("set_effect_state"), QStringLiteral("get_effect_parameters"), QStringLiteral("set_effect_parameters"), QStringLiteral("get_mixer_meters")}.contains(action))
 		return failure(QStringLiteral("unknown_action"), QStringLiteral("Action is not allowlisted"));
 	if (!object.contains(QStringLiteral("parameters")) || !object.value(QStringLiteral("parameters")).isObject())
 		return failure(QStringLiteral("invalid_parameters"), QStringLiteral("parameters must be an object"));
@@ -209,6 +214,48 @@ AiBridgeProtocolParseResult AiBridgeProtocol::parseRequest(const QByteArray &fra
 		for (const auto &key : {QStringLiteral("source_start"), QStringLiteral("source_end"), QStringLiteral("destination_start")})
 			if (!parameters.contains(key) || !isInteger(parameters.value(key)))
 				return requestFailure(QStringLiteral("invalid_parameter"), QStringLiteral("duplicate_region bounds must be integers"));
+	}
+	if (action == QStringLiteral("get_mixer_structure") && !validPaging(parameters)) return requestFailure(QStringLiteral("invalid_parameter"), QStringLiteral("mixer structure paging is invalid"));
+	if (action == QStringLiteral("create_mixer_channel") && (!hasOnlyKeys(parameters, {QStringLiteral("name")}) || (parameters.contains(QStringLiteral("name")) && (!parameters.value(QStringLiteral("name")).isString() || parameters.value(QStringLiteral("name")).toString().isEmpty())))) return requestFailure(QStringLiteral("invalid_parameter"), QStringLiteral("create_mixer_channel accepts an optional name"));
+	if (action == QStringLiteral("delete_mixer_channel") && (!hasOnlyKeys(parameters, {QStringLiteral("mixer_channel_id")}) || !parameters.value(QStringLiteral("mixer_channel_id")).isString())) return requestFailure(QStringLiteral("invalid_parameter"), QStringLiteral("delete_mixer_channel requires mixer_channel_id"));
+	if (action == QStringLiteral("set_mixer_channel_properties"))
+	{
+		if (!parameters.contains(QStringLiteral("mixer_channel_id")) || !parameters.value(QStringLiteral("mixer_channel_id")).isString() || !hasOnlyKeys(parameters, {QStringLiteral("mixer_channel_id"), QStringLiteral("name"), QStringLiteral("volume"), QStringLiteral("mute"), QStringLiteral("solo")}) || parameters.size() < 2) return requestFailure(QStringLiteral("invalid_parameter"), QStringLiteral("channel properties are invalid"));
+		if (parameters.contains(QStringLiteral("name")) && !parameters.value(QStringLiteral("name")).isString()) return requestFailure(QStringLiteral("invalid_parameter"), QStringLiteral("name must be a string"));
+		if (parameters.contains(QStringLiteral("volume")) && !isFiniteNumber(parameters.value(QStringLiteral("volume")))) return requestFailure(QStringLiteral("invalid_parameter"), QStringLiteral("volume must be numeric"));
+		if (parameters.contains(QStringLiteral("mute")) && !parameters.value(QStringLiteral("mute")).isBool()) return requestFailure(QStringLiteral("invalid_parameter"), QStringLiteral("mute must be boolean"));
+		if (parameters.contains(QStringLiteral("solo")) && !parameters.value(QStringLiteral("solo")).isBool()) return requestFailure(QStringLiteral("invalid_parameter"), QStringLiteral("solo must be boolean"));
+	}
+	if (action == QStringLiteral("route_track_to_mixer_channel") && (!hasOnlyKeys(parameters, {QStringLiteral("track_id"), QStringLiteral("mixer_channel_id")}) || !parameters.value(QStringLiteral("track_id")).isString() || !parameters.value(QStringLiteral("mixer_channel_id")).isString())) return requestFailure(QStringLiteral("invalid_parameter"), QStringLiteral("route_track_to_mixer_channel requires track_id and mixer_channel_id"));
+	if (action == QStringLiteral("create_mixer_route") && (!hasOnlyKeys(parameters, {QStringLiteral("source_channel_id"), QStringLiteral("destination_channel_id"), QStringLiteral("amount")}) || !parameters.value(QStringLiteral("source_channel_id")).isString() || !parameters.value(QStringLiteral("destination_channel_id")).isString() || !isFiniteNumber(parameters.value(QStringLiteral("amount"))))) return requestFailure(QStringLiteral("invalid_parameter"), QStringLiteral("create_mixer_route parameters are invalid"));
+	if (action == QStringLiteral("delete_mixer_route") && (!hasOnlyKeys(parameters, {QStringLiteral("mixer_route_id")}) || !parameters.value(QStringLiteral("mixer_route_id")).isString())) return requestFailure(QStringLiteral("invalid_parameter"), QStringLiteral("delete_mixer_route requires mixer_route_id"));
+	if (action == QStringLiteral("set_mixer_route_properties") && (!hasOnlyKeys(parameters, {QStringLiteral("mixer_route_id"), QStringLiteral("amount")}) || !parameters.value(QStringLiteral("mixer_route_id")).isString() || !isFiniteNumber(parameters.value(QStringLiteral("amount"))))) return requestFailure(QStringLiteral("invalid_parameter"), QStringLiteral("set_mixer_route_properties parameters are invalid"));
+	if (action == QStringLiteral("list_native_effects"))
+	{
+		if (!hasOnlyKeys(parameters, {QStringLiteral("offset"), QStringLiteral("limit"), QStringLiteral("filter")})) return requestFailure(QStringLiteral("unknown_parameter"), QStringLiteral("effect catalog contains an unknown parameter"));
+		QJsonObject paging; for (const auto& key : {QStringLiteral("offset"), QStringLiteral("limit")}) if (parameters.contains(key)) paging.insert(key, parameters.value(key));
+		if (!validPaging(paging) || (parameters.contains(QStringLiteral("filter")) && !parameters.value(QStringLiteral("filter")).isString())) return requestFailure(QStringLiteral("invalid_parameter"), QStringLiteral("effect catalog parameters are invalid"));
+	}
+	if ((action == QStringLiteral("remove_effect") || action == QStringLiteral("move_effect") || action == QStringLiteral("set_effect_state") || action == QStringLiteral("get_effect_parameters") || action == QStringLiteral("set_effect_parameters")) && (!parameters.contains(QStringLiteral("effect_instance_id")) || !parameters.value(QStringLiteral("effect_instance_id")).isString())) return requestFailure(QStringLiteral("invalid_parameter"), QStringLiteral("effect_instance_id is required"));
+	if (action == QStringLiteral("add_effect") && (!hasOnlyKeys(parameters, {QStringLiteral("mixer_channel_id"), QStringLiteral("effect_id"), QStringLiteral("position")}) || !parameters.value(QStringLiteral("mixer_channel_id")).isString() || !parameters.value(QStringLiteral("effect_id")).isString() || !isInteger(parameters.value(QStringLiteral("position"))))) return requestFailure(QStringLiteral("invalid_parameter"), QStringLiteral("add_effect parameters are invalid"));
+	if (action == QStringLiteral("remove_effect") && !hasOnlyKeys(parameters, {QStringLiteral("effect_instance_id")})) return requestFailure(QStringLiteral("unknown_parameter"), QStringLiteral("remove_effect contains an unknown parameter"));
+	if (action == QStringLiteral("move_effect") && (!hasOnlyKeys(parameters, {QStringLiteral("effect_instance_id"), QStringLiteral("position")}) || !isInteger(parameters.value(QStringLiteral("position"))))) return requestFailure(QStringLiteral("invalid_parameter"), QStringLiteral("move_effect requires position"));
+	if (action == QStringLiteral("set_effect_state") && (!hasOnlyKeys(parameters, {QStringLiteral("effect_instance_id"), QStringLiteral("enabled"), QStringLiteral("wet_dry")}) || !parameters.value(QStringLiteral("enabled")).isBool() || !isFiniteNumber(parameters.value(QStringLiteral("wet_dry"))))) return requestFailure(QStringLiteral("invalid_parameter"), QStringLiteral("set_effect_state parameters are invalid"));
+	if (action == QStringLiteral("get_effect_parameters"))
+	{
+		QJsonObject paging; for (const auto& key : {QStringLiteral("offset"), QStringLiteral("limit")}) if (parameters.contains(key)) paging.insert(key, parameters.value(key));
+		if (!hasOnlyKeys(parameters, {QStringLiteral("effect_instance_id"), QStringLiteral("offset"), QStringLiteral("limit")}) || !validPaging(paging)) return requestFailure(QStringLiteral("invalid_parameter"), QStringLiteral("effect parameter paging is invalid"));
+	}
+	if (action == QStringLiteral("set_effect_parameters"))
+	{
+		if (!hasOnlyKeys(parameters, {QStringLiteral("effect_instance_id"), QStringLiteral("changes")}) || !parameters.value(QStringLiteral("changes")).isArray() || parameters.value(QStringLiteral("changes")).toArray().isEmpty() || parameters.value(QStringLiteral("changes")).toArray().size() > 64) return requestFailure(QStringLiteral("invalid_parameter"), QStringLiteral("parameter changes are invalid"));
+		for (const auto& value : parameters.value(QStringLiteral("changes")).toArray()) { const auto change = value.toObject(); if (!value.isObject() || !hasOnlyKeys(change, {QStringLiteral("id"), QStringLiteral("type"), QStringLiteral("value")}) || !change.value(QStringLiteral("id")).isString() || !change.value(QStringLiteral("type")).isString() || !isFiniteNumber(change.value(QStringLiteral("value")))) return requestFailure(QStringLiteral("invalid_parameter"), QStringLiteral("parameter change is invalid")); }
+	}
+	if (action == QStringLiteral("get_mixer_meters"))
+	{
+		QJsonObject paging; for (const auto& key : {QStringLiteral("offset"), QStringLiteral("limit")}) if (parameters.contains(key)) paging.insert(key, parameters.value(key));
+		if (!hasOnlyKeys(parameters, {QStringLiteral("mixer_channel_ids"), QStringLiteral("offset"), QStringLiteral("limit")}) || !validPaging(paging)) return requestFailure(QStringLiteral("invalid_parameter"), QStringLiteral("meter paging is invalid"));
+		if (parameters.contains(QStringLiteral("mixer_channel_ids")) && (!parameters.value(QStringLiteral("mixer_channel_ids")).isArray() || parameters.value(QStringLiteral("mixer_channel_ids")).toArray().size() > 64)) return requestFailure(QStringLiteral("invalid_parameter"), QStringLiteral("meter channel list is invalid"));
 	}
 
 	return {true, QStringLiteral("ok"), QStringLiteral("Request accepted"), {2, requestId, action, parameters}};

@@ -52,6 +52,10 @@ public:
 		return new gui::AmplifierControlDialog(this);
 	}
 	int controlCount() override { return 4; }
+	FloatModel& volumeModel() { return m_volumeModel; }
+	FloatModel& panModel() { return m_panModel; }
+	FloatModel& leftModel() { return m_leftModel; }
+	FloatModel& rightModel() { return m_rightModel; }
 
 private:
 	AmplifierEffect* m_effect;

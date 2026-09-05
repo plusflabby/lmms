@@ -12,6 +12,13 @@
 #include "AiBridgeWindowActions.h"
 #include "AiBridgeWindowContext.h"
 #include "AiBridgeAssetTypes.h"
+#include "AiBridgeMixerActions.h"
+#include "AiBridgeMixerContext.h"
+#include "AiBridgeMixerRegistry.h"
+#include "AiBridgeEffectActions.h"
+#include "AiBridgeEffectCatalog.h"
+#include "AiBridgeEffectTypes.h"
+#include "AiBridgeMeterActions.h"
 
 namespace lmms
 {
@@ -113,6 +120,84 @@ QJsonObject mutationJson(const AiBridgeMutationResult &value)
 		{"new_content_hash", value.new_content_hash},
 		{"clip_length_ticks", value.clip_length_ticks},
 		{"current_in_piano_roll", value.current_in_piano_roll}};
+}
+
+QJsonObject mixerPageJson(const AiBridgeMixerPage &page)
+{
+	return {{"total", page.total}, {"offset", page.offset}, {"limit", page.limit}, {"has_more", page.hasMore}};
+}
+
+QJsonObject effectSummaryJson(const AiBridgeMixerEffectSummary &value)
+{
+	return {{"effect_instance_id", value.effectInstanceId}, {"effect_id", value.effectId}, {"name", value.name}, {"position", value.position}};
+}
+
+QJsonObject channelJson(const AiBridgeMixerChannelSnapshot &value)
+{
+	QJsonArray tracks; for (const auto &id : value.trackIds) tracks.append(id);
+	QJsonArray effects; for (const auto &effect : value.effects) effects.append(effectSummaryJson(effect));
+	return {{"mixer_channel_id", value.mixerChannelId}, {"name", value.name}, {"master", value.master}, {"volume", value.volume}, {"mute", value.mute}, {"solo", value.solo}, {"track_ids", tracks}, {"effects", effects}};
+}
+
+QJsonObject routeJson(const AiBridgeMixerRouteSnapshot &value)
+{
+	return {{"mixer_route_id", value.mixerRouteId}, {"source_channel_id", value.sourceChannelId}, {"destination_channel_id", value.destinationChannelId}, {"amount", value.amount}};
+}
+
+QJsonObject mixerStructureJson(const AiBridgeMixerStructureSnapshot &value)
+{
+	QJsonArray channels; for (const auto &item : value.channelItems) channels.append(channelJson(item));
+	QJsonArray routes; for (const auto &item : value.routeItems) routes.append(routeJson(item));
+	return {{"channels", channels}, {"channel_page", mixerPageJson(value.channels)}, {"routes", routes}, {"route_page", mixerPageJson(value.routes)}};
+}
+
+QString parameterTypeName(AiBridgeEffectParameterType type)
+{
+	switch (type) { case AiBridgeEffectParameterType::Float: return "float"; case AiBridgeEffectParameterType::Integer: return "integer"; case AiBridgeEffectParameterType::Boolean: return "boolean"; case AiBridgeEffectParameterType::Enum: return "enum"; }
+	return "float";
+}
+
+QJsonObject parameterJson(const AiBridgeEffectParameterMetadata &value)
+{
+	QJsonArray enums; for (const auto &item : value.enumValues) enums.append(item);
+
+	return {{"id", value.id}, {"name", value.name}, {"type", parameterTypeName(value.type)}, {"value", value.value}, {"minimum", value.minimum}, {"maximum", value.maximum}, {"default", value.defaultValue}, {"step", value.step}, {"unit", value.unit}, {"enum_values", enums}, {"writable", value.writable}};
+}
+
+QJsonObject effectActionJson(const AiBridgeEffectActionResult &value)
+{
+	QJsonArray effects; for (const auto &item : value.effects) effects.append(effectSummaryJson(item));
+	return {{"effect_instance_id", value.effectInstanceId}, {"effect_id", value.effectId}, {"mixer_channel_id", value.mixerChannelId}, {"position", value.position}, {"enabled", value.enabled}, {"wet_dry", value.wetDry}, {"effects", effects}};
+}
+
+QJsonObject parameterPageJson(const AiBridgeEffectParameterActionResult &value)
+{
+	QJsonArray items; for (const auto &item : value.page.items) items.append(parameterJson(item));
+	QJsonObject result = mixerPageJson(value.page.page); result.insert("effect_instance_id", value.effectInstanceId); result.insert("parameters", items); return result;
+}
+
+QJsonObject meterPageJson(const AiBridgeMeterActionResult &value)
+{
+	QJsonArray items; for (const auto &item : value.page.items) items.append(QJsonObject{{"mixer_channel_id", item.mixerChannelId}, {"left_peak", item.leftPeak}, {"right_peak", item.rightPeak}});
+	QJsonObject result = mixerPageJson(value.page.page); result.insert("meters", items); return result;
+}
+
+bool isMixerAction(const QString &action)
+{
+	return action == "get_mixer_structure" || action == "create_mixer_channel" || action == "delete_mixer_channel" || action == "set_mixer_channel_properties" || action == "route_track_to_mixer_channel" || action == "create_mixer_route" || action == "delete_mixer_route" || action == "set_mixer_route_properties";
+}
+
+bool isEffectAction(const QString &action)
+{
+	return action == "list_native_effects" || action == "add_effect" || action == "remove_effect" || action == "move_effect" || action == "set_effect_state" || action == "get_effect_parameters" || action == "set_effect_parameters" || action == "get_mixer_meters";
+}
+
+AiBridgeEffectParameterType parameterType(const QString &value)
+{
+	if (value == "integer") return AiBridgeEffectParameterType::Integer;
+	if (value == "boolean") return AiBridgeEffectParameterType::Boolean;
+	if (value == "enum") return AiBridgeEffectParameterType::Enum;
+	return AiBridgeEffectParameterType::Float;
 }
 }
 
@@ -267,6 +352,73 @@ void AiBridgeIpcServer::executeRequest(const AiBridgeProtocolRequest &request)
 			else if (request.action == QStringLiteral("load_bundled_sample") || request.action == QStringLiteral("load_bundled_preset")) data=QJsonObject{{"asset_id",result.assetLoad.assetId},{"track_id",result.assetLoad.trackId},{"track_name",result.assetLoad.trackName},{"instrument_id",result.assetLoad.instrumentId}};
 			else { data=clipJson(result.clip); data.insert("content_hash",result.clip.contentHash); data.insert("auto_resize",result.clip.autoResize); data.insert("total",result.page.total);data.insert("offset",result.page.offset);data.insert("limit",result.page.limit);data.insert("has_more",result.page.hasMore); QJsonArray notes;for(const auto& n:result.clip.notes)notes.append(QJsonObject{{"position",n.position},{"length",n.length},{"key",n.key},{"volume",n.volume},{"panning",n.panning},{"note_type",n.noteType}});data.insert("notes",notes); if(request.action==QStringLiteral("open_clip_in_piano_roll")){const auto& c=result.context;data.insert("context",QJsonObject{{"clip_id",c.clipId},{"track_id",c.trackId},{"track_name",c.trackName},{"project_generation",static_cast<qint64>(c.projectGeneration)}});} }
 			response = {2,request.requestId,result.success,result.code,result.message,data};
+		}
+		else if (isMixerAction(request.action))
+		{
+			const auto &p = request.parameters;
+			AiBridgeProtocolResponse mixerResponse{2, request.requestId, false, "internal_error", "mixer request did not execute"};
+			if (request.action == "get_mixer_structure")
+			{
+				const auto structure = AiBridgeMixerContext(aiBridgeMixerRegistry()).snapshot(p.value("offset").toInt(), p.contains("limit") ? p.value("limit").toInt() : 64);
+				mixerResponse = {2, request.requestId, true, "ok", "mixer structure read", mixerStructureJson(structure)};
+			}
+			else
+			{
+				AiBridgeMixerActionResult result;
+				if (request.action == "create_mixer_channel") result = AiBridgeMixerActions::createChannel(p.contains("name") ? std::optional<QString>(p.value("name").toString()) : std::nullopt);
+				else if (request.action == "delete_mixer_channel") result = AiBridgeMixerActions::deleteChannel(p.value("mixer_channel_id").toString());
+				else if (request.action == "set_mixer_channel_properties")
+				{
+					AiBridgeMixerChannelProperties properties;
+					if (p.contains("name")) properties.name = p.value("name").toString();
+					if (p.contains("volume")) properties.volume = static_cast<float>(p.value("volume").toDouble());
+					if (p.contains("mute")) properties.mute = p.value("mute").toBool();
+					if (p.contains("solo")) properties.solo = p.value("solo").toBool();
+					result = AiBridgeMixerActions::setChannelProperties(p.value("mixer_channel_id").toString(), properties);
+				}
+				else if (request.action == "route_track_to_mixer_channel") result = AiBridgeMixerActions::routeTrackToChannel(p.value("track_id").toString(), p.value("mixer_channel_id").toString());
+				else if (request.action == "create_mixer_route") result = AiBridgeMixerActions::createRoute(p.value("source_channel_id").toString(), p.value("destination_channel_id").toString(), static_cast<float>(p.value("amount").toDouble()));
+				else if (request.action == "delete_mixer_route") result = AiBridgeMixerActions::deleteRoute(p.value("mixer_route_id").toString());
+				else { AiBridgeMixerRouteProperties properties; properties.amount = static_cast<float>(p.value("amount").toDouble()); result = AiBridgeMixerActions::setRouteProperties(p.value("mixer_route_id").toString(), properties); }
+				QJsonObject data = !result.route.mixerRouteId.isEmpty() ? routeJson(result.route) : channelJson(result.channel);
+				if (!result.trackId.isEmpty()) data.insert("track_id", result.trackId);
+				mixerResponse = {2, request.requestId, result.success, result.code, result.message, data};
+			}
+			response = mixerResponse;
+		}
+		else if (isEffectAction(request.action))
+		{
+			const auto &p = request.parameters;
+			if (request.action == "list_native_effects")
+			{
+				const auto page = AiBridgeEffectCatalog::list(p.value("offset").toInt(), p.contains("limit") ? p.value("limit").toInt() : 64, p.value("filter").toString());
+				QJsonArray items; for (const auto &item : page.items) items.append(QJsonObject{{"effect_id", item.id}, {"name", item.name}, {"description", item.description}});
+				response = {2, request.requestId, true, "ok", "effect catalog read", QJsonObject{{"effects", items}, {"total", page.page.total}, {"offset", page.page.offset}, {"limit", page.page.limit}, {"has_more", page.page.hasMore}}};
+			}
+			else if (request.action == "get_mixer_meters")
+			{
+				std::optional<QVector<QString>> requested;
+				if (p.contains("mixer_channel_ids")) { QVector<QString> ids; for (const auto &value : p.value("mixer_channel_ids").toArray()) ids.append(value.toString()); requested = ids; }
+				const auto result = AiBridgeMeterActions::get(requested, p.value("offset").toInt(), p.contains("limit") ? p.value("limit").toInt() : 64);
+				response = {2, request.requestId, result.success, result.code, result.message, meterPageJson(result)};
+			}
+			else if (request.action == "get_effect_parameters" || request.action == "set_effect_parameters")
+			{
+				AiBridgeEffectParameterActionResult result;
+				const auto id = p.value("effect_instance_id").toString();
+				if (request.action == "get_effect_parameters") result = AiBridgeEffectActions::getParameters(id, p.value("offset").toInt(), p.contains("limit") ? p.value("limit").toInt() : 128);
+				else { QVector<AiBridgeEffectParameterChange> changes; for (const auto &value : p.value("changes").toArray()) { const auto object = value.toObject(); changes.append({object.value("id").toString(), parameterType(object.value("type").toString()), static_cast<float>(object.value("value").toDouble())}); } result = AiBridgeEffectActions::setParameters(id, changes); }
+				response = {2, request.requestId, result.success, result.code, result.message, parameterPageJson(result)};
+			}
+			else
+			{
+				AiBridgeEffectActionResult result;
+				if (request.action == "add_effect") result = AiBridgeEffectActions::add(p.value("mixer_channel_id").toString(), p.value("effect_id").toString(), p.value("position").toInt());
+				else if (request.action == "remove_effect") result = AiBridgeEffectActions::remove(p.value("effect_instance_id").toString());
+				else if (request.action == "move_effect") result = AiBridgeEffectActions::move(p.value("effect_instance_id").toString(), p.value("position").toInt());
+				else result = AiBridgeEffectActions::setState(p.value("effect_instance_id").toString(), p.value("enabled").toBool(), static_cast<float>(p.value("wet_dry").toDouble()));
+				response = {2, request.requestId, result.success, result.code, result.message, effectActionJson(result)};
+			}
 		}
 		else
 		{

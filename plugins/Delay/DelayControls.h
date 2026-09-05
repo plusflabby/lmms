@@ -50,6 +50,11 @@ public:
 	int controlCount() override{
 		return 5;
 	}
+	TempoSyncKnobModel& delayTimeModel() { return m_delayTimeModel; }
+	FloatModel& feedbackModel() { return m_feedbackModel; }
+	TempoSyncKnobModel& lfoTimeModel() { return m_lfoTimeModel; }
+	TempoSyncKnobModel& lfoAmountModel() { return m_lfoAmountModel; }
+	FloatModel& outGainModel() { return m_outGainModel; }
 	gui::EffectControlDialog* createView() override
 	{
 		return new gui::DelayControlsDialog( this );

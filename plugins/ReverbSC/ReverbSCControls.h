@@ -53,6 +53,10 @@ public:
 	{
 		return 4;
 	}
+	FloatModel& inputGainModel() { return m_inputGainModel; }
+	FloatModel& sizeModel() { return m_sizeModel; }
+	FloatModel& colorModel() { return m_colorModel; }
+	FloatModel& outputGainModel() { return m_outputGainModel; }
 
 	gui::EffectControlDialog* createView() override
 	{

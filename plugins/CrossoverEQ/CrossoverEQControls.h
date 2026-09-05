@@ -53,6 +53,17 @@ public:
 	{
 		return( 11 );
 	}
+	FloatModel& xover12Model() { return m_xover12; }
+	FloatModel& xover23Model() { return m_xover23; }
+	FloatModel& xover34Model() { return m_xover34; }
+	FloatModel& gain1Model() { return m_gain1; }
+	FloatModel& gain2Model() { return m_gain2; }
+	FloatModel& gain3Model() { return m_gain3; }
+	FloatModel& gain4Model() { return m_gain4; }
+	BoolModel& mute1Model() { return m_mute1; }
+	BoolModel& mute2Model() { return m_mute2; }
+	BoolModel& mute3Model() { return m_mute3; }
+	BoolModel& mute4Model() { return m_mute4; }
 
 	gui::EffectControlDialog * createView() override
 	{

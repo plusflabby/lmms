@@ -34,6 +34,7 @@
 #include <atomic>
 #include <optional>
 #include <QColor>
+#include <QObject>
 
 namespace lmms
 {
@@ -41,6 +42,12 @@ namespace lmms
 
 class MixerRoute;
 using MixerRouteVector = std::vector<MixerRoute*>;
+
+class MixerChannelLifetimeToken : public QObject
+{
+public:
+	using QObject::QObject;
+};
 
 class MixerChannel : public ThreadableJob
 {
@@ -55,6 +62,8 @@ public:
 
 	float m_peakLeft;
 	float m_peakRight;
+	std::atomic<float> m_bridgePeakLeft;
+	std::atomic<float> m_bridgePeakRight;
 	AudioBuffer m_buffer;
 	bool m_muteBeforeSolo;
 	BoolModel m_muteModel;
@@ -73,6 +82,8 @@ public:
 
 	int index() const { return m_channelIndex; }
 	void setIndex(int index) { m_channelIndex = index; }
+	QObject* lifetimeToken() { return &m_lifetimeToken; }
+	const QObject* lifetimeToken() const { return &m_lifetimeToken; }
 
 	bool isMaster() { return m_channelIndex == 0; }
 
@@ -87,10 +98,13 @@ public:
 	std::atomic_size_t m_dependenciesMet;
 	void incrementDeps();
 	void processed();
+	float bridgePeakLeft() const { return m_bridgePeakLeft.load(std::memory_order_acquire); }
+	float bridgePeakRight() const { return m_bridgePeakRight.load(std::memory_order_acquire); }
 
 private:
 	void doProcessing() override;
 	int m_channelIndex;
+	MixerChannelLifetimeToken m_lifetimeToken;
 	std::optional<QColor> m_color;
 };
 
@@ -210,6 +224,11 @@ public:
 	inline mix_ch_t numChannels() const
 	{
 		return m_mixerChannels.size();
+	}
+
+	const std::vector<MixerChannel*>& mixerChannels() const
+	{
+		return m_mixerChannels;
 	}
 
 	MixerRouteVector m_mixerRoutes;

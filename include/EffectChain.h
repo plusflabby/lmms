@@ -66,6 +66,13 @@ public:
 	bool processAudioBuffer(AudioBuffer& buffer);
 
 	void clear();
+	int effectCount() const { return static_cast<int>(m_effects.size()); }
+	Effect* effectAt(int index) const { return index >= 0 && index < effectCount() ? m_effects[static_cast<std::size_t>(index)] : nullptr; }
+	int indexOf(Effect* effect) const
+	{
+		const auto it = std::find(m_effects.cbegin(), m_effects.cend(), effect);
+		return it == m_effects.cend() ? -1 : static_cast<int>(std::distance(m_effects.cbegin(), it));
+	}
 
 
 private:

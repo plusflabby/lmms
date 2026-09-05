@@ -58,6 +58,38 @@ private slots:
 			QVERIFY2(lmms::AiBridgeProtocol::parseRequest(frame).success, frame.constData());
 	}
 
+	void acceptsPhase3FMixerActions()
+	{
+		const auto requests = {
+			QByteArray("{\"version\":2,\"request_id\":\"r\",\"action\":\"get_mixer_structure\",\"parameters\":{\"offset\":0,\"limit\":16}}\n"),
+			QByteArray("{\"version\":2,\"request_id\":\"r\",\"action\":\"create_mixer_channel\",\"parameters\":{\"name\":\"Bus\"}}\n"),
+			QByteArray("{\"version\":2,\"request_id\":\"r\",\"action\":\"delete_mixer_channel\",\"parameters\":{\"mixer_channel_id\":\"m\"}}\n"),
+			QByteArray("{\"version\":2,\"request_id\":\"r\",\"action\":\"set_mixer_channel_properties\",\"parameters\":{\"mixer_channel_id\":\"m\",\"volume\":1}}\n"),
+			QByteArray("{\"version\":2,\"request_id\":\"r\",\"action\":\"route_track_to_mixer_channel\",\"parameters\":{\"track_id\":\"t\",\"mixer_channel_id\":\"m\"}}\n"),
+			QByteArray("{\"version\":2,\"request_id\":\"r\",\"action\":\"create_mixer_route\",\"parameters\":{\"source_channel_id\":\"a\",\"destination_channel_id\":\"b\",\"amount\":0.5}}\n"),
+			QByteArray("{\"version\":2,\"request_id\":\"r\",\"action\":\"delete_mixer_route\",\"parameters\":{\"mixer_route_id\":\"route\"}}\n"),
+			QByteArray("{\"version\":2,\"request_id\":\"r\",\"action\":\"set_mixer_route_properties\",\"parameters\":{\"mixer_route_id\":\"route\",\"amount\":0.5}}\n")
+		};
+		for (const auto &frame : requests)
+			QVERIFY2(lmms::AiBridgeProtocol::parseRequest(frame).success, frame.constData());
+	}
+
+	void acceptsPhase3FEffectAndMeterActions()
+	{
+		const auto requests = {
+			QByteArray("{\"version\":2,\"request_id\":\"r\",\"action\":\"list_native_effects\",\"parameters\":{\"offset\":0,\"limit\":5,\"filter\":\"amp\"}}\n"),
+			QByteArray("{\"version\":2,\"request_id\":\"r\",\"action\":\"add_effect\",\"parameters\":{\"mixer_channel_id\":\"m\",\"effect_id\":\"amplifier\",\"position\":0}}\n"),
+			QByteArray("{\"version\":2,\"request_id\":\"r\",\"action\":\"remove_effect\",\"parameters\":{\"effect_instance_id\":\"e\"}}\n"),
+			QByteArray("{\"version\":2,\"request_id\":\"r\",\"action\":\"move_effect\",\"parameters\":{\"effect_instance_id\":\"e\",\"position\":0}}\n"),
+			QByteArray("{\"version\":2,\"request_id\":\"r\",\"action\":\"set_effect_state\",\"parameters\":{\"effect_instance_id\":\"e\",\"enabled\":true,\"wet_dry\":0}}\n"),
+			QByteArray("{\"version\":2,\"request_id\":\"r\",\"action\":\"get_effect_parameters\",\"parameters\":{\"effect_instance_id\":\"e\",\"offset\":0,\"limit\":128}}\n"),
+			QByteArray("{\"version\":2,\"request_id\":\"r\",\"action\":\"set_effect_parameters\",\"parameters\":{\"effect_instance_id\":\"e\",\"changes\":[{\"id\":\"volume\",\"type\":\"float\",\"value\":1}]}}\n"),
+			QByteArray("{\"version\":2,\"request_id\":\"r\",\"action\":\"get_mixer_meters\",\"parameters\":{\"mixer_channel_ids\":[\"m\"],\"offset\":0,\"limit\":64}}\n")
+		};
+		for (const auto &frame : requests)
+			QVERIFY2(lmms::AiBridgeProtocol::parseRequest(frame).success, frame.constData());
+	}
+
 	void rejectsMalformedAndUnknownFields()
 	{
 		for (const QByteArray frame : {QByteArray("not json\n"), QByteArray("{\"version\":2,\"request_id\":\"r\",\"action\":\"nope\",\"parameters\":{}}\n"), QByteArray("{\"version\":2,\"request_id\":\"r\",\"action\":\"get_context\",\"parameters\":{},\"extra\":1}\n")})
@@ -82,7 +114,7 @@ private slots:
 
 	void replacesOversizedResultsWithBoundedError()
 	{
-		for (const auto action : {"get_project_structure", "list_tracks", "list_clips", "get_clip"})
+		for (const auto action : {"get_project_structure", "list_tracks", "list_clips", "get_clip", "list_native_effects", "get_effect_parameters", "get_mixer_meters"})
 		{
 			QJsonObject data{{"action", action}, {"items", QString(70000, QLatin1Char('x'))}};
 			const auto frame = lmms::AiBridgeProtocol::serializeResponse({2, action, true, "ok", "done", data});

@@ -52,6 +52,34 @@ public:
 	{
 		return 28;
 	}
+	FloatModel& thresholdModel() { return m_thresholdModel; }
+	FloatModel& ratioModel() { return m_ratioModel; }
+	FloatModel& attackModel() { return m_attackModel; }
+	FloatModel& releaseModel() { return m_releaseModel; }
+	FloatModel& kneeModel() { return m_kneeModel; }
+	FloatModel& holdModel() { return m_holdModel; }
+	FloatModel& rangeModel() { return m_rangeModel; }
+	FloatModel& rmsModel() { return m_rmsModel; }
+	IntModel& midsideModel() { return m_midsideModel; }
+	IntModel& peakmodeModel() { return m_peakmodeModel; }
+	FloatModel& lookaheadLengthModel() { return m_lookaheadLengthModel; }
+	FloatModel& inBalanceModel() { return m_inBalanceModel; }
+	FloatModel& outBalanceModel() { return m_outBalanceModel; }
+	IntModel& limiterModel() { return m_limiterModel; }
+	FloatModel& outGainModel() { return m_outGainModel; }
+	FloatModel& inGainModel() { return m_inGainModel; }
+	FloatModel& blendModel() { return m_blendModel; }
+	FloatModel& stereoBalanceModel() { return m_stereoBalanceModel; }
+	BoolModel& autoMakeupModel() { return m_autoMakeupModel; }
+	BoolModel& auditionModel() { return m_auditionModel; }
+	BoolModel& feedbackModel() { return m_feedbackModel; }
+	FloatModel& autoAttackModel() { return m_autoAttackModel; }
+	FloatModel& autoReleaseModel() { return m_autoReleaseModel; }
+	BoolModel& lookaheadModel() { return m_lookaheadModel; }
+	FloatModel& tiltModel() { return m_tiltModel; }
+	FloatModel& tiltFreqModel() { return m_tiltFreqModel; }
+	IntModel& stereoLinkModel() { return m_stereoLinkModel; }
+	FloatModel& mixModel() { return m_mixModel; }
 
 	gui::EffectControlDialog* createView() override
 	{

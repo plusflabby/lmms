@@ -92,6 +92,9 @@ public:
 		return m_enabledModel.value();
 	}
 
+	void setEnabled(bool enabled) { m_enabledModel.setValue(enabled); }
+	void setWetLevel(float wetDry) { m_wetDryModel.setValue(wetDry); }
+
 	inline f_cnt_t timeout() const
 	{
 		const float samples = Engine::audioEngine()->outputSampleRate() * m_autoQuitModel.value() / 1000.0f;

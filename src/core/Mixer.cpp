@@ -64,6 +64,8 @@ MixerChannel::MixerChannel( int idx, Model * _parent ) :
 	m_stillRunning( false ),
 	m_peakLeft( 0.0f ),
 	m_peakRight( 0.0f ),
+	m_bridgePeakLeft( 0.0f ),
+	m_bridgePeakRight( 0.0f ),
 	m_buffer(Engine::audioEngine()->framesPerPeriod()),
 	m_muteModel( false, _parent ),
 	m_soloModel( false, _parent ),
@@ -72,7 +74,8 @@ MixerChannel::MixerChannel( int idx, Model * _parent ) :
 	m_lock(),
 	m_queued( false ),
 	m_dependenciesMet(0),
-	m_channelIndex(idx)
+	m_channelIndex(idx),
+	m_lifetimeToken()
 {
 	m_buffer.allocateInterleavedBuffer();
 }
@@ -217,10 +220,14 @@ void MixerChannel::doProcessing()
 		const auto peakSamples = SampleFrame{m_buffer.absPeakValue(0), m_buffer.absPeakValue(1)};
 		m_peakLeft = std::max(m_peakLeft, peakSamples[0] * v);
 		m_peakRight = std::max(m_peakRight, peakSamples[1] * v);
+		m_bridgePeakLeft.store(peakSamples[0] * v, std::memory_order_relaxed);
+		m_bridgePeakRight.store(peakSamples[1] * v, std::memory_order_relaxed);
 	}
 	else
 	{
 		m_peakLeft = m_peakRight = 0.0f;
+		m_bridgePeakLeft.store(0.0f, std::memory_order_relaxed);
+		m_bridgePeakRight.store(0.0f, std::memory_order_relaxed);
 	}
 
 	// increment dependency counter of all receivers
