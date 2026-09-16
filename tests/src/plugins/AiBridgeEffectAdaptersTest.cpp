@@ -6,6 +6,7 @@
 #include "DelayControls.h"
 #include "ReverbSCControls.h"
 #include "Engine.h"
+#include <type_traits>
 
 class AiBridgeEffectAdaptersTest : public QObject
 {
@@ -72,6 +73,13 @@ private slots:
 		QString error;
 		QVERIFY(AiBridgeEffectAdapters::validateBatch(metadata, {{"threshold", AiBridgeEffectParameterType::Float, -8.0f}}, &error));
 		QVERIFY(AiBridgeEffectAdapters::validateBatch(metadata, {{"delay_time", AiBridgeEffectParameterType::Float, 0.5f}}, &error));
+	}
+
+	void exposesExplicitNativeParameterBinding()
+	{
+		static_assert(std::is_same_v<decltype(lmms::AiBridgeEffectAdapters::modelForParameter(
+			QString(), nullptr, QString())), lmms::AutomatableModel *>);
+		QVERIFY(true);
 	}
 
 };

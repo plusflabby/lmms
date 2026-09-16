@@ -102,6 +102,14 @@ QVector<AiBridgeEffectParameterMetadata> AiBridgeEffectAdapters::parameters(cons
 	return result;
 }
 
+AutomatableModel* AiBridgeEffectAdapters::modelForParameter(const QString& effectId,
+	EffectControls* controls, const QString& parameterId)
+{
+	for (const auto& spec : specs(effectId))
+		if (parameterId == QLatin1String(spec.id)) return spec.getter(controls);
+	return nullptr;
+}
+
 bool AiBridgeEffectAdapters::setParameter(const QString& effectId, EffectControls* controls, const QString& parameterId, float value)
 {
 	if (!std::isfinite(value)) return false;

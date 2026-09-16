@@ -94,6 +94,8 @@ public:
 
 	void setEnabled(bool enabled) { m_enabledModel.setValue(enabled); }
 	void setWetLevel(float wetDry) { m_wetDryModel.setValue(wetDry); }
+	BoolModel * enabledModel() { return &m_enabledModel; }
+	FloatModel * wetDryModel() { return &m_wetDryModel; }
 
 	inline f_cnt_t timeout() const
 	{

@@ -41,6 +41,19 @@ set(LMMS_TESTS
 	 src/plugins/AiBridgeLifecycleTest.cpp
 	 src/plugins/AiBridgeSecurityTest.cpp
 	 src/plugins/AiBridgeFrameSizeTest.cpp
+	src/plugins/AiBridgeTimelineTypesTest.cpp
+	src/plugins/AiBridgeAutomationTypesTest.cpp
+	src/plugins/AiBridgeArrangementContextTest.cpp
+	src/plugins/AiBridgeAutomationRegistryTest.cpp
+	src/plugins/AiBridgeAutomationTargetsTest.cpp
+	src/plugins/AiBridgeAutomationReconcilerTest.cpp
+	src/plugins/AiBridgeAutomationContextTest.cpp
+	src/plugins/AiBridgeTimelineActionsTest.cpp
+	src/plugins/AiBridgeAutomationActionsTest.cpp
+	src/plugins/AiBridgeAutomationPointsTest.cpp
+	src/plugins/AiBridgeArrangementPlannerTest.cpp
+	src/plugins/AiBridgeArrangementExecutionTest.cpp
+	src/plugins/AiBridgePhase3GProtocolTest.cpp
 	src/tracks/AutomationTrackTest.cpp
 )
 
@@ -59,6 +72,142 @@ foreach(LMMS_TEST_SRC IN LISTS LMMS_TESTS)
 	if(LMMS_TEST_NAME STREQUAL "AiBridgeMutationTypesTest")
 		target_include_directories(${LMMS_TEST_NAME} PRIVATE ${CMAKE_SOURCE_DIR}/plugins/AiBridge)
 		target_sources(${LMMS_TEST_NAME} PRIVATE
+			${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeMutationTypes.cpp)
+	endif()
+	if(LMMS_TEST_NAME STREQUAL "AiBridgeTimelineTypesTest")
+		target_include_directories(${LMMS_TEST_NAME} PRIVATE ${CMAKE_SOURCE_DIR}/plugins/AiBridge)
+		target_sources(${LMMS_TEST_NAME} PRIVATE
+			${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeTimelineTypes.cpp)
+	endif()
+	if(LMMS_TEST_NAME STREQUAL "AiBridgeAutomationTypesTest")
+		target_include_directories(${LMMS_TEST_NAME} PRIVATE ${CMAKE_SOURCE_DIR}/plugins/AiBridge)
+		target_sources(${LMMS_TEST_NAME} PRIVATE
+			${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeAutomationTypes.cpp)
+	endif()
+	if(LMMS_TEST_NAME STREQUAL "AiBridgeArrangementContextTest")
+		target_include_directories(${LMMS_TEST_NAME} PRIVATE ${CMAKE_SOURCE_DIR}/plugins/AiBridge)
+		target_sources(${LMMS_TEST_NAME} PRIVATE
+			${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeArrangementContext.cpp
+			${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeProjectContext.cpp
+			${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeMutationTypes.cpp
+			${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeTimelineTypes.cpp)
+	endif()
+	if(LMMS_TEST_NAME STREQUAL "AiBridgeAutomationRegistryTest")
+		target_include_directories(${LMMS_TEST_NAME} PRIVATE ${CMAKE_SOURCE_DIR}/plugins/AiBridge)
+		target_sources(${LMMS_TEST_NAME} PRIVATE
+			${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeAutomationRegistry.cpp)
+	endif()
+	if(LMMS_TEST_NAME STREQUAL "AiBridgeAutomationTargetsTest")
+		target_include_directories(${LMMS_TEST_NAME} PRIVATE ${CMAKE_SOURCE_DIR}/plugins/AiBridge)
+		target_sources(${LMMS_TEST_NAME} PRIVATE
+			${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeAutomationTargets.cpp)
+	endif()
+	if(LMMS_TEST_NAME STREQUAL "AiBridgeAutomationReconcilerTest")
+		target_include_directories(${LMMS_TEST_NAME} PRIVATE ${CMAKE_SOURCE_DIR}/plugins/AiBridge)
+		target_sources(${LMMS_TEST_NAME} PRIVATE
+			${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeAutomationReconciler.cpp
+			${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeAutomationTargets.cpp
+			${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeAutomationRegistry.cpp
+			${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeMixerRegistry.cpp
+			${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeEffectRegistry.cpp
+			${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeEffectAdapters.cpp
+			${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeProjectContext.cpp
+			${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeMutationTypes.cpp
+			${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeAutomationTypes.cpp)
+		target_include_directories(${LMMS_TEST_NAME} PRIVATE
+			${CMAKE_SOURCE_DIR}/plugins/Amplifier
+			${CMAKE_SOURCE_DIR}/plugins/Compressor
+			${CMAKE_SOURCE_DIR}/plugins/CrossoverEQ
+			${CMAKE_SOURCE_DIR}/plugins/Delay
+			${CMAKE_SOURCE_DIR}/plugins/ReverbSC
+			${CMAKE_BINARY_DIR}/plugins/Compressor
+			${CMAKE_BINARY_DIR}/plugins/CrossoverEQ
+			${CMAKE_BINARY_DIR}/plugins/Delay
+			${CMAKE_BINARY_DIR}/plugins/ReverbSC)
+		target_sources(${LMMS_TEST_NAME} PRIVATE
+			${CMAKE_SOURCE_DIR}/plugins/Amplifier/AmplifierControls.cpp
+			${CMAKE_SOURCE_DIR}/plugins/Amplifier/AmplifierControlDialog.cpp
+			${CMAKE_SOURCE_DIR}/plugins/Compressor/CompressorControls.cpp
+			${CMAKE_SOURCE_DIR}/plugins/Compressor/CompressorControlDialog.cpp
+			${CMAKE_SOURCE_DIR}/plugins/Compressor/Compressor.cpp
+			${CMAKE_SOURCE_DIR}/plugins/CrossoverEQ/CrossoverEQControls.cpp
+			${CMAKE_SOURCE_DIR}/plugins/CrossoverEQ/CrossoverEQControlDialog.cpp
+			${CMAKE_SOURCE_DIR}/plugins/CrossoverEQ/CrossoverEQ.cpp
+			${CMAKE_SOURCE_DIR}/plugins/Delay/DelayControls.cpp
+			${CMAKE_SOURCE_DIR}/plugins/Delay/DelayControlsDialog.cpp
+			${CMAKE_SOURCE_DIR}/plugins/Delay/DelayEffect.cpp
+			${CMAKE_SOURCE_DIR}/plugins/Delay/Lfo.cpp
+			${CMAKE_SOURCE_DIR}/plugins/Delay/StereoDelay.cpp
+			${CMAKE_SOURCE_DIR}/plugins/ReverbSC/ReverbSCControls.cpp
+			${CMAKE_SOURCE_DIR}/plugins/ReverbSC/ReverbSCControlDialog.cpp
+			${CMAKE_SOURCE_DIR}/plugins/ReverbSC/ReverbSC.cpp
+			${CMAKE_SOURCE_DIR}/plugins/ReverbSC/base.c
+			${CMAKE_SOURCE_DIR}/plugins/ReverbSC/revsc.c
+			${CMAKE_SOURCE_DIR}/plugins/ReverbSC/dcblock.c
+			${CMAKE_SOURCE_DIR}/plugins/Eq/EqFader.h)
+		set_source_files_properties(
+			${CMAKE_SOURCE_DIR}/plugins/Compressor/Compressor.cpp
+			PROPERTIES COMPILE_DEFINITIONS "lmms_plugin_main=compressor_plugin_main")
+		set_source_files_properties(
+			${CMAKE_SOURCE_DIR}/plugins/CrossoverEQ/CrossoverEQ.cpp
+			PROPERTIES COMPILE_DEFINITIONS "lmms_plugin_main=crossovereq_plugin_main")
+		set_source_files_properties(
+			${CMAKE_SOURCE_DIR}/plugins/Delay/DelayEffect.cpp
+			PROPERTIES COMPILE_DEFINITIONS "lmms_plugin_main=delay_plugin_main")
+		set_source_files_properties(
+			${CMAKE_SOURCE_DIR}/plugins/ReverbSC/ReverbSC.cpp
+			PROPERTIES COMPILE_DEFINITIONS "lmms_plugin_main=reverbsc_plugin_main")
+		target_compile_definitions(${LMMS_TEST_NAME} PRIVATE PLUGIN_NAME=Amplifier PLUGIN_STATIC_DEFINE)
+	endif()
+	if(LMMS_TEST_NAME STREQUAL "AiBridgeAutomationContextTest")
+		target_include_directories(${LMMS_TEST_NAME} PRIVATE ${CMAKE_SOURCE_DIR}/plugins/AiBridge)
+		target_sources(${LMMS_TEST_NAME} PRIVATE
+			${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeAutomationContext.cpp
+			${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeAutomationRegistry.cpp
+			${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeAutomationTargets.cpp
+			${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeAutomationTypes.cpp)
+	endif()
+	if(LMMS_TEST_NAME STREQUAL "AiBridgeTimelineActionsTest")
+		target_include_directories(${LMMS_TEST_NAME} PRIVATE ${CMAKE_SOURCE_DIR}/plugins/AiBridge)
+		target_sources(${LMMS_TEST_NAME} PRIVATE
+			${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeTimelineActions.cpp
+			${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeProjectContext.cpp
+			${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeMutationTypes.cpp
+			${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeTimelineTypes.cpp)
+	endif()
+	if(LMMS_TEST_NAME STREQUAL "AiBridgeAutomationActionsTest")
+		target_include_directories(${LMMS_TEST_NAME} PRIVATE ${CMAKE_SOURCE_DIR}/plugins/AiBridge)
+		 target_sources(${LMMS_TEST_NAME} PRIVATE
+			${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeAutomationActions.cpp
+			${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeAutomationRegistry.cpp
+			${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeAutomationTargets.cpp
+			${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeAutomationTypes.cpp)
+	endif()
+	if(LMMS_TEST_NAME STREQUAL "AiBridgeAutomationPointsTest")
+		target_include_directories(${LMMS_TEST_NAME} PRIVATE ${CMAKE_SOURCE_DIR}/plugins/AiBridge)
+		target_sources(${LMMS_TEST_NAME} PRIVATE
+			${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeAutomationActions.cpp
+			${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeAutomationRegistry.cpp
+			${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeAutomationTargets.cpp
+			${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeAutomationTypes.cpp)
+	endif()
+	if(LMMS_TEST_NAME STREQUAL "AiBridgeArrangementPlannerTest")
+		target_include_directories(${LMMS_TEST_NAME} PRIVATE ${CMAKE_SOURCE_DIR}/plugins/AiBridge)
+		target_sources(${LMMS_TEST_NAME} PRIVATE
+			${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeArrangementPlanner.cpp
+			${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeTimelineTypes.cpp)
+	endif()
+	if(LMMS_TEST_NAME STREQUAL "AiBridgeArrangementExecutionTest")
+		target_include_directories(${LMMS_TEST_NAME} PRIVATE ${CMAKE_SOURCE_DIR}/plugins/AiBridge)
+		target_sources(${LMMS_TEST_NAME} PRIVATE
+			${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeArrangementActions.cpp
+			${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeArrangementPlanner.cpp
+			${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeTimelineTypes.cpp)
+	endif()
+	if(LMMS_TEST_NAME STREQUAL "AiBridgePhase3GProtocolTest")
+		target_include_directories(${LMMS_TEST_NAME} PRIVATE ${CMAKE_SOURCE_DIR}/plugins/AiBridge)
+		target_sources(${LMMS_TEST_NAME} PRIVATE
+			${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeProtocol.cpp
 			${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeMutationTypes.cpp)
 	endif()
 	if(LMMS_TEST_NAME STREQUAL "AiBridgeMixerTypesTest")
@@ -277,7 +426,19 @@ foreach(LMMS_TEST_SRC IN LISTS LMMS_TESTS)
 			${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeEffectTypes.cpp
 			${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeEffectAdapters.cpp
 			${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeMeterActions.cpp
-			${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeProjectContext.cpp)
+			${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeProjectContext.cpp
+			${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeTimelineTypes.cpp
+			${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeAutomationTypes.cpp
+			${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeArrangementContext.cpp
+			${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeAutomationRegistry.cpp
+			${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeAutomationTargets.cpp
+			${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeAutomationReconciler.cpp
+			${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeAutomationContext.cpp
+			${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeTimelineActions.cpp
+			${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeAutomationActions.cpp)
+		target_sources(${LMMS_TEST_NAME} PRIVATE
+			${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeArrangementPlanner.cpp
+			${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeArrangementActions.cpp)
 		target_include_directories(${LMMS_TEST_NAME} PRIVATE
 			${CMAKE_SOURCE_DIR}/plugins/Amplifier
 			${CMAKE_SOURCE_DIR}/plugins/Compressor
@@ -322,7 +483,19 @@ foreach(LMMS_TEST_SRC IN LISTS LMMS_TESTS)
 			${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeEffectRegistry.cpp
 			${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeEffectTypes.cpp
 			${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeEffectAdapters.cpp
-			${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeMeterActions.cpp)
+			${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeMeterActions.cpp
+			${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeTimelineTypes.cpp
+			${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeAutomationTypes.cpp
+			${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeArrangementContext.cpp
+			${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeAutomationRegistry.cpp
+			${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeAutomationTargets.cpp
+			${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeAutomationReconciler.cpp
+			${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeAutomationContext.cpp
+			${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeTimelineActions.cpp
+			${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeAutomationActions.cpp)
+		target_sources(${LMMS_TEST_NAME} PRIVATE
+			${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeArrangementPlanner.cpp
+			${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeArrangementActions.cpp)
 		target_include_directories(${LMMS_TEST_NAME} PRIVATE
 			${CMAKE_SOURCE_DIR}/plugins/AiBridge
 			${CMAKE_SOURCE_DIR}/plugins/Amplifier

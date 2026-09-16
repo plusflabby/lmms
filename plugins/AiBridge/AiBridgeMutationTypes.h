@@ -6,6 +6,8 @@
 #include <QByteArray>
 #include <optional>
 
+#include "AiBridgeValidationTypes.h"
+
 namespace lmms
 {
 
@@ -64,13 +66,6 @@ struct AiBridgeMutationResult
 	QString new_content_hash;
 	qint64 clip_length_ticks = 0;
 	bool current_in_piano_roll = false;
-};
-
-struct AiBridgeValidationResult
-{
-	QString code;
-	QString message;
-	bool success() const { return code.isEmpty(); }
 };
 
 namespace AiBridgeMutationTypes

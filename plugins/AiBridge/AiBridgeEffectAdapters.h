@@ -6,12 +6,15 @@
 namespace lmms
 {
 class EffectControls;
+class AutomatableModel;
 
 class AiBridgeEffectAdapters
 {
 public:
 	static QVector<AiBridgeEffectParameterMetadata> parameters(const QString& effectId,
 		EffectControls* controls);
+	static AutomatableModel* modelForParameter(const QString& effectId,
+		EffectControls* controls, const QString& parameterId);
 	static bool setParameter(const QString& effectId, EffectControls* controls,
 		const QString& parameterId, float value);
 	static bool validateBatch(const QVector<AiBridgeEffectParameterMetadata>& parameters,

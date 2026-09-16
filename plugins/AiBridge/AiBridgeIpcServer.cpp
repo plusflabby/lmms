@@ -19,6 +19,12 @@
 #include "AiBridgeEffectCatalog.h"
 #include "AiBridgeEffectTypes.h"
 #include "AiBridgeMeterActions.h"
+#include "AiBridgeArrangementContext.h"
+#include "AiBridgeArrangementActions.h"
+#include "AiBridgeTimelineActions.h"
+#include "AiBridgeAutomationContext.h"
+#include "AiBridgeAutomationReconciler.h"
+#include "AiBridgeAutomationActions.h"
 
 namespace lmms
 {
@@ -199,6 +205,237 @@ AiBridgeEffectParameterType parameterType(const QString &value)
 	if (value == "enum") return AiBridgeEffectParameterType::Enum;
 	return AiBridgeEffectParameterType::Float;
 }
+
+QJsonObject timelineClipJson(const AiBridgeTimelineClipSnapshot &value)
+{
+	return {{"clip_id", value.clipId}, {"track_id", value.trackId}, {"type", value.type},
+		{"name", value.name}, {"start_tick", value.startTick}, {"end_tick", value.endTick}};
+}
+
+QJsonObject automationPointJson(const AiBridgeAutomationPointSnapshot &value)
+{
+	return {{"point_id", value.pointId}, {"tick", value.tick}, {"value", value.value}, {"curve", value.curve}};
+}
+
+QJsonObject automationClipJson(const AiBridgeAutomationClipSnapshot &value)
+{
+	QJsonArray points;
+	for (const auto &point : value.points) points.append(automationPointJson(point));
+	return {{"automation_clip_id", value.automationClipId}, {"automation_track_id", value.automationTrackId},
+		{"automation_target_id", value.automationTargetId}, {"start_tick", value.startTick},
+		{"length_ticks", value.lengthTicks}, {"curve", value.curve}, {"points", points}};
+}
+
+QJsonObject automationTargetJson(const AiBridgeAutomationTargetSnapshot &value)
+{
+	return {{"automation_target_id", value.automationTargetId}, {"semantic_class", value.semanticClass},
+		{"owner_id", value.ownerId}, {"parameter_id", value.parameterId}, {"value_type", value.valueType},
+		{"minimum", value.minimum}, {"maximum", value.maximum}, {"default", value.defaultValue},
+		{"step", value.step}, {"unit", value.unit}, {"capability", value.capability}};
+}
+
+QJsonObject automationActionJson(const AiBridgeAutomationActionResult &value)
+{
+	QJsonArray applied; for (const auto &id : value.appliedPointIds) applied.append(id);
+	QJsonArray unapplied; for (const auto &id : value.unappliedPointIds) unapplied.append(id);
+	return {{"automation_track_id", value.automationTrackId}, {"automation_clip_id", value.automationClipId},
+		{"automation_target_id", value.automationTargetId}, {"applied_point_ids", applied}, {"unapplied_point_ids", unapplied}};
+}
+
+QJsonObject arrangementPlanJson(const AiBridgeArrangementPlan &plan)
+{
+	QJsonArray operations; for (const auto &item : plan.orderedOperations) operations.append(item);
+	QJsonArray steps;
+	for (const auto &step : plan.steps)
+	{
+		const auto kind = step.kind == AiBridgeArrangementStepKind::DeleteClip ? QStringLiteral("delete_clip")
+			: step.kind == AiBridgeArrangementStepKind::DuplicateClip ? QStringLiteral("duplicate_clip")
+			: step.kind == AiBridgeArrangementStepKind::MoveClip ? QStringLiteral("move_clip") : QStringLiteral("shift_clip");
+		steps.append(QJsonObject{{"kind", kind}, {"clip_id", step.clipId}, {"track_id", step.trackId},
+			{"source_tick", step.sourceTick}, {"destination_tick", step.destinationTick}});
+	}
+	QJsonArray automationSteps;
+	for (const auto &step : plan.automationSteps)
+	{
+		const auto kind = step.kind == AiBridgeArrangementAutomationStepKind::DeleteClip ? QStringLiteral("delete_automation_clip")
+			: step.kind == AiBridgeArrangementAutomationStepKind::DuplicateClip ? QStringLiteral("duplicate_automation_clip")
+			: step.kind == AiBridgeArrangementAutomationStepKind::MoveClip ? QStringLiteral("move_automation_clip") : QStringLiteral("shift_automation_clip");
+		QJsonArray points;
+		for (const auto &point : step.points)
+			points.append(QJsonObject{{"point_id", point.pointId}, {"tick", point.tick}, {"value", point.value}, {"curve", point.curve}});
+		automationSteps.append(QJsonObject{{"kind", kind}, {"automation_track_id", step.automationTrackId},
+			{"automation_clip_id", step.automationClipId}, {"automation_target_id", step.automationTargetId},
+			{"source_start_tick", step.sourceStartTick}, {"source_end_tick", step.sourceEndTick},
+			{"destination_start_tick", step.destinationStartTick}, {"destination_end_tick", step.destinationEndTick}, {"points", points}});
+	}
+	QJsonArray affected; for (const auto &item : plan.affectedClips) affected.append(timelineClipJson(item));
+	QJsonArray deletes; for (const auto &item : plan.deleteClipIds) deletes.append(item);
+	QJsonArray overwrites; for (const auto &item : plan.overwriteDeleteIds) overwrites.append(item);
+	QJsonArray shifted; for (const auto &item : plan.shiftedClipIds) shifted.append(item);
+	QJsonArray conflicts;
+	for (const auto &item : plan.conflicts) conflicts.append(QJsonObject{{"track_id", item.trackId}, {"clip_id", item.clipId}, {"automation_clip_id", item.automationClipId}, {"start_tick", item.range.startTick}, {"end_tick", item.range.endTick}, {"overwrite_would_resolve", item.overwriteWouldResolve}});
+	return {{"operations", operations}, {"steps", steps}, {"automation_steps", automationSteps}, {"affected_clips", affected}, {"delete_clip_ids", deletes}, {"overwrite_delete_ids", overwrites}, {"shifted_clip_ids", shifted}, {"conflicts", conflicts}, {"shift_tick", plan.shiftTick}, {"include_automation", plan.includeAutomation}, {"overwrite", plan.overwrite}, {"dry_run", plan.dryRun}, {"no_effect", plan.noEffect}, {"no_effect_reason", plan.noEffectReason}, {"resulting_start_tick", plan.resultingBounds.startTick}, {"resulting_end_tick", plan.resultingBounds.endTick}};
+}
+
+AiBridgeArrangementSnapshot arrangementSnapshot()
+{
+	AiBridgeArrangementSnapshot result;
+	result.clips = AiBridgeArrangementContext{}.snapshot(0, AiBridgeTimelineLimits::maxTimelineClipsPerPage).items;
+	AiBridgeProjectContext project;
+	result.projectGeneration = project.projectGeneration();
+	AiBridgeAutomationContext automation(aiBridgeAutomationRegistry(), aiBridgeAutomationTargets());
+	const auto page = automation.listClips(0, AiBridgeAutomationLimits::maxAutomationClipsPerPage);
+	for (const auto &clip : page.items)
+	{
+		AiBridgeArrangementAutomationSnapshot copied;
+		copied.automationTrackId = clip.automationTrackId;
+		copied.automationClipId = clip.automationClipId;
+		copied.automationTargetId = clip.automationTargetId;
+		AiBridgeAutomationTargetSnapshot target;
+		if (!clip.automationTargetId.isEmpty() && aiBridgeAutomationTargets().resolve(clip.automationTargetId, target))
+			copied.ownerId = target.ownerId;
+		copied.startTick = clip.startTick;
+		copied.endTick = clip.startTick + clip.lengthTicks;
+		for (const auto &point : clip.points)
+			copied.points.append({point.pointId, point.tick, point.value, point.curve});
+		result.automationClips.append(copied);
+	}
+	return result;
+}
+
+QString arrangementStepKind(AiBridgeArrangementStepKind kind)
+{
+	return kind == AiBridgeArrangementStepKind::DeleteClip ? QStringLiteral("delete_clip")
+		: kind == AiBridgeArrangementStepKind::DuplicateClip ? QStringLiteral("duplicate_clip")
+		: kind == AiBridgeArrangementStepKind::MoveClip ? QStringLiteral("move_clip") : QStringLiteral("shift_clip");
+}
+
+QJsonObject arrangementStepJson(const AiBridgeArrangementStep &step)
+{
+	return { {"kind", arrangementStepKind(step.kind)}, {"clip_id", step.clipId},
+		{"track_id", step.trackId}, {"source_tick", step.sourceTick}, {"destination_tick", step.destinationTick} };
+}
+
+QJsonObject automationStepJson(const AiBridgeArrangementAutomationStep &step)
+{
+	const auto kind = step.kind == AiBridgeArrangementAutomationStepKind::DeleteClip ? QStringLiteral("delete_automation_clip")
+		: step.kind == AiBridgeArrangementAutomationStepKind::DuplicateClip ? QStringLiteral("duplicate_automation_clip")
+		: step.kind == AiBridgeArrangementAutomationStepKind::MoveClip ? QStringLiteral("move_automation_clip") : QStringLiteral("shift_automation_clip");
+	QJsonArray points;
+	for (const auto &point : step.points)
+		points.append(QJsonObject{{"point_id", point.pointId}, {"tick", point.tick}, {"value", point.value}, {"curve", point.curve}});
+	return {{"kind", kind}, {"automation_track_id", step.automationTrackId}, {"automation_clip_id", step.automationClipId},
+		{"automation_target_id", step.automationTargetId}, {"source_start_tick", step.sourceStartTick},
+		{"source_end_tick", step.sourceEndTick}, {"destination_start_tick", step.destinationStartTick},
+		{"destination_end_tick", step.destinationEndTick}, {"points", points}};
+}
+
+QJsonObject arrangementSnapshotJson(const AiBridgeArrangementSnapshot &snapshot)
+{
+	QJsonArray clips;
+	for (const auto &clip : snapshot.clips) clips.append(timelineClipJson(clip));
+	QJsonArray automation;
+	for (const auto &clip : snapshot.automationClips)
+	{
+		QJsonArray points;
+		for (const auto &point : clip.points)
+			points.append(QJsonObject{{"point_id", point.pointId}, {"tick", point.tick}, {"value", point.value}, {"curve", point.curve}});
+		automation.append(QJsonObject{{"automation_track_id", clip.automationTrackId}, {"automation_clip_id", clip.automationClipId},
+			{"automation_target_id", clip.automationTargetId}, {"start_tick", clip.startTick}, {"end_tick", clip.endTick}, {"points", points}});
+	}
+	return {{"project_generation", static_cast<qint64>(snapshot.projectGeneration)}, {"clips", clips}, {"automation_clips", automation}};
+}
+
+bool automationPointsEqual(const QVector<AiBridgeArrangementAutomationSnapshot::Point> &left,
+	const QVector<AiBridgeArrangementAutomationSnapshot::Point> &right)
+{
+	if (left.size() != right.size()) return false;
+	for (int i = 0; i < left.size(); ++i)
+		if (left.at(i).pointId != right.at(i).pointId || left.at(i).tick != right.at(i).tick
+			|| left.at(i).value != right.at(i).value || left.at(i).curve != right.at(i).curve) return false;
+	return true;
+}
+
+bool automationPointContentEqual(const QVector<AiBridgeArrangementAutomationSnapshot::Point> &left,
+	const QVector<AiBridgeArrangementAutomationSnapshot::Point> &right)
+{
+	if (left.size() != right.size()) return false;
+	for (int i = 0; i < left.size(); ++i)
+		if (left.at(i).tick != right.at(i).tick || left.at(i).value != right.at(i).value || left.at(i).curve != right.at(i).curve) return false;
+	return true;
+}
+
+QJsonObject verifyArrangementPostState(const AiBridgeArrangementPlan &plan, const AiBridgeArrangementSnapshot &observed)
+{
+	QJsonArray expected; QJsonArray observedFacts; bool success = true;
+	const auto findClip = [&](const QString &id) {
+		for (const auto &clip : observed.clips) if (clip.clipId == id) return std::optional<AiBridgeTimelineClipSnapshot>(clip);
+		return std::optional<AiBridgeTimelineClipSnapshot>{};
+	};
+	const auto findAutomation = [&](const QString &id) {
+		for (const auto &clip : observed.automationClips) if (clip.automationClipId == id) return std::optional<AiBridgeArrangementAutomationSnapshot>(clip);
+		return std::optional<AiBridgeArrangementAutomationSnapshot>{};
+	};
+	for (const auto &step : plan.steps)
+	{
+		const auto actual = findClip(step.clipId);
+		const bool shouldExist = step.kind != AiBridgeArrangementStepKind::DeleteClip;
+		bool matches = false;
+		std::optional<AiBridgeTimelineClipSnapshot> matched;
+		if (step.kind == AiBridgeArrangementStepKind::DuplicateClip)
+		{
+			qint64 length = 0;
+			for (const auto &source : plan.affectedClips)
+				if (source.clipId == step.clipId) { length = source.endTick - source.startTick; break; }
+			for (const auto &clip : observed.clips)
+				if (clip.clipId != step.clipId && clip.trackId == step.trackId && clip.startTick == step.destinationTick
+					&& clip.endTick == step.destinationTick + length) { matched = clip; matches = true; break; }
+		}
+		else matches = shouldExist ? actual.has_value() && actual->trackId == step.trackId && actual->startTick == step.destinationTick : !actual.has_value();
+		success = success && matches;
+		expected.append(QJsonObject{{"kind", arrangementStepKind(step.kind)}, {"clip_id", step.clipId}, {"track_id", step.trackId},
+			{"exists", shouldExist}, {"start_tick", step.destinationTick}, {"matches", matches}});
+		const auto observedClip = step.kind == AiBridgeArrangementStepKind::DuplicateClip ? matched : actual;
+		observedFacts.append(observedClip.has_value() ? timelineClipJson(*observedClip) : QJsonObject{{"clip_id", step.clipId}, {"stale", true}});
+	}
+	for (const auto &step : plan.automationSteps)
+	{
+		const auto actual = findAutomation(step.automationClipId);
+		const bool shouldExist = step.kind != AiBridgeArrangementAutomationStepKind::DeleteClip;
+		bool matches = false;
+		std::optional<AiBridgeArrangementAutomationSnapshot> matched;
+		if (step.kind == AiBridgeArrangementAutomationStepKind::DuplicateClip)
+		{
+			for (const auto &clip : observed.automationClips)
+				if (clip.automationClipId != step.automationClipId && clip.automationTrackId == step.automationTrackId
+					&& clip.automationTargetId == step.automationTargetId && clip.startTick == step.destinationStartTick
+					&& clip.endTick == step.destinationEndTick && automationPointContentEqual(clip.points, step.points)) { matched = clip; matches = true; break; }
+		}
+		else matches = shouldExist ? actual.has_value() && actual->automationTrackId == step.automationTrackId
+			&& actual->automationTargetId == step.automationTargetId && actual->startTick == step.destinationStartTick
+			&& actual->endTick == step.destinationEndTick && automationPointsEqual(actual->points, step.points) : !actual.has_value();
+		success = success && matches;
+		expected.append(automationStepJson(step));
+		const auto observedClip = step.kind == AiBridgeArrangementAutomationStepKind::DuplicateClip ? matched : actual;
+		observedFacts.append(observedClip.has_value() ? QJsonObject{{"automation_clip_id", observedClip->automationClipId}, {"automation_track_id", observedClip->automationTrackId},
+			{"automation_target_id", observedClip->automationTargetId}, {"start_tick", observedClip->startTick}, {"end_tick", observedClip->endTick}} : QJsonObject{{"automation_clip_id", step.automationClipId}, {"stale", true}});
+	}
+	return {{"success", success}, {"expected", expected}, {"observed", observedFacts},
+		{"affected_start_tick", plan.resultingBounds.startTick}, {"affected_end_tick", plan.resultingBounds.endTick},
+		{"project_generation", static_cast<qint64>(observed.projectGeneration)}};
+}
+
+bool isPhase3GAction(const QString &action)
+{
+	return action.startsWith(QStringLiteral("get_arrangement")) || action.startsWith(QStringLiteral("get_timeline_region"))
+		|| action.startsWith(QStringLiteral("set_timeline_clip")) || action.startsWith(QStringLiteral("duplicate_timeline_clip"))
+		|| action.startsWith(QStringLiteral("delete_timeline_clip")) || action.startsWith(QStringLiteral("batch_edit_timeline_clips"))
+		|| action.startsWith(QStringLiteral("list_automation")) || action.startsWith(QStringLiteral("get_automation_"))
+		|| action.startsWith(QStringLiteral("create_automation_")) || action.startsWith(QStringLiteral("delete_automation_"))
+		|| action.startsWith(QStringLiteral("set_automation_")) || action == QStringLiteral("edit_automation_points")
+		|| action.endsWith(QStringLiteral("_arrangement_region")) || action == QStringLiteral("insert_arrangement_space")
+		|| action == QStringLiteral("close_arrangement_gap");
+}
 }
 
 AiBridgeIpcServer::AiBridgeIpcServer(QObject *parent, QString endpoint) : QObject(parent), m_server(this), m_endpoint(std::move(endpoint))
@@ -302,6 +539,197 @@ void AiBridgeIpcServer::executeRequest(const AiBridgeProtocolRequest &request)
 			windows.append(QJsonObject{{QStringLiteral("id"), item.id}, {QStringLiteral("kind"), item.kind}, {QStringLiteral("title"), item.title}, {QStringLiteral("x"), item.geometry.x}, {QStringLiteral("y"), item.geometry.y}, {QStringLiteral("width"), item.geometry.width}, {QStringLiteral("height"), item.geometry.height}, {QStringLiteral("coordinate_space"), item.coordinateSpace}, {QStringLiteral("visible"), item.visible}, {QStringLiteral("active"), item.active}, {QStringLiteral("detached"), item.detached}, {QStringLiteral("maximized"), item.maximized}, {QStringLiteral("minimized"), item.minimized}, {QStringLiteral("overlaps"), QJsonArray::fromStringList(item.overlaps)}});
 		}
 		response = {2, request.requestId, snapshot.success, snapshot.code, snapshot.message, QJsonObject{{QStringLiteral("success"), snapshot.success}, {QStringLiteral("code"), snapshot.code}, {QStringLiteral("geometry"), QJsonObject{{QStringLiteral("width"), snapshot.geometry.width}, {QStringLiteral("height"), snapshot.geometry.height}}}, {QStringLiteral("windows"), windows}}};
+	}
+	else if (isPhase3GAction(request.action))
+	{
+		const auto &p = request.parameters;
+		const int offset = p.value(QStringLiteral("offset")).toInt();
+		const int limit = p.contains(QStringLiteral("limit")) ? p.value(QStringLiteral("limit")).toInt() : 64;
+		if (request.action == QStringLiteral("get_arrangement") || request.action == QStringLiteral("get_timeline_region"))
+		{
+			AiBridgeTimelineRange range{p.value(QStringLiteral("start_tick")).toVariant().toLongLong(), p.value(QStringLiteral("end_tick")).toVariant().toLongLong()};
+			AiBridgeTrackScope scope;
+			scope.mode = p.value(QStringLiteral("track_scope")).toString();
+			for (const auto &id : p.value(QStringLiteral("track_ids")).toArray()) scope.trackIds.append(id.toString());
+			if (scope.mode.isEmpty()) scope.mode = scope.trackIds.isEmpty() ? QStringLiteral("all_tracks") : QStringLiteral("track_ids");
+			const auto page = AiBridgeArrangementContext{}.region(range, scope, offset, limit);
+			QJsonArray clips;
+			for (const auto &item : page.items) clips.append(timelineClipJson(item));
+			response = {2, request.requestId, true, QStringLiteral("ok"), QStringLiteral("arrangement read"),
+				QJsonObject{{"clips", clips}, {"total", page.page.total}, {"offset", page.page.offset}, {"limit", page.page.limit}, {"has_more", page.page.hasMore}, {"markers_supported", false}}};
+		}
+		else if (request.action == QStringLiteral("set_timeline_clip") || request.action == QStringLiteral("duplicate_timeline_clip") || request.action == QStringLiteral("delete_timeline_clip"))
+		{
+			AiBridgeTimelineActionResult result;
+			if (request.action == QStringLiteral("set_timeline_clip"))
+			{
+				AiBridgeTimelineEdit edit;
+				edit.clipId = p.value(QStringLiteral("clip_id")).toString();
+				if (p.contains(QStringLiteral("start_tick"))) edit.startTick = p.value(QStringLiteral("start_tick")).toVariant().toLongLong();
+				if (p.contains(QStringLiteral("length_ticks"))) edit.lengthTicks = p.value(QStringLiteral("length_ticks")).toVariant().toLongLong();
+				if (p.contains(QStringLiteral("auto_resize"))) edit.autoResize = p.value(QStringLiteral("auto_resize")).toBool();
+				result = AiBridgeTimelineActions::setClip(edit);
+			}
+			else if (request.action == QStringLiteral("duplicate_timeline_clip")) result = AiBridgeTimelineActions::duplicateClip(p.value(QStringLiteral("clip_id")).toString(), p.value(QStringLiteral("destination_tick")).toVariant().toLongLong());
+			else result = AiBridgeTimelineActions::deleteClip(p.value(QStringLiteral("clip_id")).toString());
+			QJsonArray applied; for (const auto &id : result.appliedClipIds) applied.append(id);
+			QJsonArray unapplied; for (const auto &id : result.unappliedClipIds) unapplied.append(id);
+			response = {2, request.requestId, result.success, result.code, result.message,
+				QJsonObject{{"clip_id", result.clipId}, {"track_id", result.trackId}, {"applied_clip_ids", applied}, {"unapplied_clip_ids", unapplied}}};
+		}
+		else if (request.action == QStringLiteral("batch_edit_timeline_clips"))
+		{
+			QVector<AiBridgeTimelineEdit> edits;
+			for (const auto &value : p.value(QStringLiteral("edits")).toArray())
+			{
+				const auto item = value.toObject(); AiBridgeTimelineEdit edit; edit.clipId = item.value(QStringLiteral("clip_id")).toString();
+				if (item.contains(QStringLiteral("start_tick"))) edit.startTick = item.value(QStringLiteral("start_tick")).toVariant().toLongLong();
+				if (item.contains(QStringLiteral("length_ticks"))) edit.lengthTicks = item.value(QStringLiteral("length_ticks")).toVariant().toLongLong();
+				if (item.contains(QStringLiteral("auto_resize"))) edit.autoResize = item.value(QStringLiteral("auto_resize")).toBool();
+				edits.append(edit);
+			}
+			const auto result = AiBridgeTimelineActions::batchEdit(edits); QJsonArray applied; for (const auto &id : result.appliedClipIds) applied.append(id);
+			QJsonArray unapplied; for (const auto &id : result.unappliedClipIds) unapplied.append(id);
+			response = {2, request.requestId, result.success, result.code, result.message, QJsonObject{{"applied_clip_ids", applied}, {"unapplied_clip_ids", unapplied}}};
+		}
+		else if (request.action == QStringLiteral("list_automation_targets") || request.action == QStringLiteral("get_automation_capabilities"))
+		{
+			AiBridgeProjectContext project;
+			AiBridgeAutomationReconciler(project, aiBridgeAutomationRegistry(),
+				aiBridgeAutomationTargets()).reconcile();
+			const auto items = request.action == QStringLiteral("list_automation_targets") ? AiBridgeAutomationContext{}.listTargets(offset, limit) : AiBridgeAutomationContext{}.capabilities(offset, limit);
+			QJsonArray targets; for (const auto &item : items) targets.append(automationTargetJson(item));
+			response = {2, request.requestId, true, QStringLiteral("ok"), QStringLiteral("automation targets read"), QJsonObject{{"targets", targets}, {"markers_supported", false}}};
+		}
+		else if (request.action == QStringLiteral("list_automation"))
+		{
+			const auto tracks = AiBridgeAutomationContext{}.listTracks(offset, limit); QJsonArray items;
+			for (const auto &track : tracks.items) { QJsonArray clips; for (const auto &id : track.automationClipIds) clips.append(id); items.append(QJsonObject{{"automation_track_id", track.automationTrackId}, {"name", track.name}, {"index", track.index}, {"automation_clip_ids", clips}}); }
+			response = {2, request.requestId, true, QStringLiteral("ok"), QStringLiteral("automation read"), QJsonObject{{"tracks", items}, {"total", tracks.page.total}, {"offset", tracks.page.offset}, {"limit", tracks.page.limit}, {"has_more", tracks.page.hasMore}}};
+		}
+		else if (request.action == QStringLiteral("get_automation_clip"))
+		{
+			AiBridgeAutomationClipSnapshot clip; AiBridgeAutomationPointPage points;
+			const bool ok = AiBridgeAutomationContext{}.getClip(p.value(QStringLiteral("automation_clip_id")).toString(), offset, limit, clip, points);
+			QJsonObject data = automationClipJson(clip); data.insert("total", points.page.total); data.insert("offset", points.page.offset); data.insert("limit", points.page.limit); data.insert("has_more", points.page.hasMore);
+			response = {2, request.requestId, ok, ok ? QStringLiteral("ok") : QStringLiteral("stale_automation_clip"), ok ? QStringLiteral("automation clip read") : QStringLiteral("automation clip is not live"), data};
+		}
+		else if (request.action == QStringLiteral("create_automation_track") || request.action == QStringLiteral("delete_automation_track") || request.action == QStringLiteral("create_automation_clip") || request.action == QStringLiteral("delete_automation_clip") || request.action == QStringLiteral("set_automation_clip_properties") || request.action == QStringLiteral("set_automation_clip_target") || request.action == QStringLiteral("edit_automation_points"))
+		{
+			AiBridgeAutomationActionResult result;
+			if (request.action == QStringLiteral("create_automation_track")) result = AiBridgeAutomationActions::createTrack(p.value(QStringLiteral("name")).toString());
+			else if (request.action == QStringLiteral("delete_automation_track")) result = AiBridgeAutomationActions::deleteTrack(p.value(QStringLiteral("automation_track_id")).toString());
+			else if (request.action == QStringLiteral("create_automation_clip")) result = AiBridgeAutomationActions::createClip(p.value(QStringLiteral("automation_track_id")).toString(), p.value(QStringLiteral("start_tick")).toVariant().toLongLong(), p.value(QStringLiteral("length_ticks")).toVariant().toLongLong(), p.value(QStringLiteral("automation_target_id")).toString());
+			else if (request.action == QStringLiteral("delete_automation_clip")) result = AiBridgeAutomationActions::deleteClip(p.value(QStringLiteral("automation_clip_id")).toString());
+			else if (request.action == QStringLiteral("set_automation_clip_properties")) result = AiBridgeAutomationActions::setClipProperties(p.value(QStringLiteral("automation_clip_id")).toString(), p.contains(QStringLiteral("start_tick")) ? std::optional<qint64>(p.value(QStringLiteral("start_tick")).toVariant().toLongLong()) : std::nullopt, p.contains(QStringLiteral("length_ticks")) ? std::optional<qint64>(p.value(QStringLiteral("length_ticks")).toVariant().toLongLong()) : std::nullopt);
+			else if (request.action == QStringLiteral("set_automation_clip_target")) result = AiBridgeAutomationActions::setClipTarget(p.value(QStringLiteral("automation_clip_id")).toString(), p.value(QStringLiteral("automation_target_id")).toString());
+			else
+			{
+				QVector<AiBridgeAutomationPointMutation> mutations;
+				for (const auto &value : p.value(QStringLiteral("mutations")).toArray())
+				{
+					const auto item = value.toObject(); AiBridgeAutomationPointMutation mutation;
+					const auto operation = item.value(QStringLiteral("operation")).toString();
+					mutation.kind = operation == QStringLiteral("update") ? AiBridgeAutomationPointMutation::Kind::Update : operation == QStringLiteral("delete") ? AiBridgeAutomationPointMutation::Kind::Delete : AiBridgeAutomationPointMutation::Kind::Add;
+					mutation.pointId = item.value(QStringLiteral("point_id")).toString();
+					if (item.contains(QStringLiteral("tick"))) mutation.tick = item.value(QStringLiteral("tick")).toVariant().toLongLong();
+					if (item.contains(QStringLiteral("value"))) mutation.value = static_cast<float>(item.value(QStringLiteral("value")).toDouble());
+					if (item.contains(QStringLiteral("curve"))) mutation.curve = item.value(QStringLiteral("curve")).toString();
+					mutations.append(mutation);
+				}
+				result = AiBridgeAutomationActions::editPoints(p.value(QStringLiteral("automation_clip_id")).toString(), mutations);
+			}
+			response = {2, request.requestId, result.success, result.code, result.message, automationActionJson(result)};
+		}
+		else
+		{
+			AiBridgeArrangementRequest arrangement;
+			arrangement.operation = request.action == QStringLiteral("duplicate_arrangement_region") ? QStringLiteral("duplicate") : request.action == QStringLiteral("move_arrangement_region") ? QStringLiteral("move") : request.action == QStringLiteral("delete_arrangement_region") ? QStringLiteral("delete") : request.action == QStringLiteral("insert_arrangement_space") ? QStringLiteral("insert_space") : request.action == QStringLiteral("close_arrangement_gap") ? QStringLiteral("close_gap") : QStringLiteral("replace");
+			arrangement.source.startTick = p.value(QStringLiteral("start_tick")).toVariant().toLongLong(); arrangement.source.endTick = p.value(QStringLiteral("end_tick")).toVariant().toLongLong();
+			arrangement.destinationTick = p.value(QStringLiteral("destination_tick")).toVariant().toLongLong(); arrangement.deltaTick = p.value(QStringLiteral("length_ticks")).toVariant().toLongLong();
+			arrangement.scope.mode = p.value(QStringLiteral("track_scope")).toString();
+			for (const auto &id : p.value(QStringLiteral("track_ids")).toArray()) arrangement.scope.trackIds.append(id.toString());
+			if (arrangement.scope.mode.isEmpty()) arrangement.scope.mode = arrangement.scope.trackIds.isEmpty() ? QStringLiteral("all_tracks") : QStringLiteral("track_ids");
+			arrangement.includeAutomation = p.value(QStringLiteral("include_automation")).toBool(true); arrangement.overwrite = p.value(QStringLiteral("overwrite")).toBool(false); arrangement.ripple = p.value(QStringLiteral("ripple")).toBool(false); arrangement.dryRun = p.value(QStringLiteral("dry_run")).toBool(false);
+			const auto snapshot = arrangementSnapshot();
+			const auto plan = AiBridgeArrangementPlanner::plan(arrangement, snapshot);
+			const auto valid = AiBridgeArrangementPlanner::validate(arrangement);
+			if (!valid.success() || arrangement.dryRun || !plan.conflicts.isEmpty() || plan.noEffect)
+			{
+				const bool noEffect = valid.success() && !arrangement.dryRun && plan.conflicts.isEmpty() && plan.noEffect;
+				const bool ok = valid.success() && (arrangement.dryRun || noEffect || plan.conflicts.isEmpty());
+				response = {2, request.requestId, ok, noEffect ? QStringLiteral("no_effect") : ok ? QStringLiteral("ok") : (plan.conflicts.isEmpty() ? valid.code : QStringLiteral("destination_conflict")), noEffect ? plan.noEffectReason : ok ? (arrangement.dryRun ? QStringLiteral("arrangement plan generated") : QStringLiteral("arrangement execution preflight complete")) : (plan.conflicts.isEmpty() ? valid.message : QStringLiteral("destination conflicts require overwrite")), arrangementPlanJson(plan)};
+			}
+			else
+			{
+				AiBridgeProjectContext context;
+				const auto generation = context.projectGeneration();
+				bool preflight = true;
+				for (const auto &step : plan.steps)
+					if (step.kind != AiBridgeArrangementStepKind::DuplicateClip && !context.resolveClip(step.clipId)) preflight = false;
+				if (!preflight)
+				{
+					response = {2, request.requestId, false, QStringLiteral("stale_clip"), QStringLiteral("arrangement plan contains a stale clip"), arrangementPlanJson(plan)};
+				}
+				else
+				{
+					const auto executed = AiBridgeArrangementActions::executeTyped(plan, generation, context.projectGeneration(),
+						[&](const AiBridgeArrangementStep &step) {
+							if (step.kind == AiBridgeArrangementStepKind::DeleteClip) return AiBridgeTimelineActions::deleteClip(step.clipId).success;
+							if (step.kind == AiBridgeArrangementStepKind::DuplicateClip) return AiBridgeTimelineActions::duplicateClip(step.clipId, step.destinationTick).success;
+							AiBridgeTimelineEdit edit; edit.clipId = step.clipId; edit.startTick = step.destinationTick;
+							return AiBridgeTimelineActions::setClip(edit).success;
+						}, {});
+					int automationFailureIndex = -1;
+					AiBridgeAutomationActionResult automationFailure;
+					if (executed.success && arrangement.includeAutomation)
+					{
+						for (int i = 0; i < plan.automationSteps.size(); ++i)
+						{
+							const auto &step = plan.automationSteps.at(i);
+							if (step.kind == AiBridgeArrangementAutomationStepKind::DeleteClip)
+								automationFailure = AiBridgeAutomationActions::deleteClip(step.automationClipId);
+							else if (step.kind == AiBridgeArrangementAutomationStepKind::DuplicateClip)
+								automationFailure = AiBridgeAutomationActions::duplicateClip(step.automationClipId, step.automationTrackId, step.destinationStartTick);
+							else
+								automationFailure = AiBridgeAutomationActions::setClipProperties(step.automationClipId, step.destinationStartTick, std::nullopt);
+							if (!automationFailure.success) { automationFailureIndex = i; break; }
+						}
+					}
+					QJsonObject data = arrangementPlanJson(plan);
+					QJsonArray applied; for (const auto &item : executed.appliedSteps) applied.append(item);
+					QJsonArray unapplied; for (const auto &item : executed.unappliedSteps) unapplied.append(item);
+					data.insert("applied_steps", applied); data.insert("unapplied_steps", unapplied);
+					QJsonArray appliedTyped; for (const auto &item : executed.appliedTypedSteps) appliedTyped.append(arrangementStepJson(item));
+					QJsonArray unappliedTyped; for (const auto &item : executed.unappliedTypedSteps) unappliedTyped.append(arrangementStepJson(item));
+					data.insert("preflight_succeeded", executed.preflightSucceeded);
+					data.insert("execution_complete", executed.executionComplete);
+					data.insert("partial_mutation", executed.partialMutation);
+					data.insert("failed_step_index", executed.failedStepIndex);
+					if (executed.hasFailedTypedStep) data.insert("failed_step", arrangementStepJson(executed.failedTypedStep));
+					data.insert("applied_typed_steps", appliedTyped); data.insert("unapplied_typed_steps", unappliedTyped);
+					QJsonArray affectedTracks; for (const auto &trackId : executed.affectedTrackIds) affectedTracks.append(trackId);
+					data.insert("affected_track_ids", affectedTracks);
+					data.insert("affected_start_tick", executed.affectedStartTick); data.insert("affected_end_tick", executed.affectedEndTick);
+					data.insert("project_generation", static_cast<qint64>(executed.projectGeneration));
+					data.insert("native_failure_code", executed.nativeFailureCode); data.insert("native_failure_message", executed.nativeFailureMessage);
+					QJsonArray appliedAutomation;
+					QJsonArray unappliedAutomation;
+					for (int i = 0; i < plan.automationSteps.size(); ++i)
+						(i < (automationFailureIndex < 0 ? plan.automationSteps.size() : automationFailureIndex) ? appliedAutomation : unappliedAutomation).append(i);
+					data.insert("applied_automation_steps", appliedAutomation); data.insert("unapplied_automation_steps", unappliedAutomation);
+					const bool automationOk = automationFailureIndex < 0;
+					const auto observed = arrangementSnapshot();
+					const auto verification = verifyArrangementPostState(plan, observed);
+					const bool postVerificationOk = verification.value("success").toBool();
+					data.insert("post_verification", verification);
+					data.insert("observed_post_state", arrangementSnapshotJson(observed));
+					response = {2, request.requestId, executed.success && automationOk && postVerificationOk,
+						!postVerificationOk ? QStringLiteral("post_verification_failed") : automationOk ? executed.code : QStringLiteral("partial_failure"),
+						!postVerificationOk ? QStringLiteral("native result did not match post-execution verification") : automationOk ? executed.message : automationFailure.message, data};
+				}
+			}
+		}
 	}
 	else
 	{
