@@ -25,6 +25,12 @@
 #include "AiBridgeAutomationContext.h"
 #include "AiBridgeAutomationReconciler.h"
 #include "AiBridgeAutomationActions.h"
+#include "AiBridgeMidiContext.h"
+#include "AiBridgeMidiAnalysis.h"
+#include "AiBridgeMidiActions.h"
+#include "AiBridgeMidiPlanner.h"
+#include "MidiClip.h"
+#include "Note.h"
 
 namespace lmms
 {
@@ -186,6 +192,227 @@ QJsonObject meterPageJson(const AiBridgeMeterActionResult &value)
 {
 	QJsonArray items; for (const auto &item : value.page.items) items.append(QJsonObject{{"mixer_channel_id", item.mixerChannelId}, {"left_peak", item.leftPeak}, {"right_peak", item.rightPeak}});
 	QJsonObject result = mixerPageJson(value.page.page); result.insert("meters", items); return result;
+}
+
+QJsonObject midiCapabilitiesJson()
+{
+	const auto capabilities = AiBridgeMidiContext::getCapabilities();
+	QJsonArray distributions;
+	for (const auto &distribution : capabilities.humanizeDistributions) distributions.append(distribution);
+	return {{"key_min", capabilities.keyMinimum}, {"key_max", capabilities.keyMaximum},
+		{"volume_min", capabilities.volumeMinimum}, {"volume_max", capabilities.volumeMaximum},
+		{"panning_min", capabilities.panningMinimum}, {"panning_max", capabilities.panningMaximum},
+		{"minimum_note_length_ticks", capabilities.minimumLengthTicks},
+		{"max_clips_per_mutation", capabilities.maxClipsPerMutation},
+		{"max_selected_notes_per_mutation", capabilities.maxSelectedNotesPerMutation},
+		{"max_notes_per_page", capabilities.pageLimit},
+		{"max_preview_entries", capabilities.maxPreviewEntries},
+		{"max_analysis_notes", capabilities.maxAnalysisNotes},
+		{"humanize_distributions", distributions}};
+}
+
+bool midiSnapshot(const QString &clipId, AiBridgeMidiClipSnapshot &snapshot, QString &code)
+{
+	AiBridgeProjectContext context;
+	auto *clip = dynamic_cast<MidiClip *>(context.resolveClip(clipId));
+	if (!clip) { code = QStringLiteral("stale_clip"); return false; }
+	snapshot.clipId = clipId; snapshot.projectGeneration = context.projectGeneration();
+	for (const auto *note : clip->notes()) snapshot.notes.append({note->pos().getTicks(), note->length().getTicks(), note->key(), note->getVolume(), note->getPanning()});
+	snapshot.notes = canonicalizeMidiNotes(snapshot.notes);
+	return true;
+}
+
+QJsonObject midiNoteJson(const AiBridgeMidiNoteSnapshot &note, const QString &noteRef)
+{
+	return {{"position_ticks", note.positionTicks}, {"length_ticks", note.lengthTicks}, {"key", note.key}, {"volume", note.volume}, {"panning", note.panning}, {"note_ref", noteRef}};
+}
+
+QJsonObject midiAnalysisJson(const AiBridgeMidiAnalysisResult &analysis)
+{
+	QJsonArray histogram; for (const int value : analysis.pitchClassHistogram) histogram.append(value);
+	QJsonObject data{{"note_count", analysis.noteCount}, {"distinct_onset_count", analysis.distinctOnsetCount}, {"pitch_minimum", analysis.pitchMinimum}, {"pitch_maximum", analysis.pitchMaximum}, {"pitch_class_histogram", histogram}, {"volume_minimum", analysis.volumeMinimum}, {"volume_maximum", analysis.volumeMaximum}, {"volume_mean", analysis.volumeMean}, {"length_minimum_ticks", analysis.lengthMinimumTicks}, {"length_maximum_ticks", analysis.lengthMaximumTicks}, {"length_mean_ticks", analysis.lengthMeanTicks}, {"exact_duplicate_count", analysis.exactDuplicateCount}, {"same_pitch_overlap_count", analysis.samePitchOverlapCount}, {"short_note_count", analysis.shortNoteCount}};
+	if (analysis.gridDeviation) data.insert("grid_deviation", QJsonObject{{"exact_on_grid_count", analysis.gridDeviation->exactOnGridCount}, {"mean_absolute_deviation_ticks", analysis.gridDeviation->meanAbsoluteDeviationTicks}, {"maximum_absolute_deviation_ticks", analysis.gridDeviation->maximumAbsoluteDeviationTicks}});
+	return data;
+}
+
+AiBridgeMidiSelection midiSelectionFromJson(const QJsonObject &object)
+{
+	AiBridgeMidiSelection selection;
+	selection.mode = object.value(QStringLiteral("mode")).toString() == QStringLiteral("predicate")
+		? AiBridgeMidiSelectionMode::Predicate : AiBridgeMidiSelectionMode::NoteRefs;
+	for (const auto &ref : object.value(QStringLiteral("note_refs")).toArray()) selection.noteRefs.append(ref.toString());
+	for (const auto &key : object.value(QStringLiteral("keys")).toArray()) selection.keys.append(key.toInt());
+	if (object.contains(QStringLiteral("start_tick"))) selection.startTick = object.value(QStringLiteral("start_tick")).toVariant().toLongLong();
+	if (object.contains(QStringLiteral("end_tick"))) selection.endTick = object.value(QStringLiteral("end_tick")).toVariant().toLongLong();
+	if (object.contains(QStringLiteral("key_min"))) selection.keyMin = object.value(QStringLiteral("key_min")).toInt();
+	if (object.contains(QStringLiteral("key_max"))) selection.keyMax = object.value(QStringLiteral("key_max")).toInt();
+	if (object.contains(QStringLiteral("volume_min"))) selection.volumeMin = object.value(QStringLiteral("volume_min")).toInt();
+	if (object.contains(QStringLiteral("volume_max"))) selection.volumeMax = object.value(QStringLiteral("volume_max")).toInt();
+	if (object.contains(QStringLiteral("length_min"))) selection.lengthMin = object.value(QStringLiteral("length_min")).toVariant().toLongLong();
+	if (object.contains(QStringLiteral("length_max"))) selection.lengthMax = object.value(QStringLiteral("length_max")).toVariant().toLongLong();
+	return selection;
+}
+
+AiBridgeMidiBoundaryPolicy midiBoundaryPolicy(const QJsonObject &parameters)
+{
+	return parameters.value(QStringLiteral("boundary_policy")).toString() == QStringLiteral("reject")
+		? AiBridgeMidiBoundaryPolicy::Reject : AiBridgeMidiBoundaryPolicy::Clamp;
+}
+
+AiBridgeMidiValueMode midiValueMode(const QString &mode)
+{
+	if (mode == QStringLiteral("offset")) return AiBridgeMidiValueMode::Offset;
+	if (mode == QStringLiteral("scale")) return AiBridgeMidiValueMode::Scale;
+	if (mode == QStringLiteral("ramp")) return AiBridgeMidiValueMode::Ramp;
+	if (mode == QStringLiteral("gate_to_next")) return AiBridgeMidiValueMode::GateToNext;
+	return AiBridgeMidiValueMode::Set;
+}
+
+struct AiBridgeMidiPlannedMutation
+{
+	bool success = false;
+	QString code;
+	QVector<AiBridgeMidiNoteSnapshot> notes;
+	int changedCount = 0;
+	int clampCount = 0;
+	int removedCount = 0;
+};
+
+AiBridgeMidiPlannedMutation planMidiMutation(const QString &action,
+	const AiBridgeMidiClipSnapshot &snapshot, const QVector<int> &indices, const QJsonObject &parameters)
+{
+	if (action == QStringLiteral("quantize_notes"))
+	{
+		AiBridgeMidiQuantizeOptions options(parameters.value(QStringLiteral("grid_ticks")).toVariant().toLongLong());
+		options.strength = parameters.value(QStringLiteral("strength")).toDouble(1.0);
+		const auto direction = parameters.value(QStringLiteral("direction")).toString();
+		options.direction = direction == QStringLiteral("earlier") ? AiBridgeMidiQuantizeDirection::Earlier : direction == QStringLiteral("later") ? AiBridgeMidiQuantizeDirection::Later : AiBridgeMidiQuantizeDirection::Nearest;
+		if (parameters.contains(QStringLiteral("max_shift_ticks"))) options.maxShiftTicks = parameters.value(QStringLiteral("max_shift_ticks")).toVariant().toLongLong();
+		options.boundaryPolicy = midiBoundaryPolicy(parameters);
+		const auto plan = planQuantize(snapshot, indices, options);
+		return {plan.success, plan.code, plan.notes, plan.changedCount, 0, 0};
+	}
+	if (action == QStringLiteral("humanize_notes"))
+	{
+		AiBridgeMidiHumanizeOptions options;
+		options.seed = parameters.value(QStringLiteral("seed")).toVariant().toUInt();
+		options.timingRangeTicks = parameters.value(QStringLiteral("timing_range_ticks")).toVariant().toLongLong();
+		options.volumeRange = parameters.value(QStringLiteral("volume_range")).toInt();
+		options.lengthRangeTicks = parameters.value(QStringLiteral("length_range_ticks")).toVariant().toLongLong();
+		options.distribution = parameters.value(QStringLiteral("distribution")).toString() == QStringLiteral("uniform") ? AiBridgeMidiHumanizeDistribution::Uniform : AiBridgeMidiHumanizeDistribution::Triangular;
+		options.boundaryPolicy = midiBoundaryPolicy(parameters);
+		const auto plan = planHumanize(snapshot, indices, options);
+		return {plan.success, plan.code, plan.notes, plan.changedCount, plan.clampCount, 0};
+	}
+	if (action == QStringLiteral("apply_groove"))
+	{
+		AiBridgeMidiGrooveOptions options;
+		options.mode = parameters.value(QStringLiteral("mode")).toString() == QStringLiteral("template") ? AiBridgeMidiGrooveMode::Template : AiBridgeMidiGrooveMode::Swing;
+		options.strength = parameters.value(QStringLiteral("strength")).toDouble(1.0);
+		options.subdivisionTicks = parameters.value(QStringLiteral("subdivision_ticks")).toVariant().toLongLong();
+		options.swingPercent = parameters.value(QStringLiteral("swing_percent")).toDouble(50.0);
+		options.stepTicks = parameters.value(QStringLiteral("step_ticks")).toVariant().toLongLong();
+		for (const auto &value : parameters.value(QStringLiteral("timing_offsets")).toArray()) options.timingOffsets.append(value.toVariant().toLongLong());
+		for (const auto &value : parameters.value(QStringLiteral("volume_offsets")).toArray()) options.volumeOffsets.append(value.toInt());
+		options.boundaryPolicy = midiBoundaryPolicy(parameters);
+		const auto plan = planGroove(snapshot, indices, options);
+		return {plan.success, plan.code, plan.notes, plan.changedCount, plan.clampCount, 0};
+	}
+	if (action == QStringLiteral("shape_note_velocities"))
+	{
+		AiBridgeMidiVelocityOptions options;
+		options.mode = midiValueMode(parameters.value(QStringLiteral("mode")).toString());
+		options.value = parameters.value(QStringLiteral("value")).toDouble();
+		options.startValue = parameters.value(QStringLiteral("start_value")).toInt();
+		options.endValue = parameters.value(QStringLiteral("end_value")).toInt();
+		options.boundaryPolicy = midiBoundaryPolicy(parameters);
+		const auto plan = planVelocityShape(snapshot, indices, options);
+		return {plan.success, plan.code, plan.notes, plan.changedCount, plan.clampCount, 0};
+	}
+	if (action == QStringLiteral("shape_note_lengths"))
+	{
+		AiBridgeMidiLengthOptions options;
+		options.mode = midiValueMode(parameters.value(QStringLiteral("mode")).toString());
+		options.value = parameters.value(QStringLiteral("value")).toDouble();
+		options.gatePercent = parameters.value(QStringLiteral("gate_percent")).toDouble(100.0);
+		if (parameters.contains(QStringLiteral("fallback_length_ticks"))) options.fallbackLengthTicks = parameters.value(QStringLiteral("fallback_length_ticks")).toVariant().toLongLong();
+		options.boundaryPolicy = midiBoundaryPolicy(parameters);
+		const auto plan = planLengthShape(snapshot, indices, options);
+		return {plan.success, plan.code, plan.notes, plan.changedCount, plan.clampCount, 0};
+	}
+	if (action == QStringLiteral("cleanup_notes"))
+	{
+		AiBridgeMidiCleanupOptions options;
+		options.removeExactDuplicates = parameters.value(QStringLiteral("remove_exact_duplicates")).toBool(false);
+		const auto overlap = parameters.value(QStringLiteral("same_pitch_overlap_mode")).toString();
+		options.samePitchOverlapMode = overlap == QStringLiteral("trim_earlier") ? AiBridgeMidiOverlapMode::TrimEarlier : overlap == QStringLiteral("reject") ? AiBridgeMidiOverlapMode::Reject : AiBridgeMidiOverlapMode::None;
+		if (parameters.contains(QStringLiteral("minimum_length_ticks"))) options.minimumLengthTicks = parameters.value(QStringLiteral("minimum_length_ticks")).toVariant().toLongLong();
+		if (parameters.contains(QStringLiteral("short_note_action"))) options.shortNoteAction = parameters.value(QStringLiteral("short_note_action")).toString() == QStringLiteral("extend") ? AiBridgeMidiShortNoteAction::Extend : AiBridgeMidiShortNoteAction::Remove;
+		const auto plan = planCleanup(snapshot, indices, options);
+		return {plan.success, plan.code, plan.notes, plan.changedCount, 0, plan.removedCount};
+	}
+	AiBridgeMidiScaleConstraintOptions options;
+	for (const auto &value : parameters.value(QStringLiteral("allowed_pitch_classes")).toArray()) options.allowedPitchClasses.append(value.toInt());
+	const auto direction = parameters.value(QStringLiteral("direction")).toString();
+	options.direction = direction == QStringLiteral("up") ? AiBridgeMidiScaleDirection::Up : direction == QStringLiteral("down") ? AiBridgeMidiScaleDirection::Down : AiBridgeMidiScaleDirection::Nearest;
+	options.nearestTieBreak = parameters.value(QStringLiteral("nearest_tie_break")).toString() == QStringLiteral("up") ? AiBridgeMidiNearestTieBreak::Up : AiBridgeMidiNearestTieBreak::Down;
+	const auto plan = planScaleConstraint(snapshot, indices, options);
+	return {plan.success, plan.code, plan.notes, plan.changedCount, plan.clampCount, 0};
+}
+
+QJsonObject midiMutationClipJson(const AiBridgeMidiClipSnapshot &before,
+	const AiBridgeMidiPlannedMutation &plan, int selectedCount)
+{
+	AiBridgeMidiClipSnapshot after = before;
+	after.notes = plan.notes;
+	QJsonArray preview;
+	const int rows = qMin(plan.changedCount, AiBridgeMidiLimits::maxPreviewEntries);
+	for (int index = 0; index < rows && index < plan.notes.size(); ++index)
+		preview.append(QJsonObject{{"after", midiNoteJson(plan.notes[index], QString())}});
+	return {{"clip_id", before.clipId}, {"before_midi_state_hash", computeMidiStateHash(before)},
+		{"after_midi_state_hash", computeMidiStateHash(after)}, {"selected_count", selectedCount},
+		{"changed_count", plan.changedCount}, {"unchanged_count", qMax(0, selectedCount - plan.changedCount)},
+		{"removed_count", plan.removedCount}, {"created_count", 0}, {"clamp_count", plan.clampCount},
+		{"preview", preview}, {"preview_has_more", plan.changedCount > rows}};
+}
+
+AiBridgeProtocolResponse executeMidiMutation(const AiBridgeProtocolRequest &request)
+{
+	QVector<AiBridgeMidiNativePlan> nativePlans;
+	QJsonArray clips;
+	bool hasChanges = false;
+	for (const auto &value : request.parameters.value(QStringLiteral("clips")).toArray())
+	{
+		const auto clipRequest = value.toObject();
+		AiBridgeMidiClipSnapshot snapshot;
+		QString code;
+		if (!midiSnapshot(clipRequest.value(QStringLiteral("clip_id")).toString(), snapshot, code))
+			return {2, request.requestId, false, code, QStringLiteral("MIDI clip is not live")};
+		const auto resolved = AiBridgeMidiContext::resolveSelection(snapshot,
+			clipRequest.value(QStringLiteral("expected_midi_state_hash")).toString(), midiSelectionFromJson(clipRequest.value(QStringLiteral("selection")).toObject()));
+		if (!resolved.success) return {2, request.requestId, false, resolved.code, QStringLiteral("MIDI selection is no longer valid")};
+		const auto plan = planMidiMutation(request.action, snapshot, resolved.canonicalIndices, request.parameters);
+		if (!plan.success) return {2, request.requestId, false, plan.code, QStringLiteral("MIDI plan could not be created")};
+		hasChanges = hasChanges || plan.changedCount > 0;
+		clips.append(midiMutationClipJson(snapshot, plan, resolved.canonicalIndices.size()));
+		nativePlans.append({snapshot.clipId, snapshot.projectGeneration, computeMidiStateHash(snapshot), plan.notes});
+	}
+	QJsonObject data{{"dry_run", request.parameters.value(QStringLiteral("dry_run")).toBool(false)}, {"clips", clips}};
+	if (request.parameters.value(QStringLiteral("dry_run")).toBool(false))
+		return {2, request.requestId, true, hasChanges ? QStringLiteral("ok") : QStringLiteral("no_effect"), QStringLiteral("MIDI plan generated"), data};
+	if (!hasChanges) return {2, request.requestId, true, QStringLiteral("no_effect"), QStringLiteral("MIDI mutation has no effect"), data};
+	const auto execution = AiBridgeMidiActions::execute(nativePlans);
+	QJsonArray applied;
+	QJsonArray unapplied;
+	for (const auto &plan : execution.appliedPlans) applied.append(plan.clipId);
+	for (const auto &plan : execution.unappliedPlans) unapplied.append(plan.clipId);
+	data.insert(QStringLiteral("preflight_succeeded"), execution.preflightSucceeded);
+	data.insert(QStringLiteral("applied_clip_ids"), applied);
+	data.insert(QStringLiteral("unapplied_clip_ids"), unapplied);
+	data.insert(QStringLiteral("failed_plan_index"), execution.failedPlanIndex);
+	if (execution.failedPlanIndex >= 0) data.insert(QStringLiteral("failed_clip_id"), execution.failedPlan.clipId);
+	return {2, request.requestId, execution.success, execution.success ? QStringLiteral("ok") : execution.code,
+		execution.success ? QStringLiteral("MIDI mutation applied") : QStringLiteral("MIDI mutation execution failed"), data};
 }
 
 bool isMixerAction(const QString &action)
@@ -529,6 +756,31 @@ void AiBridgeIpcServer::executeRequest(const AiBridgeProtocolRequest &request)
 		const auto snapshot = AiBridgeProjectContext{}.currentContext();
 		QJsonObject data{{QStringLiteral("song_name"), snapshot.songName}, {QStringLiteral("tempo"), snapshot.tempo}, {QStringLiteral("has_current_midi_clip"), snapshot.hasCurrentMidiClip}, {QStringLiteral("clip_id"), snapshot.clipId}, {QStringLiteral("clip_length_ticks"), snapshot.clipLengthTicks}, {QStringLiteral("has_owning_instrument_track"), snapshot.hasOwningInstrumentTrack}, {QStringLiteral("track_id"), snapshot.trackId}, {QStringLiteral("track_name"), snapshot.trackName}, {QStringLiteral("track_volume"), snapshot.trackVolume}};
 		response = {2, request.requestId, snapshot.success, snapshot.code, snapshot.message, data};
+	}
+	else if (request.action == QStringLiteral("get_midi_capabilities"))
+	{
+		response = {2, request.requestId, true, QStringLiteral("ok"),
+			QStringLiteral("MIDI capabilities read"), midiCapabilitiesJson()};
+	}
+	else if (request.action == QStringLiteral("get_midi_notes"))
+	{
+		AiBridgeMidiClipSnapshot snapshot; QString code;
+		if (!midiSnapshot(request.parameters.value("clip_id").toString(), snapshot, code)) response = {2, request.requestId, false, code, QStringLiteral("MIDI clip is not live")};
+		else { const auto page = AiBridgeMidiContext::pageNotes(snapshot, request.parameters.value("offset").toInt(), request.parameters.contains("limit") ? request.parameters.value("limit").toInt() : AiBridgeMidiLimits::maxNotesPerPage); QJsonArray notes; for (int i = 0; i < page.notes.size(); ++i) notes.append(midiNoteJson(page.notes[i], page.noteRefs[i])); response = {2, request.requestId, true, QStringLiteral("ok"), QStringLiteral("MIDI notes read"), QJsonObject{{"clip_id", snapshot.clipId}, {"midi_state_hash", page.midiStateHash}, {"notes", notes}, {"total", page.total}, {"offset", page.offset}, {"limit", page.limit}, {"has_more", page.hasMore}}}; }
+	}
+	else if (request.action == QStringLiteral("analyze_midi"))
+	{
+		QVector<AiBridgeMidiClipSnapshot> clips; QString code;
+		for (const auto &value : request.parameters.value("clip_ids").toArray()) { AiBridgeMidiClipSnapshot snapshot; if (!midiSnapshot(value.toString(), snapshot, code)) break; clips.append(snapshot); }
+		if (!code.isEmpty()) response = {2, request.requestId, false, code, QStringLiteral("MIDI clip is not live")};
+		else { int noteCount = 0; for (const auto &snapshot : clips) noteCount += snapshot.notes.size(); if (request.parameters.contains("max_notes") && noteCount > request.parameters.value("max_notes").toInt()) response = {2, request.requestId, false, QStringLiteral("note_limit_exceeded"), QStringLiteral("analysis exceeds requested note limit")}; else { AiBridgeMidiAnalysisOptions options; if (request.parameters.contains("grid_ticks")) options.gridTicks = request.parameters.value("grid_ticks").toVariant().toLongLong(); if (request.parameters.contains("short_note_threshold_ticks")) options.shortNoteThresholdTicks = request.parameters.value("short_note_threshold_ticks").toVariant().toLongLong(); const auto analysis = analyzeMidi(clips, options); response = {2, request.requestId, analysis.success, analysis.success ? QStringLiteral("ok") : analysis.code, analysis.success ? QStringLiteral("MIDI analysis complete") : QStringLiteral("MIDI analysis failed"), midiAnalysisJson(analysis)}; } }
+	}
+	else if (request.action == QStringLiteral("quantize_notes") || request.action == QStringLiteral("humanize_notes")
+		|| request.action == QStringLiteral("apply_groove") || request.action == QStringLiteral("shape_note_velocities")
+		|| request.action == QStringLiteral("shape_note_lengths") || request.action == QStringLiteral("cleanup_notes")
+		|| request.action == QStringLiteral("constrain_notes_to_scale"))
+	{
+		response = executeMidiMutation(request);
 	}
 	else if (request.action == QStringLiteral("get_windows"))
 	{

@@ -1,11 +1,13 @@
 #include "AiBridgeProtocol.h"
 #include "AiBridgeMutationTypes.h"
+#include "AiBridgeMidiTypes.h"
 
 #include <QJsonDocument>
 #include <QJsonArray>
 #include <QSet>
 
 #include <cmath>
+#include <limits>
 
 namespace lmms
 {
@@ -95,6 +97,189 @@ bool validSelection(const QJsonValue &value)
 	return AiBridgeMutationTypes::validateSelection(selection,true).success();
 }
 
+struct MidiValidationFailure
+{
+	QString code;
+	QString message;
+
+	bool valid() const { return code.isEmpty(); }
+};
+
+bool validEnum(const QJsonValue &value, const QSet<QString> &allowed)
+{
+	return value.isString() && allowed.contains(value.toString());
+}
+
+MidiValidationFailure validateMidiSelection(const QJsonValue &value, int *noteRefCount = nullptr)
+{
+	if (!value.isObject()) return {QStringLiteral("invalid_selection"), QStringLiteral("selection must be an object")};
+	const auto selection = value.toObject();
+	if (!selection.value(QStringLiteral("mode")).isString()) return {QStringLiteral("invalid_selection"), QStringLiteral("selection mode is required")};
+	const auto mode = selection.value(QStringLiteral("mode")).toString();
+	if (mode == QStringLiteral("note_refs"))
+	{
+		if (!hasOnlyKeys(selection, {QStringLiteral("mode"), QStringLiteral("note_refs")})
+			|| !selection.value(QStringLiteral("note_refs")).isArray())
+			return {QStringLiteral("invalid_selection"), QStringLiteral("note_refs selection contains predicate filters or invalid fields")};
+		const auto refs = selection.value(QStringLiteral("note_refs")).toArray();
+		if (refs.isEmpty() || refs.size() > AiBridgeMidiLimits::maxSelectedNotesPerMutation)
+			return {QStringLiteral("note_limit_exceeded"), QStringLiteral("note_refs exceeds the selected-note limit")};
+		for (const auto &ref : refs)
+			if (!ref.isString() || ref.toString().isEmpty()) return {QStringLiteral("invalid_selection"), QStringLiteral("note_refs must contain non-empty strings")};
+		if (noteRefCount) *noteRefCount += refs.size();
+		return {};
+	}
+	if (mode != QStringLiteral("predicate")) return {QStringLiteral("invalid_selection"), QStringLiteral("selection mode is invalid")};
+	if (!hasOnlyKeys(selection, {QStringLiteral("mode"), QStringLiteral("start_tick"), QStringLiteral("end_tick"),
+		QStringLiteral("keys"), QStringLiteral("key_min"), QStringLiteral("key_max"),
+		QStringLiteral("volume_min"), QStringLiteral("volume_max"), QStringLiteral("length_min"), QStringLiteral("length_max")}))
+		return {QStringLiteral("invalid_selection"), QStringLiteral("predicate selection contains an unknown field")};
+	const bool hasStart = selection.contains(QStringLiteral("start_tick"));
+	const bool hasEnd = selection.contains(QStringLiteral("end_tick"));
+	if (hasStart != hasEnd || (hasStart && (!isInteger(selection.value(QStringLiteral("start_tick")))
+		|| !isInteger(selection.value(QStringLiteral("end_tick")))
+		|| selection.value(QStringLiteral("start_tick")).toVariant().toLongLong() >= selection.value(QStringLiteral("end_tick")).toVariant().toLongLong())))
+		return {QStringLiteral("invalid_selection"), QStringLiteral("predicate tick range must be a non-empty half-open interval")};
+	for (const auto &range : {qMakePair(QStringLiteral("key_min"), QStringLiteral("key_max")),
+		qMakePair(QStringLiteral("volume_min"), QStringLiteral("volume_max")),
+		qMakePair(QStringLiteral("length_min"), QStringLiteral("length_max"))})
+	{
+		const bool hasMinimum = selection.contains(range.first);
+		const bool hasMaximum = selection.contains(range.second);
+		if (!hasMinimum && !hasMaximum) continue;
+		for (const auto &key : {range.first, range.second})
+			if (selection.contains(key) && !isInteger(selection.value(key))) return {QStringLiteral("invalid_selection"), QStringLiteral("predicate range values must be integers")};
+		const qint64 minimum = hasMinimum ? selection.value(range.first).toVariant().toLongLong() : 0;
+		const qint64 maximum = hasMaximum ? selection.value(range.second).toVariant().toLongLong() : (range.first == QStringLiteral("length_min") ? std::numeric_limits<qint64>::max() : (range.first == QStringLiteral("key_min") ? 127 : 200));
+		const qint64 upperBound = range.first == QStringLiteral("key_min") ? 127 : range.first == QStringLiteral("volume_min") ? 200 : std::numeric_limits<qint32>::max();
+		const qint64 lowerBound = range.first == QStringLiteral("length_min") ? 1 : 0;
+		if (minimum < lowerBound || maximum > upperBound || minimum > maximum)
+			return {QStringLiteral("invalid_selection"), QStringLiteral("predicate range is out of bounds")};
+	}
+	if (selection.contains(QStringLiteral("keys")))
+	{
+		const auto keys = selection.value(QStringLiteral("keys")).toArray();
+		if (!selection.value(QStringLiteral("keys")).isArray() || keys.isEmpty() || keys.size() > 128)
+			return {QStringLiteral("invalid_selection"), QStringLiteral("keys must be a non-empty bounded array")};
+		for (const auto &key : keys)
+			if (!isInteger(key) || key.toInt() < 0 || key.toInt() > 127) return {QStringLiteral("invalid_selection"), QStringLiteral("keys contains an out-of-range key")};
+	}
+	return {};
+}
+
+MidiValidationFailure validateMidiClips(const QJsonValue &value)
+{
+	if (!value.isArray()) return {QStringLiteral("invalid_parameter"), QStringLiteral("clips must be an array")};
+	const auto clips = value.toArray();
+	if (clips.isEmpty() || clips.size() > AiBridgeMidiLimits::maxClipsPerMutation)
+		return {QStringLiteral("parameter_out_of_range"), QStringLiteral("clips exceeds the mutation limit")};
+	int noteRefCount = 0;
+	QSet<QString> clipIds;
+	for (const auto &value : clips)
+	{
+		if (!value.isObject()) return {QStringLiteral("invalid_parameter"), QStringLiteral("clip selection must be an object")};
+		const auto clip = value.toObject();
+		if (!hasOnlyKeys(clip, {QStringLiteral("clip_id"), QStringLiteral("expected_midi_state_hash"), QStringLiteral("selection")})
+			|| !clip.value(QStringLiteral("clip_id")).isString() || clip.value(QStringLiteral("clip_id")).toString().isEmpty()
+			|| !clip.value(QStringLiteral("expected_midi_state_hash")).isString() || clip.value(QStringLiteral("expected_midi_state_hash")).toString().isEmpty())
+			return {QStringLiteral("invalid_parameter"), QStringLiteral("clip selection requires clip_id and expected_midi_state_hash")};
+		if (clipIds.contains(clip.value(QStringLiteral("clip_id")).toString())) return {QStringLiteral("invalid_parameter"), QStringLiteral("clip selections must be unique")};
+		clipIds.insert(clip.value(QStringLiteral("clip_id")).toString());
+		const auto selection = validateMidiSelection(clip.value(QStringLiteral("selection")), &noteRefCount);
+		if (!selection.valid()) return selection;
+		if (noteRefCount > AiBridgeMidiLimits::maxSelectedNotesPerMutation)
+			return {QStringLiteral("note_limit_exceeded"), QStringLiteral("note_refs exceeds the mutation limit")};
+	}
+	return {};
+}
+
+MidiValidationFailure validateMidiRequest(const QString &action, const QJsonObject &parameters)
+{
+	const QSet<QString> midiActions{QStringLiteral("get_midi_capabilities"), QStringLiteral("get_midi_notes"), QStringLiteral("analyze_midi"), QStringLiteral("quantize_notes"), QStringLiteral("humanize_notes"), QStringLiteral("apply_groove"), QStringLiteral("shape_note_velocities"), QStringLiteral("shape_note_lengths"), QStringLiteral("cleanup_notes"), QStringLiteral("constrain_notes_to_scale")};
+	if (!midiActions.contains(action)) return {};
+	if (action == QStringLiteral("get_midi_capabilities"))
+		return parameters.isEmpty() ? MidiValidationFailure{} : MidiValidationFailure{QStringLiteral("unknown_parameter"), QStringLiteral("get_midi_capabilities accepts no parameters")};
+	if (action == QStringLiteral("get_midi_notes"))
+	{
+		if (!hasOnlyKeys(parameters, {QStringLiteral("clip_id"), QStringLiteral("offset"), QStringLiteral("limit")})
+			|| !parameters.value(QStringLiteral("clip_id")).isString() || parameters.value(QStringLiteral("clip_id")).toString().isEmpty()) return {QStringLiteral("invalid_parameter"), QStringLiteral("get_midi_notes requires clip_id")};
+		for (const auto &key : {QStringLiteral("offset"), QStringLiteral("limit")}) if (parameters.contains(key) && !isInteger(parameters.value(key))) return {QStringLiteral("invalid_parameter"), QStringLiteral("note page values must be integers")};
+		if (parameters.value(QStringLiteral("offset")).toInt() < 0 || (parameters.contains(QStringLiteral("limit")) && (parameters.value(QStringLiteral("limit")).toInt() < 1 || parameters.value(QStringLiteral("limit")).toInt() > AiBridgeMidiLimits::maxNotesPerPage))) return {QStringLiteral("parameter_out_of_range"), QStringLiteral("note page is out of bounds")};
+		return {};
+	}
+	if (action == QStringLiteral("analyze_midi"))
+	{
+		if (!hasOnlyKeys(parameters, {QStringLiteral("clip_ids"), QStringLiteral("grid_ticks"), QStringLiteral("short_note_threshold_ticks"), QStringLiteral("max_notes")}) || !parameters.value(QStringLiteral("clip_ids")).isArray()) return {QStringLiteral("invalid_parameter"), QStringLiteral("analyze_midi requires clip_ids")};
+		const auto clips = parameters.value(QStringLiteral("clip_ids")).toArray();
+		if (clips.isEmpty() || clips.size() > AiBridgeMidiLimits::maxClipsPerMutation) return {QStringLiteral("parameter_out_of_range"), QStringLiteral("analysis clip count is out of bounds")};
+		for (const auto &clip : clips) if (!clip.isString() || clip.toString().isEmpty()) return {QStringLiteral("invalid_parameter"), QStringLiteral("analysis clip_ids must be strings")};
+		for (const auto &key : {QStringLiteral("grid_ticks"), QStringLiteral("short_note_threshold_ticks"), QStringLiteral("max_notes")}) if (parameters.contains(key) && (!isInteger(parameters.value(key)) || parameters.value(key).toVariant().toLongLong() < 1)) return {QStringLiteral("parameter_out_of_range"), QStringLiteral("analysis bounds must be positive integers")};
+		if (parameters.contains(QStringLiteral("max_notes")) && parameters.value(QStringLiteral("max_notes")).toInt() > AiBridgeMidiLimits::maxAnalysisNotes) return {QStringLiteral("parameter_out_of_range"), QStringLiteral("analysis note limit is out of bounds")};
+		return {};
+	}
+	QSet<QString> allowed{QStringLiteral("clips"), QStringLiteral("dry_run"), QStringLiteral("boundary_policy")};
+	if (action == QStringLiteral("quantize_notes")) allowed.unite({QStringLiteral("grid_ticks"), QStringLiteral("strength"), QStringLiteral("direction"), QStringLiteral("max_shift_ticks")});
+	if (action == QStringLiteral("humanize_notes")) allowed.unite({QStringLiteral("seed"), QStringLiteral("timing_range_ticks"), QStringLiteral("volume_range"), QStringLiteral("length_range_ticks"), QStringLiteral("distribution")});
+	if (action == QStringLiteral("apply_groove")) allowed.unite({QStringLiteral("mode"), QStringLiteral("strength"), QStringLiteral("subdivision_ticks"), QStringLiteral("swing_percent"), QStringLiteral("step_ticks"), QStringLiteral("timing_offsets"), QStringLiteral("volume_offsets")});
+	if (action == QStringLiteral("shape_note_velocities")) allowed.unite({QStringLiteral("mode"), QStringLiteral("value"), QStringLiteral("start_value"), QStringLiteral("end_value")});
+	if (action == QStringLiteral("shape_note_lengths")) allowed.unite({QStringLiteral("mode"), QStringLiteral("value"), QStringLiteral("gate_percent"), QStringLiteral("fallback_length_ticks")});
+	if (action == QStringLiteral("cleanup_notes")) allowed.unite({QStringLiteral("remove_exact_duplicates"), QStringLiteral("same_pitch_overlap_mode"), QStringLiteral("minimum_length_ticks"), QStringLiteral("short_note_action")});
+	if (action == QStringLiteral("constrain_notes_to_scale")) allowed.unite({QStringLiteral("allowed_pitch_classes"), QStringLiteral("direction"), QStringLiteral("nearest_tie_break")});
+	if (!hasOnlyKeys(parameters, allowed) || (parameters.contains(QStringLiteral("dry_run")) && !parameters.value(QStringLiteral("dry_run")).isBool())) return {QStringLiteral("invalid_parameter"), QStringLiteral("MIDI mutation parameters are invalid")};
+	if (const auto clips = validateMidiClips(parameters.value(QStringLiteral("clips"))); !clips.valid()) return clips;
+	if (parameters.contains(QStringLiteral("boundary_policy")) && !validEnum(parameters.value(QStringLiteral("boundary_policy")), {QStringLiteral("clamp"), QStringLiteral("reject")})) return {QStringLiteral("invalid_parameter"), QStringLiteral("boundary policy is invalid")};
+	if (action == QStringLiteral("quantize_notes"))
+	{
+		if (!isInteger(parameters.value(QStringLiteral("grid_ticks"))) || parameters.value(QStringLiteral("grid_ticks")).toVariant().toLongLong() < 1) return {QStringLiteral("invalid_grid"), QStringLiteral("grid_ticks must be positive")};
+		if (parameters.contains(QStringLiteral("strength")) && (!isFiniteNumber(parameters.value(QStringLiteral("strength"))) || parameters.value(QStringLiteral("strength")).toDouble() < 0.0 || parameters.value(QStringLiteral("strength")).toDouble() > 1.0)) return {QStringLiteral("parameter_out_of_range"), QStringLiteral("strength must be between zero and one")};
+		if (parameters.contains(QStringLiteral("direction")) && !validEnum(parameters.value(QStringLiteral("direction")), {QStringLiteral("nearest"), QStringLiteral("earlier"), QStringLiteral("later")})) return {QStringLiteral("invalid_parameter"), QStringLiteral("quantize direction is invalid")};
+		if (parameters.contains(QStringLiteral("max_shift_ticks")) && (!isInteger(parameters.value(QStringLiteral("max_shift_ticks"))) || parameters.value(QStringLiteral("max_shift_ticks")).toVariant().toLongLong() < 0)) return {QStringLiteral("parameter_out_of_range"), QStringLiteral("max_shift_ticks is invalid")};
+	}
+	if (action == QStringLiteral("humanize_notes"))
+	{
+		if (!isInteger(parameters.value(QStringLiteral("seed"))) || parameters.value(QStringLiteral("seed")).toDouble() < 0 || parameters.value(QStringLiteral("seed")).toDouble() > 4294967295.0) return {QStringLiteral("parameter_out_of_range"), QStringLiteral("seed must be an unsigned 32-bit integer")};
+		for (const auto &key : {QStringLiteral("timing_range_ticks"), QStringLiteral("volume_range"), QStringLiteral("length_range_ticks")}) if (parameters.contains(key) && (!isInteger(parameters.value(key)) || parameters.value(key).toVariant().toLongLong() < 0)) return {QStringLiteral("parameter_out_of_range"), QStringLiteral("humanize ranges must be non-negative integers")};
+		if (parameters.contains(QStringLiteral("volume_range")) && parameters.value(QStringLiteral("volume_range")).toInt() > 200) return {QStringLiteral("parameter_out_of_range"), QStringLiteral("volume_range is out of bounds")};
+		if (parameters.contains(QStringLiteral("distribution")) && !validEnum(parameters.value(QStringLiteral("distribution")), {QStringLiteral("triangular"), QStringLiteral("uniform")})) return {QStringLiteral("invalid_parameter"), QStringLiteral("humanize distribution is invalid")};
+	}
+	if (action == QStringLiteral("apply_groove"))
+	{
+		if (!validEnum(parameters.value(QStringLiteral("mode")), {QStringLiteral("swing"), QStringLiteral("template")})) return {QStringLiteral("invalid_parameter"), QStringLiteral("groove mode is invalid")};
+		if (parameters.contains(QStringLiteral("strength")) && (!isFiniteNumber(parameters.value(QStringLiteral("strength"))) || parameters.value(QStringLiteral("strength")).toDouble() < 0.0 || parameters.value(QStringLiteral("strength")).toDouble() > 1.0)) return {QStringLiteral("parameter_out_of_range"), QStringLiteral("groove strength is out of bounds")};
+		const bool swing = parameters.value(QStringLiteral("mode")).toString() == QStringLiteral("swing");
+		if (swing && (!hasOnlyKeys(parameters, {QStringLiteral("clips"), QStringLiteral("dry_run"), QStringLiteral("boundary_policy"), QStringLiteral("mode"), QStringLiteral("strength"), QStringLiteral("subdivision_ticks"), QStringLiteral("swing_percent")}) || !isInteger(parameters.value(QStringLiteral("subdivision_ticks"))) || parameters.value(QStringLiteral("subdivision_ticks")).toVariant().toLongLong() < 1 || !isFiniteNumber(parameters.value(QStringLiteral("swing_percent"))) || parameters.value(QStringLiteral("swing_percent")).toDouble() < 50.0 || parameters.value(QStringLiteral("swing_percent")).toDouble() > 100.0)) return {QStringLiteral("invalid_parameter"), QStringLiteral("swing parameters are invalid")};
+		if (!swing && (!hasOnlyKeys(parameters, {QStringLiteral("clips"), QStringLiteral("dry_run"), QStringLiteral("boundary_policy"), QStringLiteral("mode"), QStringLiteral("strength"), QStringLiteral("step_ticks"), QStringLiteral("timing_offsets"), QStringLiteral("volume_offsets")}) || !isInteger(parameters.value(QStringLiteral("step_ticks"))) || parameters.value(QStringLiteral("step_ticks")).toVariant().toLongLong() < 1 || !parameters.value(QStringLiteral("timing_offsets")).isArray() || parameters.value(QStringLiteral("timing_offsets")).toArray().isEmpty())) return {QStringLiteral("invalid_parameter"), QStringLiteral("groove template parameters are invalid")};
+	}
+	if (action == QStringLiteral("shape_note_velocities"))
+	{
+		if (!validEnum(parameters.value(QStringLiteral("mode")), {QStringLiteral("set"), QStringLiteral("offset"), QStringLiteral("scale"), QStringLiteral("ramp")})) return {QStringLiteral("invalid_parameter"), QStringLiteral("velocity mode is invalid")};
+		const bool ramp = parameters.value(QStringLiteral("mode")).toString() == QStringLiteral("ramp");
+		if (ramp ? (!hasOnlyKeys(parameters, {QStringLiteral("clips"), QStringLiteral("dry_run"), QStringLiteral("boundary_policy"), QStringLiteral("mode"), QStringLiteral("start_value"), QStringLiteral("end_value")}) || !isFiniteNumber(parameters.value(QStringLiteral("start_value"))) || !isFiniteNumber(parameters.value(QStringLiteral("end_value")))) : (!hasOnlyKeys(parameters, {QStringLiteral("clips"), QStringLiteral("dry_run"), QStringLiteral("boundary_policy"), QStringLiteral("mode"), QStringLiteral("value")}) || !isFiniteNumber(parameters.value(QStringLiteral("value"))))) return {QStringLiteral("invalid_parameter"), QStringLiteral("velocity mode parameters are invalid")};
+	}
+	if (action == QStringLiteral("shape_note_lengths"))
+	{
+		if (!validEnum(parameters.value(QStringLiteral("mode")), {QStringLiteral("set"), QStringLiteral("offset"), QStringLiteral("scale"), QStringLiteral("gate_to_next")})) return {QStringLiteral("invalid_parameter"), QStringLiteral("length mode is invalid")};
+		const bool gate = parameters.value(QStringLiteral("mode")).toString() == QStringLiteral("gate_to_next");
+		if (gate ? (!hasOnlyKeys(parameters, {QStringLiteral("clips"), QStringLiteral("dry_run"), QStringLiteral("boundary_policy"), QStringLiteral("mode"), QStringLiteral("gate_percent"), QStringLiteral("fallback_length_ticks")}) || !isFiniteNumber(parameters.value(QStringLiteral("gate_percent")))) : (!hasOnlyKeys(parameters, {QStringLiteral("clips"), QStringLiteral("dry_run"), QStringLiteral("boundary_policy"), QStringLiteral("mode"), QStringLiteral("value")}) || !isFiniteNumber(parameters.value(QStringLiteral("value"))))) return {QStringLiteral("invalid_parameter"), QStringLiteral("length mode parameters are invalid")};
+		if (parameters.contains(QStringLiteral("fallback_length_ticks")) && (!isInteger(parameters.value(QStringLiteral("fallback_length_ticks"))) || parameters.value(QStringLiteral("fallback_length_ticks")).toVariant().toLongLong() < 1)) return {QStringLiteral("parameter_out_of_range"), QStringLiteral("fallback length is invalid")};
+	}
+	if (action == QStringLiteral("cleanup_notes"))
+	{
+		if (parameters.contains(QStringLiteral("remove_exact_duplicates")) && !parameters.value(QStringLiteral("remove_exact_duplicates")).isBool()) return {QStringLiteral("invalid_parameter"), QStringLiteral("duplicate cleanup flag is invalid")};
+		if (parameters.contains(QStringLiteral("same_pitch_overlap_mode")) && !validEnum(parameters.value(QStringLiteral("same_pitch_overlap_mode")), {QStringLiteral("none"), QStringLiteral("trim_earlier"), QStringLiteral("reject")})) return {QStringLiteral("invalid_parameter"), QStringLiteral("overlap mode is invalid")};
+		if (parameters.contains(QStringLiteral("minimum_length_ticks")) && (!isInteger(parameters.value(QStringLiteral("minimum_length_ticks"))) || parameters.value(QStringLiteral("minimum_length_ticks")).toVariant().toLongLong() < 1)) return {QStringLiteral("parameter_out_of_range"), QStringLiteral("minimum length is invalid")};
+		if (parameters.contains(QStringLiteral("short_note_action")) != parameters.contains(QStringLiteral("minimum_length_ticks")) || (parameters.contains(QStringLiteral("short_note_action")) && !validEnum(parameters.value(QStringLiteral("short_note_action")), {QStringLiteral("remove"), QStringLiteral("extend")}))) return {QStringLiteral("invalid_parameter"), QStringLiteral("short-note cleanup requires both threshold and action")};
+	}
+	if (action == QStringLiteral("constrain_notes_to_scale"))
+	{
+		if (!parameters.value(QStringLiteral("allowed_pitch_classes")).isArray() || parameters.value(QStringLiteral("allowed_pitch_classes")).toArray().isEmpty()) return {QStringLiteral("invalid_pitch_class"), QStringLiteral("allowed_pitch_classes is required")};
+		for (const auto &pitchClass : parameters.value(QStringLiteral("allowed_pitch_classes")).toArray()) if (!isInteger(pitchClass) || pitchClass.toInt() < 0 || pitchClass.toInt() > 11) return {QStringLiteral("invalid_pitch_class"), QStringLiteral("pitch class is out of bounds")};
+		if (parameters.contains(QStringLiteral("direction")) && !validEnum(parameters.value(QStringLiteral("direction")), {QStringLiteral("nearest"), QStringLiteral("up"), QStringLiteral("down")})) return {QStringLiteral("invalid_parameter"), QStringLiteral("scale direction is invalid")};
+		if (parameters.contains(QStringLiteral("nearest_tie_break")) && !validEnum(parameters.value(QStringLiteral("nearest_tie_break")), {QStringLiteral("down"), QStringLiteral("up")})) return {QStringLiteral("invalid_parameter"), QStringLiteral("scale tie break is invalid")};
+	}
+	return {};
+}
+
 } // namespace
 
 AiBridgeProtocolParseResult AiBridgeProtocol::parseRequest(const QByteArray &frame)
@@ -124,7 +309,7 @@ AiBridgeProtocolParseResult AiBridgeProtocol::parseRequest(const QByteArray &fra
 	if (!object.contains(QStringLiteral("action")) || !object.value(QStringLiteral("action")).isString())
 		return failure(QStringLiteral("invalid_action"), QStringLiteral("action must be a string"));
 	const auto action = object.value(QStringLiteral("action")).toString();
-	if (!QSet<QString>{QStringLiteral("get_context"), QStringLiteral("set_tempo"), QStringLiteral("adjust_current_track_volume"), QStringLiteral("add_note_to_current_clip"), QStringLiteral("get_windows"), QStringLiteral("set_window_geometry"), QStringLiteral("focus_window"), QStringLiteral("arrange_windows"), QStringLiteral("get_project_structure"), QStringLiteral("list_tracks"), QStringLiteral("list_clips"), QStringLiteral("get_clip"), QStringLiteral("open_clip_in_piano_roll"), QStringLiteral("add_notes"), QStringLiteral("delete_notes"), QStringLiteral("transpose_notes"), QStringLiteral("move_notes"), QStringLiteral("duplicate_region"), QStringLiteral("create_instrument_track"), QStringLiteral("rename_track"), QStringLiteral("create_midi_clip"), QStringLiteral("set_clip_properties"), QStringLiteral("list_instruments"), QStringLiteral("set_track_instrument"), QStringLiteral("set_track_properties"), QStringLiteral("list_bundled_samples"), QStringLiteral("load_bundled_sample"), QStringLiteral("list_bundled_presets"), QStringLiteral("load_bundled_preset"), QStringLiteral("get_mixer_structure"), QStringLiteral("create_mixer_channel"), QStringLiteral("delete_mixer_channel"), QStringLiteral("set_mixer_channel_properties"), QStringLiteral("route_track_to_mixer_channel"), QStringLiteral("create_mixer_route"), QStringLiteral("delete_mixer_route"), QStringLiteral("set_mixer_route_properties"), QStringLiteral("list_native_effects"), QStringLiteral("add_effect"), QStringLiteral("remove_effect"), QStringLiteral("move_effect"), QStringLiteral("set_effect_state"), QStringLiteral("get_effect_parameters"), QStringLiteral("set_effect_parameters"), QStringLiteral("get_mixer_meters"), QStringLiteral("get_arrangement"), QStringLiteral("get_timeline_region"), QStringLiteral("set_timeline_clip"), QStringLiteral("duplicate_timeline_clip"), QStringLiteral("delete_timeline_clip"), QStringLiteral("batch_edit_timeline_clips"), QStringLiteral("list_automation_targets"), QStringLiteral("get_automation_capabilities"), QStringLiteral("list_automation"), QStringLiteral("get_automation_clip"), QStringLiteral("create_automation_track"), QStringLiteral("delete_automation_track"), QStringLiteral("create_automation_clip"), QStringLiteral("delete_automation_clip"), QStringLiteral("set_automation_clip_properties"), QStringLiteral("set_automation_clip_target"), QStringLiteral("edit_automation_points"), QStringLiteral("duplicate_arrangement_region"), QStringLiteral("move_arrangement_region"), QStringLiteral("delete_arrangement_region"), QStringLiteral("insert_arrangement_space"), QStringLiteral("close_arrangement_gap"), QStringLiteral("replace_arrangement_region")}.contains(action))
+	if (!QSet<QString>{QStringLiteral("get_context"), QStringLiteral("set_tempo"), QStringLiteral("adjust_current_track_volume"), QStringLiteral("add_note_to_current_clip"), QStringLiteral("get_windows"), QStringLiteral("set_window_geometry"), QStringLiteral("focus_window"), QStringLiteral("arrange_windows"), QStringLiteral("get_project_structure"), QStringLiteral("list_tracks"), QStringLiteral("list_clips"), QStringLiteral("get_clip"), QStringLiteral("open_clip_in_piano_roll"), QStringLiteral("add_notes"), QStringLiteral("delete_notes"), QStringLiteral("transpose_notes"), QStringLiteral("move_notes"), QStringLiteral("duplicate_region"), QStringLiteral("create_instrument_track"), QStringLiteral("rename_track"), QStringLiteral("create_midi_clip"), QStringLiteral("set_clip_properties"), QStringLiteral("list_instruments"), QStringLiteral("set_track_instrument"), QStringLiteral("set_track_properties"), QStringLiteral("list_bundled_samples"), QStringLiteral("load_bundled_sample"), QStringLiteral("list_bundled_presets"), QStringLiteral("load_bundled_preset"), QStringLiteral("get_mixer_structure"), QStringLiteral("create_mixer_channel"), QStringLiteral("delete_mixer_channel"), QStringLiteral("set_mixer_channel_properties"), QStringLiteral("route_track_to_mixer_channel"), QStringLiteral("create_mixer_route"), QStringLiteral("delete_mixer_route"), QStringLiteral("set_mixer_route_properties"), QStringLiteral("list_native_effects"), QStringLiteral("add_effect"), QStringLiteral("remove_effect"), QStringLiteral("move_effect"), QStringLiteral("set_effect_state"), QStringLiteral("get_effect_parameters"), QStringLiteral("set_effect_parameters"), QStringLiteral("get_mixer_meters"), QStringLiteral("get_arrangement"), QStringLiteral("get_timeline_region"), QStringLiteral("set_timeline_clip"), QStringLiteral("duplicate_timeline_clip"), QStringLiteral("delete_timeline_clip"), QStringLiteral("batch_edit_timeline_clips"), QStringLiteral("list_automation_targets"), QStringLiteral("get_automation_capabilities"), QStringLiteral("list_automation"), QStringLiteral("get_automation_clip"), QStringLiteral("create_automation_track"), QStringLiteral("delete_automation_track"), QStringLiteral("create_automation_clip"), QStringLiteral("delete_automation_clip"), QStringLiteral("set_automation_clip_properties"), QStringLiteral("set_automation_clip_target"), QStringLiteral("edit_automation_points"), QStringLiteral("duplicate_arrangement_region"), QStringLiteral("move_arrangement_region"), QStringLiteral("delete_arrangement_region"), QStringLiteral("insert_arrangement_space"), QStringLiteral("close_arrangement_gap"), QStringLiteral("replace_arrangement_region"), QStringLiteral("get_midi_capabilities"), QStringLiteral("get_midi_notes"), QStringLiteral("analyze_midi"), QStringLiteral("quantize_notes"), QStringLiteral("humanize_notes"), QStringLiteral("apply_groove"), QStringLiteral("shape_note_velocities"), QStringLiteral("shape_note_lengths"), QStringLiteral("cleanup_notes"), QStringLiteral("constrain_notes_to_scale")}.contains(action))
 		return failure(QStringLiteral("unknown_action"), QStringLiteral("Action is not allowlisted"));
 	if (!object.contains(QStringLiteral("parameters")) || !object.value(QStringLiteral("parameters")).isObject())
 		return failure(QStringLiteral("invalid_parameters"), QStringLiteral("parameters must be an object"));
@@ -134,6 +319,8 @@ AiBridgeProtocolParseResult AiBridgeProtocol::parseRequest(const QByteArray &fra
 	{
 		return AiBridgeProtocolParseResult{false, code, message, {2, requestId, action, parameters}};
 	};
+	if (const auto midiValidation = validateMidiRequest(action, parameters); !midiValidation.valid())
+		return requestFailure(midiValidation.code, midiValidation.message);
 	if (action == QStringLiteral("get_context") && !parameters.isEmpty())
 		return requestFailure(QStringLiteral("unknown_parameter"), QStringLiteral("get_context accepts no parameters"));
 	if (action == QStringLiteral("set_tempo") && (!hasOnlyKeys(parameters, {QStringLiteral("bpm")}) || !isInteger(parameters.value(QStringLiteral("bpm")))))

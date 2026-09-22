@@ -54,6 +54,18 @@ set(LMMS_TESTS
 	src/plugins/AiBridgeArrangementPlannerTest.cpp
 	src/plugins/AiBridgeArrangementExecutionTest.cpp
 	src/plugins/AiBridgePhase3GProtocolTest.cpp
+	src/plugins/AiBridgeMidiTypesTest.cpp
+	src/plugins/AiBridgeMidiContextTest.cpp
+	src/plugins/AiBridgeMidiAnalysisTest.cpp
+	src/plugins/AiBridgeMidiQuantizePlannerTest.cpp
+	src/plugins/AiBridgeMidiHumanizeGroovePlannerTest.cpp
+	src/plugins/AiBridgeMidiDynamicsPlannerTest.cpp
+	src/plugins/AiBridgeMidiCleanupScalePlannerTest.cpp
+	src/plugins/AiBridgeMidiActionsTest.cpp
+	src/plugins/AiBridgeMidiProtocolTest.cpp
+	src/plugins/AiBridgeMidiLifecycleTest.cpp
+	src/plugins/AiBridgePhase3HSecurityTest.cpp
+	src/plugins/AiBridgePhase3HFrameSizeTest.cpp
 	src/tracks/AutomationTrackTest.cpp
 )
 
@@ -66,7 +78,7 @@ foreach(LMMS_TEST_SRC IN LISTS LMMS_TESTS)
 
 	# TODO CMake 3.12: Propagate usage requirements by linking to lmmsobjs
 	target_include_directories(${LMMS_TEST_NAME} PRIVATE $<TARGET_PROPERTY:lmmsobjs,INCLUDE_DIRECTORIES>)
-	if(LMMS_TEST_NAME MATCHES "^AiBridge(Actions|Context|WindowContext|Protocol|IpcServer|MixerProtocol|EffectProtocol|FrameSize|Lifecycle|Security)Test$")
+	if(LMMS_TEST_NAME MATCHES "^AiBridge(Actions|Context|WindowContext|Protocol|IpcServer|MixerProtocol|EffectProtocol|FrameSize|Lifecycle|Security|Phase3HSecurity|Phase3HFrameSize)Test$")
 		target_include_directories(${LMMS_TEST_NAME} PRIVATE ${CMAKE_SOURCE_DIR}/plugins/AiBridge)
 	endif()
 	if(LMMS_TEST_NAME STREQUAL "AiBridgeMutationTypesTest")
@@ -78,6 +90,71 @@ foreach(LMMS_TEST_SRC IN LISTS LMMS_TESTS)
 		target_include_directories(${LMMS_TEST_NAME} PRIVATE ${CMAKE_SOURCE_DIR}/plugins/AiBridge)
 		target_sources(${LMMS_TEST_NAME} PRIVATE
 			${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeTimelineTypes.cpp)
+	endif()
+	if(LMMS_TEST_NAME STREQUAL "AiBridgeMidiTypesTest")
+		target_include_directories(${LMMS_TEST_NAME} PRIVATE ${CMAKE_SOURCE_DIR}/plugins/AiBridge)
+		target_sources(${LMMS_TEST_NAME} PRIVATE
+			${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeMidiTypes.cpp)
+	endif()
+	if(LMMS_TEST_NAME STREQUAL "AiBridgeMidiContextTest")
+		target_include_directories(${LMMS_TEST_NAME} PRIVATE ${CMAKE_SOURCE_DIR}/plugins/AiBridge)
+		target_sources(${LMMS_TEST_NAME} PRIVATE
+			${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeMidiTypes.cpp
+			${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeMidiContext.cpp)
+	endif()
+	if(LMMS_TEST_NAME STREQUAL "AiBridgeMidiAnalysisTest")
+		target_include_directories(${LMMS_TEST_NAME} PRIVATE ${CMAKE_SOURCE_DIR}/plugins/AiBridge)
+		target_sources(${LMMS_TEST_NAME} PRIVATE
+			${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeMidiTypes.cpp
+			${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeMidiAnalysis.cpp)
+	endif()
+	if(LMMS_TEST_NAME STREQUAL "AiBridgeMidiQuantizePlannerTest")
+		target_include_directories(${LMMS_TEST_NAME} PRIVATE ${CMAKE_SOURCE_DIR}/plugins/AiBridge)
+		target_sources(${LMMS_TEST_NAME} PRIVATE
+			${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeMidiTypes.cpp
+			${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeMidiPlanner.cpp)
+	endif()
+	if(LMMS_TEST_NAME STREQUAL "AiBridgeMidiHumanizeGroovePlannerTest")
+		target_include_directories(${LMMS_TEST_NAME} PRIVATE ${CMAKE_SOURCE_DIR}/plugins/AiBridge)
+		target_sources(${LMMS_TEST_NAME} PRIVATE
+			${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeMidiTypes.cpp
+			${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeMidiPlanner.cpp)
+	endif()
+	if(LMMS_TEST_NAME STREQUAL "AiBridgeMidiDynamicsPlannerTest")
+		target_include_directories(${LMMS_TEST_NAME} PRIVATE ${CMAKE_SOURCE_DIR}/plugins/AiBridge)
+		target_sources(${LMMS_TEST_NAME} PRIVATE
+			${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeMidiTypes.cpp
+			${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeMidiPlanner.cpp)
+	endif()
+	if(LMMS_TEST_NAME STREQUAL "AiBridgeMidiCleanupScalePlannerTest")
+		target_include_directories(${LMMS_TEST_NAME} PRIVATE ${CMAKE_SOURCE_DIR}/plugins/AiBridge)
+		target_sources(${LMMS_TEST_NAME} PRIVATE
+			${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeMidiTypes.cpp
+			${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeMidiPlanner.cpp)
+	endif()
+	if(LMMS_TEST_NAME STREQUAL "AiBridgeMidiActionsTest")
+		target_include_directories(${LMMS_TEST_NAME} PRIVATE ${CMAKE_SOURCE_DIR}/plugins/AiBridge)
+		target_sources(${LMMS_TEST_NAME} PRIVATE
+			${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeMidiTypes.cpp
+			${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeMidiContext.cpp
+			${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeProjectContext.cpp
+			${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeMutationTypes.cpp
+			${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeMidiActions.cpp)
+	endif()
+	if(LMMS_TEST_NAME STREQUAL "AiBridgeMidiProtocolTest")
+		target_include_directories(${LMMS_TEST_NAME} PRIVATE ${CMAKE_SOURCE_DIR}/plugins/AiBridge)
+		target_sources(${LMMS_TEST_NAME} PRIVATE
+			${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeProtocol.cpp
+			${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeMutationTypes.cpp
+			${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeMidiTypes.cpp)
+	endif()
+	if(LMMS_TEST_NAME STREQUAL "AiBridgeMidiLifecycleTest")
+		target_include_directories(${LMMS_TEST_NAME} PRIVATE ${CMAKE_SOURCE_DIR}/plugins/AiBridge)
+		target_sources(${LMMS_TEST_NAME} PRIVATE
+			${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeMidiTypes.cpp
+			${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeMidiContext.cpp
+			${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeProjectContext.cpp
+			${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeMutationTypes.cpp)
 	endif()
 	if(LMMS_TEST_NAME STREQUAL "AiBridgeAutomationTypesTest")
 		target_include_directories(${LMMS_TEST_NAME} PRIVATE ${CMAKE_SOURCE_DIR}/plugins/AiBridge)
@@ -436,6 +513,12 @@ foreach(LMMS_TEST_SRC IN LISTS LMMS_TESTS)
 			${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeAutomationContext.cpp
 			${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeTimelineActions.cpp
 			${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeAutomationActions.cpp)
+			target_sources(${LMMS_TEST_NAME} PRIVATE
+			${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeMidiTypes.cpp
+			${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeMidiContext.cpp
+			${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeMidiAnalysis.cpp
+			${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeMidiPlanner.cpp
+			${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeMidiActions.cpp)
 		target_sources(${LMMS_TEST_NAME} PRIVATE
 			${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeArrangementPlanner.cpp
 			${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeArrangementActions.cpp)
@@ -446,7 +529,7 @@ foreach(LMMS_TEST_SRC IN LISTS LMMS_TESTS)
 			${CMAKE_SOURCE_DIR}/plugins/Delay
 			${CMAKE_SOURCE_DIR}/plugins/ReverbSC)
 	endif()
-	if(LMMS_TEST_NAME MATCHES "^AiBridge(MixerProtocol|EffectProtocol|FrameSize)Test$")
+	if(LMMS_TEST_NAME MATCHES "^AiBridge(MixerProtocol|EffectProtocol|FrameSize|Phase3HSecurity|Phase3HFrameSize)Test$")
 		target_sources(${LMMS_TEST_NAME} PRIVATE
 			${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeProtocol.cpp
 			${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeMutationTypes.cpp)
@@ -496,6 +579,12 @@ foreach(LMMS_TEST_SRC IN LISTS LMMS_TESTS)
 		target_sources(${LMMS_TEST_NAME} PRIVATE
 			${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeArrangementPlanner.cpp
 			${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeArrangementActions.cpp)
+		target_sources(${LMMS_TEST_NAME} PRIVATE
+			${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeMidiTypes.cpp
+			${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeMidiContext.cpp
+			${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeMidiAnalysis.cpp
+			${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeMidiPlanner.cpp
+			${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeMidiActions.cpp)
 		target_include_directories(${LMMS_TEST_NAME} PRIVATE
 			${CMAKE_SOURCE_DIR}/plugins/AiBridge
 			${CMAKE_SOURCE_DIR}/plugins/Amplifier
