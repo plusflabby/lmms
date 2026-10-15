@@ -76,6 +76,7 @@ SampleClip::SampleClip(Track* track)
 SampleClip::SampleClip(const SampleClip& orig) :
 	Clip(orig),
 	m_sample(std::move(orig.m_sample)),
+	m_unavailableSampleFile(orig.m_unavailableSampleFile),
 	m_isPlaying(orig.m_isPlaying),
 	m_startFrameOffset(orig.m_startFrameOffset)
 {
@@ -130,7 +131,7 @@ void SampleClip::changeLength( const TimePos & _length )
 
 const QString& SampleClip::sampleFile() const
 {
-	return m_sample.sampleFile();
+	return m_unavailableSampleFile.isEmpty() ? m_sample.sampleFile() : m_unavailableSampleFile;
 }
 
 bool SampleClip::hasSampleFileLoaded(const QString & filename) const
@@ -143,6 +144,7 @@ void SampleClip::setSampleBuffer(std::shared_ptr<const SampleBuffer> sb)
 	{
 		const auto guard = Engine::audioEngine()->requestChangesGuard();
 		m_sample = Sample(std::move(sb));
+		m_unavailableSampleFile.clear();
 	}
 	updateLength();
 
@@ -157,7 +159,12 @@ void SampleClip::setSampleFile(const QString& sf)
 	setStartTimeOffset(0);
 	if (!sf.isEmpty())
 	{
-		m_sample = Sample(SampleBuffer::fromFile(sf));
+		auto buffer = SampleBuffer::fromFile(sf);
+		{
+			const auto guard = Engine::audioEngine()->requestChangesGuard();
+			m_sample = Sample(std::move(buffer));
+			m_unavailableSampleFile = m_sample.buffer()->empty() ? sf : QString{};
+		}
 		updateLength();
 	}
 	else
@@ -293,7 +300,7 @@ void SampleClip::saveSettings( QDomDocument & _doc, QDomElement & _this )
 	_this.setAttribute( "src", sampleFile() );
 	_this.setAttribute( "off", startTimeOffset() );
 	_this.setAttribute("autoresize", QString::number(getAutoResize()));
-	if( sampleFile() == "" )
+	if (m_sample.sampleFile().isEmpty())
 	{
 		QString s;
 		_this.setAttribute("data", m_sample.toBase64());
@@ -316,6 +323,7 @@ void SampleClip::saveSettings( QDomDocument & _doc, QDomElement & _this )
 
 void SampleClip::loadSettings( const QDomElement & _this )
 {
+	m_unavailableSampleFile.clear();
 	if( _this.attribute( "pos" ).toInt() >= 0 )
 	{
 		movePosition( _this.attribute( "pos" ).toInt() );
@@ -327,10 +335,18 @@ void SampleClip::loadSettings( const QDomElement & _this )
 		{
 			setSampleFile(srcFile);
 		}
-		else { Engine::getSong()->collectError(QString("%1: %2").arg(tr("Sample not found"), srcFile)); }
+		else
+		{
+			{
+				const auto guard = Engine::audioEngine()->requestChangesGuard();
+				m_sample = Sample{};
+				m_unavailableSampleFile = srcFile;
+			}
+			Engine::getSong()->collectError(QString("%1: %2").arg(tr("Sample not found"), srcFile));
+		}
 	}
 
-	if( sampleFile().isEmpty() && _this.hasAttribute( "data" ) )
+	if (m_sample.sampleFile().isEmpty() && _this.hasAttribute("data"))
 	{
 		auto sampleRate = _this.hasAttribute("sample_rate") ? _this.attribute("sample_rate").toInt() :
 			Engine::audioEngine()->outputSampleRate();

@@ -99,6 +99,8 @@ protected:
 
 private:
 	Sample m_sample;
+	// Preserve an intended file link when no file-backed buffer could be loaded.
+	QString m_unavailableSampleFile;
 	BoolModel m_recordModel;
 	bool m_isPlaying;
 	int m_startFrameOffset;
