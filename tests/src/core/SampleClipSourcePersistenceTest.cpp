@@ -131,6 +131,18 @@ private slots:
 		QVERIFY(restored.sampleFile().isEmpty());
 		QCOMPARE(restored.sample().sampleSize(), frames);
 	}
+	void refreshFromNativeReferenceKeepsOwnedSourceIdentity()
+	{
+		QTemporaryDir directory;
+		lmms::SampleTrack track(lmms::Engine::getSong());
+		lmms::SampleClip clip(&track);
+		clip.setSampleBuffer(std::make_shared<const lmms::SampleBuffer>(
+			std::vector<lmms::SampleFrame>(4), 44100, directory.filePath("missing.wav")));
+		clip.setSampleFile(clip.sampleFile());
+		QCOMPARE(clip.sample().sampleSize(), size_t(0));
+		QCOMPARE(clip.sampleFile(), directory.filePath("missing.wav"));
+		QCOMPARE(save(clip).attribute("src"), directory.filePath("missing.wav"));
+	}
 	void explicitBufferReplacementReturnsToEmbeddedBehavior()
 	{
 		QTemporaryDir directory;

@@ -167,8 +167,10 @@ void SampleClip::setSampleFile(const QString& sf)
 	setSampleFileImpl(sf, {});
 }
 
-void SampleClip::setSampleFileImpl(const QString& sf, const QByteArray& expectedDigest)
+void SampleClip::setSampleFileImpl(const QString& sourceFile, const QByteArray& expectedDigest)
 {
+	// A caller may pass sampleFile(); own the name before replacing its buffer.
+	const auto sf = sourceFile;
 	// Remove any prior offset in the clip
 	setStartTimeOffset(0);
 	if (!sf.isEmpty())
