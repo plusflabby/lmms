@@ -59,6 +59,7 @@ public:
 		quint64 decodedBytes = 0;
 		int channels = 0;
 		int sampleRate = 0;
+		QByteArray sourceSha256;
 	};
 	struct PcmWaveAdmission
 	{
@@ -71,8 +72,10 @@ public:
 		PcmWaveInfo info;
 		std::optional<Result> sample;
 	};
-	// Fixed input scratch and header, in addition to the decoded SampleFrame vector.
-	static constexpr quint64 PcmWaveScratchBytes = 4096 + 44;
+	// Source-sized allocation budget: decoded vector plus fixed input/header/digest payload.
+	// Constant Qt/device/allocator bookkeeping is separate from these PCM buffer bytes.
+	static constexpr quint64 PcmWaveScratchBytes = 4096 + 44 + 32;
+	static LMMS_EXPORT PcmWaveLimits configuredImportLimits();
 	static LMMS_EXPORT PcmWaveAdmission admitPcmWave(const QByteArray& header, quint64 fileBytes, const PcmWaveLimits& limits);
 	static LMMS_EXPORT PcmWaveResult decodePcmWave(QIODevice& source, const PcmWaveLimits& limits);
 

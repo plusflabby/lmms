@@ -25,6 +25,8 @@
 #ifndef LMMS_SAMPLE_CLIP_H
 #define LMMS_SAMPLE_CLIP_H
 
+#include <QByteArray>
+
 #include <memory>
 #include "Clip.h"
 #include "Sample.h"
@@ -58,6 +60,8 @@ public:
 
 	const QString& sampleFile() const;
 	bool hasSampleFileLoaded(const QString & filename) const;
+	const QString& sourceLoadError() const { return m_sourceLoadError; }
+	bool usesBoundedSampleSource() const { return m_boundedSampleSource; }
 
 	void saveSettings( QDomDocument & _doc, QDomElement & _parent ) override;
 	void loadSettings( const QDomElement & _this ) override;
@@ -98,9 +102,13 @@ protected:
 	SampleClip( const SampleClip& orig );
 
 private:
+	void setSampleFileImpl(const QString& source, const QByteArray& expectedDigest);
 	Sample m_sample;
 	// Preserve an intended file link when no file-backed buffer could be loaded.
 	QString m_unavailableSampleFile;
+	QString m_sourceLoadError;
+	QByteArray m_boundedSourceDigest;
+	bool m_boundedSampleSource = false;
 	BoolModel m_recordModel;
 	bool m_isPlaying;
 	int m_startFrameOffset;
