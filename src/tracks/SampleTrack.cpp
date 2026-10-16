@@ -81,6 +81,7 @@ bool SampleTrack::play( const TimePos & _start, const f_cnt_t _frames,
 	if( _clip_num >= 0 )
 	{
 		auto sClip = dynamic_cast<SampleClip*>(getClip(_clip_num));
+		if (sClip->hasAudioSourceWindow()) return false;
 
 		if (_start > sClip->length())
 		{
@@ -108,6 +109,7 @@ bool SampleTrack::play( const TimePos & _start, const f_cnt_t _frames,
 		{
 			Clip * clip = getClip( i );
 			auto sClip = dynamic_cast<SampleClip*>(clip);
+			if (sClip->hasAudioSourceWindow()) { sClip->setIsPlaying(false); continue; }
 
 			if( _start >= sClip->startPosition() && _start < sClip->endPosition() )
 			{

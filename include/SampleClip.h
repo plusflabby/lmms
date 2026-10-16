@@ -30,6 +30,7 @@
 #include <memory>
 #include "Clip.h"
 #include "Sample.h"
+#include "AudioSourceWindow.h"
 #include "AudioImportPolicy.h"
 
 namespace lmms
@@ -49,6 +50,7 @@ class SampleClipView;
 class LMMS_EXPORT SampleClip : public Clip
 {
 	Q_OBJECT
+	Q_PROPERTY(QString audioWindowStatus READ audioWindowStatus NOTIFY audioWindowStatusChanged)
 	mapPropertyFromModel(bool,isRecord,setRecord,m_recordModel);
 public:
 	SampleClip(Track* track, Sample sample, bool isPlaying);
@@ -64,6 +66,9 @@ public:
 	bool hasSampleFileLoaded(const QString & filename) const;
 	const QString& sourceLoadError() const { return m_sourceLoadError; }
 	bool usesBoundedSampleSource() const { return m_boundedSampleSource; }
+	bool hasAudioSourceWindow() const { return m_audioWindowStorage.kind != AudioWindowStorageKind::Legacy; }
+	const AudioWindowStorage& audioWindowStorage() const { return m_audioWindowStorage; }
+	QString audioWindowStatus() const;
 	QString adoptAuthorizedAudio(std::unique_ptr<AudioImportPolicy::Prepared> audio);
 	const QByteArray& sourceFileIdentity() const { return m_boundedSourceIdentity; }
 	const QByteArray& expectedSourceDigest() const { return m_boundedSourceDigest; }
@@ -120,6 +125,8 @@ private:
 	bool m_invalidSourceIdentity = false;
 	std::optional<SampleDecoder::PcmWaveInfo> m_sourceInfo;
 	bool m_boundedSampleSource = false;
+	AudioWindowStorage m_audioWindowStorage;
+	std::shared_ptr<AudioWindowPlaybackGuard> m_audioWindowGuard = std::make_shared<AudioWindowPlaybackGuard>();
 	BoolModel m_recordModel;
 	bool m_isPlaying;
 	int m_startFrameOffset;
@@ -128,6 +135,7 @@ private:
 
 
 signals:
+	void audioWindowStatusChanged(const QString& code);
 	void sampleChanged();
 	void wasReversed();
 } ;

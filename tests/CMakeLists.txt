@@ -5,6 +5,7 @@ set(CMAKE_INCLUDE_CURRENT_DIR ON)
 set(CMAKE_AUTOMOC ON)
 
 set(LMMS_TESTS
+	src/core/AudioSourceWindowPersistenceTest.cpp
 	src/plugins/AiBridgeAudioRangeNativeTest.cpp
 	src/core/AudioFileAuthorizationTest.cpp
 	src/core/AudioImportPolicyTest.cpp

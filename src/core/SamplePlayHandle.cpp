@@ -58,6 +58,7 @@ SamplePlayHandle::SamplePlayHandle( const QString& sampleFile ) :
 SamplePlayHandle::SamplePlayHandle( SampleClip* clip ) :
 	SamplePlayHandle(&clip->sample(), false)
 {
+	m_blockedAudioWindow = clip->hasAudioSourceWindow();
 	m_track = clip->getTrack();
 	setAudioBusHandle(((SampleTrack *)clip->getTrack())->audioBusHandle());
 }
@@ -136,6 +137,7 @@ bool SamplePlayHandle::isFromTrack( const Track * _track ) const
 
 f_cnt_t SamplePlayHandle::totalFrames() const
 {
+	if (m_blockedAudioWindow) return 0;
 	return (m_sample->endFrame() - m_sample->startFrame()) *
 			(static_cast<float>(Engine::audioEngine()->outputSampleRate()) / m_sample->sampleRate());
 }

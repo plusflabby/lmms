@@ -87,9 +87,14 @@ SampleClip::SampleClip(const SampleClip& orig, Track* target) :
 	m_invalidSourceIdentity(orig.m_invalidSourceIdentity),
 	m_sourceInfo(orig.m_sourceInfo),
 	m_boundedSampleSource(orig.m_boundedSampleSource),
+	m_audioWindowStorage(orig.m_audioWindowStorage),
 	m_isPlaying(false),
 	m_startFrameOffset(orig.m_startFrameOffset)
 {
+	if (m_audioWindowStorage.kind == AudioWindowStorageKind::InvalidMetadata)
+	{
+		m_audioWindowStorage.retainedInvalidXml = orig.m_audioWindowStorage.retainedInvalidXml.cloneNode(true).toDocument();
+	}
 	// we need to receive bpm-change-events, because then we have to
 	// change length of this Clip
 	connect(Engine::getSong(), &Song::tempoChanged, this, &SampleClip::tempoChanged, Qt::DirectConnection);
@@ -146,6 +151,19 @@ const QString& SampleClip::sampleFile() const
 	return m_unavailableSampleFile.isEmpty() ? m_sample.sampleFile() : m_unavailableSampleFile;
 }
 
+QString SampleClip::audioWindowStatus() const
+{
+	if (!hasAudioSourceWindow()) return QStringLiteral("ok");
+	if (m_audioWindowStorage.kind == AudioWindowStorageKind::InvalidMetadata) return m_audioWindowStorage.parseCode;
+	if (!m_sourceLoadError.isEmpty()) return m_sourceLoadError;
+	if (!m_boundedSampleSource || !m_sourceInfo) return QStringLiteral("unsupported_audio_operation");
+	const auto& w = *m_audioWindowStorage.value;
+	if (m_sourceInfo->frames != quint64(w.sourceFrameCount) || m_sourceInfo->sampleRate != w.sourceRate)
+		return QStringLiteral("audio_source_changed");
+	// Persistence ships fail-closed until independent renderer/scheduler gates pass.
+	return QStringLiteral("unsupported_audio_operation");
+}
+
 bool SampleClip::hasSampleFileLoaded(const QString & filename) const
 {
 	return m_sample.sampleFile() == filename;
@@ -153,6 +171,7 @@ bool SampleClip::hasSampleFileLoaded(const QString & filename) const
 
 void SampleClip::setSampleBuffer(std::shared_ptr<const SampleBuffer> sb)
 {
+	if (hasAudioSourceWindow()) return;
 	{
 		const auto guard = Engine::audioEngine()->requestChangesGuard();
 		m_sample = Sample(std::move(sb));
@@ -171,6 +190,7 @@ void SampleClip::setSampleBuffer(std::shared_ptr<const SampleBuffer> sb)
 
 void SampleClip::setSampleFile(const QString& sf)
 {
+	if (hasAudioSourceWindow()) return;
 	// An explicit source replacement establishes a new expected recording.
 	if (!sf.isEmpty()) m_invalidSourceIdentity = false;
 	setSampleFileImpl(sf, {});
@@ -178,6 +198,7 @@ void SampleClip::setSampleFile(const QString& sf)
 
 QString SampleClip::adoptAuthorizedAudio(std::unique_ptr<AudioImportPolicy::Prepared> audio)
 {
+	if (hasAudioSourceWindow()) return QStringLiteral("unsupported_audio_operation");
 	if (!audio || !audio->m_buffer) return QStringLiteral("unsupported_audio_operation");
 	if (!audio->isCurrent()) return QStringLiteral("plan_stale");
 	setStartTimeOffset(0);
@@ -298,6 +319,7 @@ void SampleClip::setIsPlaying(bool isPlaying)
 
 void SampleClip::updateLength()
 {
+	if (hasAudioSourceWindow()) { emit sampleChanged(); return; }
 	// If the clip has already been manually resized, don't automatically resize it.
 	if (getAutoResize())
 	{
@@ -316,6 +338,13 @@ void SampleClip::updateLength()
 
 void SampleClip::tempoChanged()
 {
+	if (hasAudioSourceWindow())
+	{
+		m_audioWindowGuard->epoch.fetch_add(1, std::memory_order_acq_rel);
+		emit audioWindowStatusChanged(audioWindowStatus());
+		emit sampleChanged();
+		return;
+	}
 	Clip::setStartTimeOffset(std::round(1.0f * m_startFrameOffset / Engine::framesPerTick()));
 	updateLength();
 	emit sampleChanged();
@@ -402,6 +431,7 @@ void SampleClip::saveSettings( QDomDocument & _doc, QDomElement & _this )
 		_this.setAttribute("reversed", "true");
 	}
 	// TODO: start- and end-frame
+	writeAudioWindow(m_audioWindowStorage, _doc, _this);
 }
 
 
@@ -409,9 +439,14 @@ void SampleClip::saveSettings( QDomDocument & _doc, QDomElement & _this )
 
 void SampleClip::loadSettings( const QDomElement & _this )
 {
+	{
+		const auto guard = Engine::audioEngine()->requestChangesGuard();
+		m_audioWindowGuard->epoch.fetch_add(1, std::memory_order_acq_rel);
+		m_audioWindowStorage = parseAudioWindow(_this);
+	}
 	m_unavailableSampleFile.clear();
 	m_sourceLoadError.clear();
-	m_boundedSampleSource = _this.hasAttribute("bounded_source");
+	m_boundedSampleSource = hasAudioSourceWindow() || _this.hasAttribute("bounded_source");
 	m_boundedSourceDigest.clear();
 	m_boundedSourceIdentity.clear(); m_invalidSourceIdentity = false; m_sourceInfo.reset();
 	if (m_boundedSampleSource && _this.hasAttribute("source_file_id"))
@@ -444,7 +479,10 @@ void SampleClip::loadSettings( const QDomElement & _this )
 
 	if (const auto srcFile = _this.attribute("src"); !srcFile.isEmpty())
 	{
-		if (m_boundedSampleSource && (_this.attribute("bounded_source") != QStringLiteral("1") || invalidFingerprint || m_invalidSourceIdentity))
+		const bool invalidWindowAdmission = hasAudioSourceWindow()
+			&& (m_audioWindowStorage.kind == AudioWindowStorageKind::InvalidMetadata
+				|| !_this.hasAttribute("source_file_id") || !_this.hasAttribute("source_sha256"));
+		if (invalidWindowAdmission || (m_boundedSampleSource && (_this.attribute("bounded_source") != QStringLiteral("1") || invalidFingerprint || m_invalidSourceIdentity)))
 		{
 			const auto guard = Engine::audioEngine()->requestChangesGuard();
 			m_sample = Sample{};
@@ -500,6 +538,12 @@ void SampleClip::loadSettings( const QDomElement & _this )
 	{
 		emit sampleChanged();
 		playbackPositionChanged();
+	}
+	if (hasAudioSourceWindow())
+	{
+		const auto code = audioWindowStatus();
+		Engine::getSong()->collectError(tr("Audio range unavailable: %1").arg(code));
+		emit audioWindowStatusChanged(code);
 	}
 
 }
