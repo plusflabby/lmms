@@ -15,11 +15,17 @@ struct AudioSourceWindowV1
 	qint32 sourceRate=0, referenceTempoBpm=0, referenceOutputRate=0;
 	qint32 ticksPerBeat=0, framesPerTick=0, lengthTicks=0, offsetTicks=0;
 };
-enum class AudioWindowStorageKind { Legacy, V1, InvalidMetadata };
+struct AudioSourceWindowV2
+{
+	AudioSourceWindowV1 base;
+	qint64 referenceEndFrame=0;
+};
+enum class AudioWindowStorageKind { Legacy, V1, V2, InvalidMetadata };
 struct AudioWindowStorage
 {
 	AudioWindowStorageKind kind=AudioWindowStorageKind::Legacy;
 	std::optional<AudioSourceWindowV1> value;
+	std::optional<AudioSourceWindowV2> valueV2;
 	QDomDocument retainedInvalidXml;
 	QString parseCode=QStringLiteral("ok");
 };
@@ -39,12 +45,14 @@ struct AudioWindowEligibility
 {
 	QString code;
 	std::optional<AudioSourceWindowV1> window;
+	std::optional<AudioSourceWindowV2> windowV2;
 };
 struct AudioWindowPlaybackGuard { std::atomic<quint64> epoch{1}; };
 
 LMMS_EXPORT AudioWindowStorage parseAudioWindow(const QDomElement& sampleClip);
 LMMS_EXPORT void writeAudioWindow(const AudioWindowStorage&, QDomDocument&, QDomElement& sampleClip);
 LMMS_EXPORT QString validateAudioWindowRecord(const AudioSourceWindowV1&);
+LMMS_EXPORT QString validateAudioWindowRecord(const AudioSourceWindowV2&);
 // The shared runtime predicate/conversion is implemented only at the scheduling gate.
 LMMS_EXPORT AudioWindowEligibility evaluateAudioWindow(const AudioWindowStorage&, const AudioWindowGeometry&,
 	const AudioWindowWorld&, const QString& sourceCode, const std::optional<SampleDecoder::PcmWaveInfo>&);

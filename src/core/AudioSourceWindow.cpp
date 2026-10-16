@@ -37,6 +37,14 @@ QString validateAudioWindowRecord(const AudioSourceWindowV1& w)
 	return QStringLiteral("ok");
 }
 
+QString validateAudioWindowRecord(const AudioSourceWindowV2& w)
+{
+	if(validateAudioWindowRecord(w.base)!="ok" || w.referenceEndFrame<w.base.outFrame
+		|| w.referenceEndFrame>w.base.sourceFrameCount
+		|| (w.referenceEndFrame-w.base.phaseOriginFrame)%w.base.framesPerTick) return Invalid;
+	return QStringLiteral("ok");
+}
+
 AudioWindowStorage parseAudioWindow(const QDomElement& clip)
 {
 	AudioWindowStorage result;
@@ -54,14 +62,16 @@ AudioWindowStorage parseAudioWindow(const QDomElement& clip)
 	if(!count) return result;
 	result.kind=AudioWindowStorageKind::InvalidMetadata; result.parseCode=Invalid;
 	if(count!=1) return result;
-	const QStringList names{"version","phase","in","out","origin","source_frames","source_rate","reference_bpm",
+	const bool v2=node.attribute("version")=="2" && node.attribute("phase")=="linear_equal_ref256_v2";
+	const bool v1=node.attribute("version")=="1" && node.attribute("phase")=="linear_equal_v1";
+	if(!v1 && !v2) { result.parseCode=Unsupported; return result; }
+	QStringList names{"version","phase","in","out","origin","source_frames","source_rate","reference_bpm",
 		"reference_output_rate","ticks_per_beat","frames_per_tick","length_ticks","offset_ticks"};
+	if(v2) names.append("reference_end");
 	if(node.attributes().size()!=names.size()) return result;
 	for(const auto& name:names) if(!node.hasAttribute(name)) return result;
 	for(auto child=node.firstChild();!child.isNull();child=child.nextSibling())
 		if(child.isElement() || (!child.isComment() && !child.nodeValue().trimmed().isEmpty())) return result;
-	if(node.attribute("version")!="1" || node.attribute("phase")!="linear_equal_v1")
-	{ result.parseCode=Unsupported; return result; }
 	AudioSourceWindowV1 w;
 	if(!integer(node,"in",w.inFrame) || !integer(node,"out",w.outFrame) || !integer(node,"origin",w.phaseOriginFrame)
 		|| !integer(node,"source_frames",w.sourceFrameCount) || !integer(node,"source_rate",w.sourceRate)
@@ -69,7 +79,14 @@ AudioWindowStorage parseAudioWindow(const QDomElement& clip)
 		|| !integer(node,"ticks_per_beat",w.ticksPerBeat) || !integer(node,"frames_per_tick",w.framesPerTick)
 		|| !integer(node,"length_ticks",w.lengthTicks) || !integer(node,"offset_ticks",w.offsetTicks)) return result;
 	if(validateAudioWindowRecord(w)!="ok") return result;
-	result.kind=AudioWindowStorageKind::V1; result.value=w; result.parseCode="ok";
+	if(v2)
+	{
+		AudioSourceWindowV2 record{w,0};
+		if(!integer(node,"reference_end",record.referenceEndFrame) || validateAudioWindowRecord(record)!="ok") return result;
+		result.kind=AudioWindowStorageKind::V2; result.valueV2=record;
+	}
+	else { result.kind=AudioWindowStorageKind::V1; result.value=w; }
+	result.parseCode="ok";
 	result.retainedInvalidXml=QDomDocument{}; return result;
 }
 
@@ -84,8 +101,11 @@ void writeAudioWindow(const AudioWindowStorage& storage,QDomDocument& doc,QDomEl
 			clip.appendChild(doc.importNode(child,true));
 		return;
 	}
-	const auto& w=storage.value.value();
-	auto node=doc.createElement(Tag); node.setAttribute("version","1"); node.setAttribute("phase","linear_equal_v1");
+	const bool v2=storage.kind==AudioWindowStorageKind::V2;
+	const auto& w=v2 ? storage.valueV2.value().base : storage.value.value();
+	auto node=doc.createElement(Tag); node.setAttribute("version",v2?"2":"1");
+	node.setAttribute("phase",v2?"linear_equal_ref256_v2":"linear_equal_v1");
+	if(v2) node.setAttribute("reference_end",QString::number(storage.valueV2->referenceEndFrame));
 	node.setAttribute("in",QString::number(w.inFrame)); node.setAttribute("out",QString::number(w.outFrame));
 	node.setAttribute("origin",QString::number(w.phaseOriginFrame)); node.setAttribute("source_frames",QString::number(w.sourceFrameCount));
 	node.setAttribute("source_rate",QString::number(w.sourceRate)); node.setAttribute("reference_bpm",QString::number(w.referenceTempoBpm));

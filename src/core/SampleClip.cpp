@@ -157,7 +157,8 @@ QString SampleClip::audioWindowStatus() const
 	if (m_audioWindowStorage.kind == AudioWindowStorageKind::InvalidMetadata) return m_audioWindowStorage.parseCode;
 	if (!m_sourceLoadError.isEmpty()) return m_sourceLoadError;
 	if (!m_boundedSampleSource || !m_sourceInfo) return QStringLiteral("unsupported_audio_operation");
-	const auto& w = *m_audioWindowStorage.value;
+	const auto& w = m_audioWindowStorage.kind == AudioWindowStorageKind::V2
+		? m_audioWindowStorage.valueV2->base : *m_audioWindowStorage.value;
 	if (m_sourceInfo->frames != quint64(w.sourceFrameCount) || m_sourceInfo->sampleRate != w.sourceRate)
 		return QStringLiteral("audio_source_changed");
 	// Persistence ships fail-closed until independent renderer/scheduler gates pass.
