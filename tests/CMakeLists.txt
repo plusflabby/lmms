@@ -8,6 +8,7 @@ set(LMMS_TESTS
 	src/core/AudioSourceWindowPersistenceTest.cpp
 	src/core/AudioWindowPlaybackTest.cpp
 	src/core/AudioWindowEndpointContextTest.cpp
+	src/core/AudioWindowTerminalEligibilityTest.cpp
 	src/plugins/AiBridgeAudioRangeNativeTest.cpp
 	src/core/AudioFileAuthorizationTest.cpp
 	src/core/AudioImportPolicyTest.cpp
