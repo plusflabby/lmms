@@ -6,6 +6,7 @@ set(CMAKE_AUTOMOC ON)
 
 set(LMMS_TESTS
 	src/core/AudioSourceWindowPersistenceTest.cpp
+	src/core/AudioWindowPlaybackTest.cpp
 	src/plugins/AiBridgeAudioRangeNativeTest.cpp
 	src/core/AudioFileAuthorizationTest.cpp
 	src/core/AudioImportPolicyTest.cpp
