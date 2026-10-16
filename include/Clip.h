@@ -162,6 +162,7 @@ signals:
 
 protected:
 	Clip(const Clip& other);
+	Clip(const Clip& other, Track* target);
 
 private:
 	Track * m_track;

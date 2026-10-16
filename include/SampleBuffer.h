@@ -58,6 +58,8 @@ public:
 
 	auto audioFile() const -> const QString& { return m_audioFile; }
 	auto sampleRate() const -> sample_rate_t { return m_sampleRate; }
+	// Identifies cached content within this process without exposing an address.
+	auto contentRevision() const -> quint64 { return m_contentRevision; }
 
 	auto begin() -> iterator { return m_data.begin(); }
 	auto end() -> iterator { return m_data.end(); }
@@ -88,6 +90,8 @@ public:
 		const QString& str, int sampleRate = Engine::audioEngine()->outputSampleRate());
 
 private:
+	static quint64 nextContentRevision();
+	quint64 m_contentRevision = nextContentRevision();
 	std::vector<SampleFrame> m_data;
 	QString m_audioFile;
 	sample_rate_t m_sampleRate = Engine::audioEngine()->outputSampleRate();

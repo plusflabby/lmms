@@ -26,11 +26,15 @@
 #define LMMS_SAMPLE_DECODER_H
 
 #include <QString>
+#include <QByteArray>
+
+class QIODevice;
 #include <optional>
 #include <string>
 #include <vector>
 
 #include "SampleFrame.h"
+#include "lmms_export.h"
 
 namespace lmms {
 class SampleDecoder
@@ -41,6 +45,39 @@ public:
 		std::vector<SampleFrame> data;
 		int sampleRate;
 	};
+
+	// Narrow import admission; zero budgets fail closed. Legacy decode is unchanged.
+	struct PcmWaveLimits
+	{
+		quint64 maxFileBytes = 0;
+		quint64 maxDecodedBytes = 0;
+	};
+	struct PcmWaveInfo
+	{
+		quint64 frames = 0;
+		quint64 fileBytes = 0;
+		quint64 decodedBytes = 0;
+		int channels = 0;
+		int sampleRate = 0;
+		QByteArray sourceSha256;
+	};
+	struct PcmWaveAdmission
+	{
+		QString code;
+		PcmWaveInfo info;
+	};
+	struct PcmWaveResult
+	{
+		QString code;
+		PcmWaveInfo info;
+		std::optional<Result> sample;
+	};
+	// Source-sized allocation budget: decoded vector plus fixed input/header/digest payload.
+	// Constant Qt/device/allocator bookkeeping is separate from these PCM buffer bytes.
+	static constexpr quint64 PcmWaveScratchBytes = 4096 + 44 + 32;
+	static LMMS_EXPORT PcmWaveLimits configuredImportLimits();
+	static LMMS_EXPORT PcmWaveAdmission admitPcmWave(const QByteArray& header, quint64 fileBytes, const PcmWaveLimits& limits);
+	static LMMS_EXPORT PcmWaveResult decodePcmWave(QIODevice& source, const PcmWaveLimits& limits);
 
 	struct AudioType
 	{

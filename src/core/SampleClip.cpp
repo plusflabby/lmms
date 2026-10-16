@@ -30,6 +30,8 @@
 #include "PatternStore.h"
 #include "PathUtil.h"
 #include "SampleClipView.h"
+#include "SampleDecoder.h"
+#include <QFile>
 #include "SampleTrack.h"
 #include "Song.h"
 
@@ -73,16 +75,21 @@ SampleClip::SampleClip(Track* track)
 {
 }
 
-SampleClip::SampleClip(const SampleClip& orig) :
-	Clip(orig),
+SampleClip::SampleClip(const SampleClip& orig) : SampleClip(orig,orig.getTrack()) {}
+
+SampleClip::SampleClip(const SampleClip& orig, Track* target) :
+	Clip(orig,target),
 	m_sample(std::move(orig.m_sample)),
-	m_isPlaying(orig.m_isPlaying),
+	m_unavailableSampleFile(orig.m_unavailableSampleFile),
+	m_sourceLoadError(orig.m_sourceLoadError),
+	m_boundedSourceDigest(orig.m_boundedSourceDigest),
+	m_boundedSourceIdentity(orig.m_boundedSourceIdentity),
+	m_invalidSourceIdentity(orig.m_invalidSourceIdentity),
+	m_sourceInfo(orig.m_sourceInfo),
+	m_boundedSampleSource(orig.m_boundedSampleSource),
+	m_isPlaying(false),
 	m_startFrameOffset(orig.m_startFrameOffset)
 {
-	saveJournallingState( false );
-	setSampleFile( "" );
-	restoreJournallingState();
-
 	// we need to receive bpm-change-events, because then we have to
 	// change length of this Clip
 	connect(Engine::getSong(), &Song::tempoChanged, this, &SampleClip::tempoChanged, Qt::DirectConnection);
@@ -118,6 +125,12 @@ SampleClip::~SampleClip()
 	}
 }
 
+SampleClip* SampleClip::cloneToTrack(SampleTrack* target) const
+{
+	if(!target || !getTrack() || target->trackContainer()!=getTrack()->trackContainer()) return nullptr;
+	return new SampleClip(*this,target);
+}
+
 
 
 
@@ -130,7 +143,7 @@ void SampleClip::changeLength( const TimePos & _length )
 
 const QString& SampleClip::sampleFile() const
 {
-	return m_sample.sampleFile();
+	return m_unavailableSampleFile.isEmpty() ? m_sample.sampleFile() : m_unavailableSampleFile;
 }
 
 bool SampleClip::hasSampleFileLoaded(const QString & filename) const
@@ -143,6 +156,11 @@ void SampleClip::setSampleBuffer(std::shared_ptr<const SampleBuffer> sb)
 	{
 		const auto guard = Engine::audioEngine()->requestChangesGuard();
 		m_sample = Sample(std::move(sb));
+		m_unavailableSampleFile.clear();
+		m_sourceLoadError.clear();
+		m_boundedSourceDigest.clear();
+		m_boundedSourceIdentity.clear(); m_invalidSourceIdentity = false; m_sourceInfo.reset();
+		m_boundedSampleSource = false;
 	}
 	updateLength();
 
@@ -153,11 +171,67 @@ void SampleClip::setSampleBuffer(std::shared_ptr<const SampleBuffer> sb)
 
 void SampleClip::setSampleFile(const QString& sf)
 {
+	// An explicit source replacement establishes a new expected recording.
+	if (!sf.isEmpty()) m_invalidSourceIdentity = false;
+	setSampleFileImpl(sf, {});
+}
+
+QString SampleClip::adoptAuthorizedAudio(std::unique_ptr<AudioImportPolicy::Prepared> audio)
+{
+	if (!audio || !audio->m_buffer) return QStringLiteral("unsupported_audio_operation");
+	if (!audio->isCurrent()) return QStringLiteral("plan_stale");
+	setStartTimeOffset(0);
+	{
+		const auto guard = Engine::audioEngine()->requestChangesGuard();
+		m_sample = Sample(audio->m_buffer);
+		m_boundedSampleSource = true; m_invalidSourceIdentity = false;
+		m_boundedSourceDigest = audio->m_info.sourceSha256; m_boundedSourceIdentity = audio->identity();
+		m_sourceInfo = audio->m_info; m_unavailableSampleFile.clear(); m_sourceLoadError.clear();
+	}
+	updateLength(); emit sampleChanged(); emit playbackPositionChanged();
+	Engine::getSong()->setModified();
+	return QStringLiteral("ok");
+}
+
+void SampleClip::setSampleFileImpl(const QString& sourceFile, const QByteArray& expectedDigest, const QByteArray& expectedIdentity)
+{
+	std::unique_ptr<AudioImportPolicy::Prepared> authorized;
+	// A caller may pass sampleFile(); own the name before replacing its buffer.
+	const auto sf = sourceFile;
 	// Remove any prior offset in the clip
 	setStartTimeOffset(0);
 	if (!sf.isEmpty())
 	{
-		m_sample = Sample(SampleBuffer::fromFile(sf));
+		m_sourceLoadError.clear();
+		m_boundedSourceDigest = expectedDigest;
+		m_boundedSourceIdentity = expectedIdentity; m_sourceInfo.reset();
+		auto buffer = SampleBuffer::emptyBuffer();
+		if (m_boundedSampleSource)
+		{
+			auto prepared = AudioImportPolicy::configured().prepare(PathUtil::toAbsolute(sf), expectedDigest, expectedIdentity);
+			if (prepared.audio && prepared.audio->isCurrent())
+			{
+				m_boundedSourceDigest = prepared.audio->m_info.sourceSha256;
+				m_boundedSourceIdentity = prepared.audio->identity(); m_sourceInfo = prepared.audio->m_info;
+				buffer = prepared.audio->m_buffer;
+				authorized = std::move(prepared.audio);
+			}
+			else m_sourceLoadError = prepared.audio ? QStringLiteral("plan_stale") : prepared.code;
+			if (!m_sourceLoadError.isEmpty())
+			{
+				Engine::getSong()->collectError(tr("Audio source unavailable: %1").arg(m_sourceLoadError));
+			}
+		}
+		else
+		{
+			buffer = SampleBuffer::fromFile(sf);
+			if (buffer->empty()) { m_sourceLoadError = QStringLiteral("audio_decode_failed"); }
+		}
+		{
+			const auto guard = Engine::audioEngine()->requestChangesGuard();
+			m_sample = Sample(std::move(buffer));
+			m_unavailableSampleFile = m_sample.buffer()->empty() ? sf : QString{};
+		}
 		updateLength();
 	}
 	else
@@ -293,7 +367,26 @@ void SampleClip::saveSettings( QDomDocument & _doc, QDomElement & _this )
 	_this.setAttribute( "src", sampleFile() );
 	_this.setAttribute( "off", startTimeOffset() );
 	_this.setAttribute("autoresize", QString::number(getAutoResize()));
-	if( sampleFile() == "" )
+	_this.removeAttribute("bounded_source");
+	_this.removeAttribute("source_sha256");
+	_this.removeAttribute("source_file_id");
+	if (m_boundedSampleSource)
+	{
+		_this.setAttribute("bounded_source", "1");
+		_this.removeAttribute("data");
+		if (!m_boundedSourceIdentity.isEmpty()) _this.setAttribute("source_file_id",QString::fromLatin1(m_boundedSourceIdentity.toHex()));
+		else if (m_invalidSourceIdentity) _this.setAttribute("source_file_id", "");
+		if (!m_boundedSourceDigest.isEmpty())
+		{
+			_this.setAttribute("source_sha256", QString::fromLatin1(m_boundedSourceDigest.toHex()));
+		}
+		else if (m_sourceLoadError == QStringLiteral("unsupported_audio_operation"))
+		{
+			// Keep malformed persisted admission quarantined across another save/reload.
+			_this.setAttribute("source_sha256", "");
+		}
+	}
+	if (!m_boundedSampleSource && m_sample.sampleFile().isEmpty())
 	{
 		QString s;
 		_this.setAttribute("data", m_sample.toBase64());
@@ -316,6 +409,34 @@ void SampleClip::saveSettings( QDomDocument & _doc, QDomElement & _this )
 
 void SampleClip::loadSettings( const QDomElement & _this )
 {
+	m_unavailableSampleFile.clear();
+	m_sourceLoadError.clear();
+	m_boundedSampleSource = _this.hasAttribute("bounded_source");
+	m_boundedSourceDigest.clear();
+	m_boundedSourceIdentity.clear(); m_invalidSourceIdentity = false; m_sourceInfo.reset();
+	if (m_boundedSampleSource && _this.hasAttribute("source_file_id"))
+	{
+		const auto text = _this.attribute("source_file_id");
+		m_invalidSourceIdentity = text.size() != 64;
+		for (const auto c : text) if (!QStringLiteral("0123456789abcdefABCDEF").contains(c)) m_invalidSourceIdentity = true;
+		if (!m_invalidSourceIdentity) m_boundedSourceIdentity = QByteArray::fromHex(text.toLatin1());
+	}
+	const auto fingerprint = _this.attribute("source_sha256");
+	bool invalidFingerprint = false;
+	if (m_boundedSampleSource && _this.hasAttribute("source_sha256"))
+	{
+		invalidFingerprint = fingerprint.size() != 64;
+		if (!invalidFingerprint)
+		{
+			for (const auto c : fingerprint)
+			{
+				if (!((c >= QChar('0') && c <= QChar('9')) || (c >= QChar('a') && c <= QChar('f'))
+					|| (c >= QChar('A') && c <= QChar('F')))) { invalidFingerprint = true; break; }
+			}
+		}
+		if (!invalidFingerprint) { m_boundedSourceDigest = QByteArray::fromHex(fingerprint.toLatin1()); }
+	}
+	const auto expectedDigest = m_boundedSourceDigest;
 	if( _this.attribute( "pos" ).toInt() >= 0 )
 	{
 		movePosition( _this.attribute( "pos" ).toInt() );
@@ -323,14 +444,36 @@ void SampleClip::loadSettings( const QDomElement & _this )
 
 	if (const auto srcFile = _this.attribute("src"); !srcFile.isEmpty())
 	{
-		if (QFileInfo(PathUtil::toAbsolute(srcFile)).exists())
+		if (m_boundedSampleSource && (_this.attribute("bounded_source") != QStringLiteral("1") || invalidFingerprint || m_invalidSourceIdentity))
 		{
-			setSampleFile(srcFile);
+			const auto guard = Engine::audioEngine()->requestChangesGuard();
+			m_sample = Sample{};
+			m_unavailableSampleFile = srcFile;
+			m_sourceLoadError = QStringLiteral("unsupported_audio_operation");
 		}
-		else { Engine::getSong()->collectError(QString("%1: %2").arg(tr("Sample not found"), srcFile)); }
+		else if (m_boundedSampleSource || QFileInfo(PathUtil::toAbsolute(srcFile)).exists())
+		{
+			setSampleFileImpl(srcFile, expectedDigest, m_boundedSourceIdentity);
+		}
+		else
+		{
+			{
+				const auto guard = Engine::audioEngine()->requestChangesGuard();
+				m_sample = Sample{};
+				m_unavailableSampleFile = srcFile;
+				m_sourceLoadError = QStringLiteral("audio_source_missing");
+			}
+			Engine::getSong()->collectError(QString("%1: %2").arg(tr("Sample not found"), srcFile));
+		}
+	}
+	else if (m_boundedSampleSource)
+	{
+		const auto guard = Engine::audioEngine()->requestChangesGuard();
+		m_sample = Sample{};
+		m_sourceLoadError = QStringLiteral("audio_source_missing");
 	}
 
-	if( sampleFile().isEmpty() && _this.hasAttribute( "data" ) )
+	if (!m_boundedSampleSource && m_sample.sampleFile().isEmpty() && _this.hasAttribute("data"))
 	{
 		auto sampleRate = _this.hasAttribute("sample_rate") ? _this.attribute("sample_rate").toInt() :
 			Engine::audioEngine()->outputSampleRate();
@@ -353,6 +496,12 @@ void SampleClip::loadSettings( const QDomElement & _this )
 		m_sample.setReversed(true);
 		emit wasReversed(); // tell SampleClipView to update the view
 	}
+	if (!m_sourceLoadError.isEmpty())
+	{
+		emit sampleChanged();
+		playbackPositionChanged();
+	}
+
 }
 
 

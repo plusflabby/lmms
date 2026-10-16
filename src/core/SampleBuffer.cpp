@@ -27,12 +27,19 @@
 #include <QDebug>
 #include <QMessageBox>
 #include <cstring>
+#include <atomic>
 
 #include "GuiApplication.h"
 #include "PathUtil.h"
 #include "SampleDecoder.h"
 
 namespace lmms {
+
+quint64 SampleBuffer::nextContentRevision()
+{
+	static std::atomic<quint64> revision{0};
+	return revision.fetch_add(1, std::memory_order_relaxed) + 1;
+}
 
 SampleBuffer::SampleBuffer(const SampleFrame* data, size_t numFrames, int sampleRate)
 	: m_data(data, data + numFrames)
@@ -50,6 +57,7 @@ SampleBuffer::SampleBuffer(std::vector<SampleFrame> data, int sampleRate, const 
 void swap(SampleBuffer& first, SampleBuffer& second) noexcept
 {
 	using std::swap;
+	swap(first.m_contentRevision, second.m_contentRevision);
 	swap(first.m_data, second.m_data);
 	swap(first.m_audioFile, second.m_audioFile);
 	swap(first.m_sampleRate, second.m_sampleRate);

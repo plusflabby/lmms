@@ -3,6 +3,15 @@
 #include <QElapsedTimer>
 #include <QJsonDocument>
 #include <QLocalSocket>
+#include <QTemporaryDir>
+#include <QFile>
+#include <QScopeGuard>
+#include <QtEndian>
+#include <cstring>
+#include "ConfigManager.h"
+#include "AudioImportPolicy.h"
+#include "SampleTrack.h"
+#include "SampleClip.h"
 
 #include "AiBridgeIpcServer.h"
 #include "AiBridgeProjectContext.h"
@@ -12,11 +21,57 @@
 #include "Note.h"
 #include "Song.h"
 
+class IpcFailingAudioCopy : public lmms::SampleClip
+{
+public:
+	using SampleClip::SampleClip;
+	mutable int attempts=0;
+	lmms::SampleClip* cloneToTrack(lmms::SampleTrack*) const override {++attempts;return nullptr;}
+};
+
 class AiBridgeIpcServerTest : public QObject
 {
 	Q_OBJECT
 
 private slots:
+	void serializesNativeAudioFailureSlicesAndPostVerificationWithoutReplay()
+	{
+		using namespace lmms;SampleTrack track(Engine::getSong()),target(Engine::getSong());SampleClip first(&track),last(&track);IpcFailingAudioCopy failure(&track);
+		for(auto* clip:{&first,&last,static_cast<SampleClip*>(&failure)}){clip->setSampleBuffer(std::make_shared<const SampleBuffer>(std::vector<SampleFrame>(64),44100));clip->setAutoResize(false);clip->changeLength(40);}
+		first.movePosition(100);failure.movePosition(300);last.movePosition(500);AiBridgeProjectContext ids;
+		AiBridgeIpcServer server(nullptr,"lmms-audio-wire-failure-test");QVERIFY(server.start());QLocalSocket socket;socket.connectToServer(server.endpointName());QVERIFY(socket.waitForConnected(1000));
+		auto call=[&](const QString& action,const QJsonObject& p){socket.write(QJsonDocument(QJsonObject{{"version",2},{"request_id","failure"},{"action",action},{"parameters",p}}).toJson(QJsonDocument::Compact)+'\n');socket.flush();QElapsedTimer timer;timer.start();QByteArray bytes;while(!bytes.endsWith('\n') && timer.elapsed()<3000){QTest::qWait(1);bytes+=socket.readAll();}return QJsonDocument::fromJson(bytes).object();};
+		auto op=[&](SampleClip* clip,const QString& kind,int position){auto id=ids.idForClip(clip);auto read=call("get_audio_clip",{{"clip_id",id}}).value("data").toObject();QJsonObject result{{"operation",kind},{"clip_id",id},{"expected_audio_state_hash",read.value("audio_state_hash")}};if(kind!="delete")result.insert("position_ticks",position);if(kind=="duplicate")result.insert("destination_track_id",ids.idForTrack(&target));return result;};
+		auto result=call("batch_edit_audio_clips",{{"operations",QJsonArray{op(&first,"move",700),op(&failure,"duplicate",100),op(&last,"delete",0)}}});
+		QCOMPARE(result.value("code").toString(),QStringLiteral("partial_failure"));auto data=result.value("data").toObject();QCOMPARE(data.value("applied").toArray(),QJsonArray{0});QCOMPARE(data.value("failed").toArray(),QJsonArray{1});QCOMPARE(data.value("unapplied").toArray(),QJsonArray{2});QCOMPARE(failure.attempts,1);QCOMPARE(first.startPosition().getTicks(),700);QVERIFY(ids.resolveClip(ids.idForClip(&last)));QCOMPARE(target.numOfClips(),0);
+		connect(&first,&Clip::positionChanged,&first,[&]{first.setMuted(true);});
+		result=call("batch_edit_audio_clips",{{"operations",QJsonArray{op(&first,"move",900),op(&last,"delete",0)}}});QCOMPARE(result.value("code").toString(),QStringLiteral("post_verification_failed"));data=result.value("data").toObject();QCOMPARE(data.value("failed").toArray(),QJsonArray{0});QCOMPARE(data.value("unapplied").toArray(),QJsonArray{1});QCOMPARE(first.startPosition().getTicks(),900);QVERIFY(first.isMuted());QVERIFY(!data.value("expected").toArray().isEmpty());QVERIFY(!data.value("observed").toArray().isEmpty());QCOMPARE(failure.attempts,1);
+	}
+	void servesAuthorizedAudioPlansAndNativeMutationsWithoutReplay()
+	{
+		using namespace lmms;
+		QTemporaryDir root(QCoreApplication::applicationDirPath()+"/audio-ipc-XXXXXX");QVERIFY(root.isValid());
+		const QStringList keys{"audio_import_roots","audio_import_max_file_bytes","audio_import_max_decoded_bytes"};QStringList old;
+		for(const auto& key:keys)old<<ConfigManager::inst()->value("aibridge",key,"absent");
+		auto restore=qScopeGuard([&]{for(int i=0;i<keys.size();++i){if(old[i]=="absent")ConfigManager::inst()->deleteValue("aibridge",keys[i]);else ConfigManager::inst()->setValue("aibridge",keys[i],old[i]);}AudioImportPolicy::configured().refresh();});
+		QByteArray wav(88244,0);std::memcpy(wav.data(),"RIFF",4);std::memcpy(wav.data()+8,"WAVEfmt ",8);std::memcpy(wav.data()+36,"data",4);
+		qToLittleEndian<quint32>(88236,wav.data()+4);qToLittleEndian<quint32>(16,wav.data()+16);qToLittleEndian<quint16>(1,wav.data()+20);qToLittleEndian<quint16>(1,wav.data()+22);qToLittleEndian<quint32>(44100,wav.data()+24);qToLittleEndian<quint32>(88200,wav.data()+28);qToLittleEndian<quint16>(2,wav.data()+32);qToLittleEndian<quint16>(16,wav.data()+34);qToLittleEndian<quint32>(88200,wav.data()+40);
+		const auto path=root.filePath("Verse.wav");{QFile f(path);QVERIFY(f.open(QIODevice::WriteOnly|QIODevice::NewOnly));QCOMPARE(f.write(wav),qint64(wav.size()));}
+		ConfigManager::inst()->setValue("aibridge",keys[0],QString::fromUtf8(QJsonDocument(QJsonArray{root.path()}).toJson(QJsonDocument::Compact)));for(int i=1;i<3;++i)ConfigManager::inst()->setValue("aibridge",keys[i],"1000000");
+		AiBridgeIpcServer server(nullptr,"lmms-audio-wire-test");QVERIFY(server.start());QLocalSocket socket;socket.connectToServer(server.endpointName());QVERIFY(socket.waitForConnected(1000));
+		auto call=[&](const QString& action,QJsonObject p){socket.write(QJsonDocument(QJsonObject{{"version",2},{"request_id","audio"},{"action",action},{"parameters",p}}).toJson(QJsonDocument::Compact)+'\n');socket.flush();QElapsedTimer t;t.start();QByteArray bytes;while(!bytes.endsWith('\n') && t.elapsed()<3000){QTest::qWait(1);bytes+=socket.readAll();}return QJsonDocument::fromJson(bytes).object();};
+		auto caps=call("get_audio_capabilities",{});QCOMPARE(caps.value("code").toString(),QStringLiteral("ok"));QVERIFY(caps.value("data").toObject().value("import_roots_configured").toBool());QVERIFY(!QJsonDocument(caps).toJson().contains(root.path().toUtf8()));
+		const auto tracks=Engine::getSong()->tracks().size();QCOMPARE(call("create_audio_track",{{"name","Voice"},{"dry_run",true}}).value("code").toString(),QStringLiteral("ok"));QCOMPARE(Engine::getSong()->tracks().size(),tracks);
+		auto created=call("create_audio_track",{{"name","Voice"}});const auto trackId=created.value("data").toObject().value("track_id").toString();QVERIFY(!trackId.isEmpty());AiBridgeProjectContext ids;auto* track=dynamic_cast<SampleTrack*>(ids.resolveTrack(trackId));QVERIFY(track);auto remove=qScopeGuard([&]{delete track;});
+		QJsonObject imp{{"track_id",trackId},{"path",path},{"position_ticks",3840},{"dry_run",true}};auto preview=call("import_audio_file",imp);QCOMPARE(preview.value("code").toString(),QStringLiteral("ok"));QCOMPARE(track->numOfClips(),0);imp.insert("dry_run",false);auto imported=call("import_audio_file",imp);QCOMPARE(imported.value("code").toString(),QStringLiteral("ok"));QCOMPARE(imported.value("data").toObject().value("preview"),preview.value("data").toObject().value("preview"));
+		const auto id=imported.value("data").toObject().value("clip_id").toString();auto* clip=dynamic_cast<SampleClip*>(ids.resolveClip(id));QVERIFY(clip);QVERIFY(!clip->sourceFileIdentity().isEmpty());
+		auto read=call("get_audio_clip",{{"clip_id",id}}).value("data").toObject();QCOMPARE(read.value("position_ticks").toInt(),3840);QCOMPARE(read.value("sample_rate").toInt(),44100);QCOMPARE(read.value("source_status").toString(),QStringLiteral("available"));
+		QJsonObject move{{"clip_id",id},{"expected_audio_state_hash",read.value("audio_state_hash")},{"position_ticks",5000},{"dry_run",true}};auto movedry=call("move_audio_clip",move);QCOMPARE(movedry.value("code").toString(),QStringLiteral("ok"));QCOMPARE(clip->startPosition().getTicks(),3840);move.insert("dry_run",false);QCOMPARE(call("move_audio_clip",move).value("code").toString(),QStringLiteral("ok"));QCOMPARE(clip->startPosition().getTicks(),5000);QCOMPARE(call("move_audio_clip",move).value("code").toString(),QStringLiteral("clip_state_mismatch"));
+		read=call("get_audio_clip",{{"clip_id",id}}).value("data").toObject();QJsonObject copy{{"clip_id",id},{"expected_audio_state_hash",read.value("audio_state_hash")},{"destination_track_id",trackId},{"position_ticks",5000}};QCOMPARE(call("duplicate_audio_clip",copy).value("code").toString(),QStringLiteral("destination_conflict"));copy.insert("position_ticks",6000);auto copied=call("duplicate_audio_clip",copy);QCOMPARE(copied.value("code").toString(),QStringLiteral("ok"));const auto copiedId=copied.value("data").toObject().value("created_clip_ids").toArray()[0].toString();QVERIFY(copiedId!=id);
+		QJsonObject op{{"operation","move"},{"clip_id",id},{"expected_audio_state_hash",read.value("audio_state_hash")},{"position_ticks",7000}};auto aligned=call("batch_edit_audio_clips",{{"operations",QJsonArray{op}},{"dry_run",true}});QCOMPARE(aligned.value("code").toString(),QStringLiteral("ok"));QCOMPARE(clip->startPosition().getTicks(),5000);auto done=call("batch_edit_audio_clips",{{"operations",QJsonArray{op}}});QCOMPARE(done.value("code").toString(),QStringLiteral("ok"));QCOMPARE(done.value("data").toObject().value("preview"),aligned.value("data").toObject().value("preview"));QCOMPARE(clip->startPosition().getTicks(),7000);
+		const auto copyRead=call("get_audio_clip",{{"clip_id",copiedId}}).value("data").toObject();auto deleted=call("delete_audio_clip",{{"clip_id",copiedId},{"expected_audio_state_hash",copyRead.value("audio_state_hash")}});QCOMPARE(deleted.value("code").toString(),QStringLiteral("ok"));QVERIFY(!ids.resolveClip(copiedId));QCOMPARE(call("get_audio_clip",{{"clip_id",copiedId}}).value("code").toString(),QStringLiteral("stale_id"));
+		imp.insert("path","G:/unauthorized-private.wav");auto denied=call("import_audio_file",imp);QCOMPARE(denied.value("code").toString(),QStringLiteral("import_path_denied"));QVERIFY(!QJsonDocument(denied).toJson().contains("unauthorized-private"));QCOMPARE(track->numOfClips(),1);QFile f(path);QVERIFY(f.open(QIODevice::ReadOnly));QCOMPARE(f.readAll(),wav);
+	}
 	void initTestCase()
 	{
 		lmms::Engine::init(true);

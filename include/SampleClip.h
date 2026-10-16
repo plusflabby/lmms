@@ -25,14 +25,18 @@
 #ifndef LMMS_SAMPLE_CLIP_H
 #define LMMS_SAMPLE_CLIP_H
 
+#include <QByteArray>
+
 #include <memory>
 #include "Clip.h"
 #include "Sample.h"
+#include "AudioImportPolicy.h"
 
 namespace lmms
 {
 
 class SampleBuffer;
+class SampleTrack;
 
 namespace gui
 {
@@ -42,7 +46,7 @@ class SampleClipView;
 } // namespace gui
 
 
-class SampleClip : public Clip
+class LMMS_EXPORT SampleClip : public Clip
 {
 	Q_OBJECT
 	mapPropertyFromModel(bool,isRecord,setRecord,m_recordModel);
@@ -58,6 +62,12 @@ public:
 
 	const QString& sampleFile() const;
 	bool hasSampleFileLoaded(const QString & filename) const;
+	const QString& sourceLoadError() const { return m_sourceLoadError; }
+	bool usesBoundedSampleSource() const { return m_boundedSampleSource; }
+	QString adoptAuthorizedAudio(std::unique_ptr<AudioImportPolicy::Prepared> audio);
+	const QByteArray& sourceFileIdentity() const { return m_boundedSourceIdentity; }
+	const QByteArray& expectedSourceDigest() const { return m_boundedSourceDigest; }
+	const std::optional<SampleDecoder::PcmWaveInfo>& authorizedSourceInfo() const { return m_sourceInfo; }
 
 	void saveSettings( QDomDocument & _doc, QDomElement & _parent ) override;
 	void loadSettings( const QDomElement & _this ) override;
@@ -86,6 +96,7 @@ public:
 	{
 		return new SampleClip(*this);
 	}
+	virtual SampleClip* cloneToTrack(SampleTrack* target) const;
 
 public slots:
 	void setSampleFile(const QString& sf);
@@ -96,9 +107,19 @@ public slots:
 
 protected:
 	SampleClip( const SampleClip& orig );
+	SampleClip(const SampleClip& orig, Track* target);
 
 private:
+	void setSampleFileImpl(const QString& source, const QByteArray& expectedDigest, const QByteArray& expectedIdentity = {});
 	Sample m_sample;
+	// Preserve an intended file link when no file-backed buffer could be loaded.
+	QString m_unavailableSampleFile;
+	QString m_sourceLoadError;
+	QByteArray m_boundedSourceDigest;
+	QByteArray m_boundedSourceIdentity;
+	bool m_invalidSourceIdentity = false;
+	std::optional<SampleDecoder::PcmWaveInfo> m_sourceInfo;
+	bool m_boundedSampleSource = false;
 	BoolModel m_recordModel;
 	bool m_isPlaying;
 	int m_startFrameOffset;

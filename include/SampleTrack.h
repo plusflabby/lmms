@@ -52,6 +52,8 @@ public:
 						const f_cnt_t _frame_base, int _clip_num = -1 ) override;
 	gui::TrackView * createView( gui::TrackContainerView* tcv ) override;
 	Clip* createClip(const TimePos & pos) override;
+	FloatModel* volumeModel() { return &m_volumeModel; }
+	FloatModel* panningModel() { return &m_panningModel; }
 
 
 	void saveTrackSpecificSettings(QDomDocument& doc, QDomElement& parent, bool presetMode) override;

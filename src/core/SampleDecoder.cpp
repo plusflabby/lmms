@@ -25,6 +25,12 @@
 #include "SampleDecoder.h"
 
 #include <QFile>
+#include <QtEndian>
+#include <QCryptographicHash>
+#include <array>
+#include <limits>
+#include <new>
+#include <stdexcept>
 #include <QString>
 #include <memory>
 #include <sndfile.h>
@@ -34,6 +40,7 @@
 #endif
 
 #include "AudioEngine.h"
+#include "ConfigManager.h"
 #include "DrumSynth.h"
 #include "Engine.h"
 #include "LmmsTypes.h"
@@ -230,6 +237,101 @@ auto SampleDecoder::decode(const QString& audioFile) -> std::optional<Result>
 	}
 
 	return result;
+}
+
+auto SampleDecoder::configuredImportLimits() -> PcmWaveLimits
+{
+	const auto readBudget = [](const QString& name) -> quint64 {
+		const auto text = ConfigManager::inst()->value(QStringLiteral("aibridge"), name);
+		if (text.isEmpty()) { return 0; }
+		for (const auto c : text)
+		{
+			if (c < QChar('0') || c > QChar('9')) { return 0; }
+		}
+		bool valid = false;
+		const auto value = text.toULongLong(&valid);
+		return valid ? value : 0;
+	};
+	return {readBudget(QStringLiteral("audio_import_max_file_bytes")),
+		readBudget(QStringLiteral("audio_import_max_decoded_bytes"))};
+}
+
+auto SampleDecoder::admitPcmWave(const QByteArray& header, quint64 fileBytes, const PcmWaveLimits& limits)
+	-> PcmWaveAdmission
+{
+	if (!limits.maxFileBytes || !limits.maxDecodedBytes)
+		return {QStringLiteral("audio_resource_limits_not_configured"), {}};
+	if (fileBytes > limits.maxFileBytes) return {QStringLiteral("source_too_large"), {}};
+	if (header.size() != 44 || fileBytes < 44) return {QStringLiteral("audio_decode_failed"), {}};
+	const auto bytes = reinterpret_cast<const uchar*>(header.constData());
+	const auto u16 = [&](int offset) { return qFromLittleEndian<quint16>(bytes + offset); };
+	const auto u32 = [&](int offset) { return qFromLittleEndian<quint32>(bytes + offset); };
+	if (header.mid(0, 4) != "RIFF" || header.mid(8, 8) != "WAVEfmt " || header.mid(36, 4) != "data"
+		|| u32(16) != 16 || u16(20) != 1 || u16(34) != 16 || (u16(22) != 1 && u16(22) != 2))
+		return {QStringLiteral("unsupported_audio_format"), {}};
+	const quint64 channels = u16(22);
+	const quint64 rate = u32(24);
+	const quint64 dataBytes = u32(40);
+	const quint64 alignment = channels * sizeof(qint16);
+	if (!rate || rate > std::numeric_limits<int>::max() || u16(32) != alignment
+		|| u32(28) != rate * alignment || !dataBytes || dataBytes % alignment != 0
+		|| fileBytes != dataBytes + 44 || u32(4) != fileBytes - 8)
+		return {QStringLiteral("audio_decode_failed"), {}};
+	const quint64 frames = dataBytes / alignment;
+	if (frames > std::numeric_limits<int>::max()
+		|| frames > (std::numeric_limits<size_t>::max() - PcmWaveScratchBytes) / sizeof(SampleFrame))
+		return {QStringLiteral("source_too_large"), {}};
+	const quint64 decodedBytes = frames * sizeof(SampleFrame) + PcmWaveScratchBytes;
+	if (decodedBytes > limits.maxDecodedBytes) return {QStringLiteral("source_too_large"), {}};
+	return {QStringLiteral("ok"), {frames, fileBytes, decodedBytes, static_cast<int>(channels), static_cast<int>(rate)}};
+}
+
+auto SampleDecoder::decodePcmWave(QIODevice& source, const PcmWaveLimits& limits) -> PcmWaveResult
+{
+	if (!source.isOpen() || !source.isReadable() || source.isWritable() || source.isSequential()
+		|| source.size() < 0 || !source.seek(0))
+		return {QStringLiteral("audio_decode_failed"), {}, {}};
+	// Read only the fixed header until both the file and decoded allocation are admitted.
+	const auto header = source.read(44);
+	const auto admission = admitPcmWave(header, static_cast<quint64>(source.size()), limits);
+	if (admission.code != QStringLiteral("ok")) return {admission.code, {}, {}};
+	auto info = admission.info;
+	try
+	{
+		QCryptographicHash hash(QCryptographicHash::Sha256);
+		hash.addData(header);
+		std::vector<SampleFrame> data(static_cast<size_t>(info.frames));
+		std::array<char, 4096> input;
+		const quint64 alignment = info.channels * sizeof(qint16);
+		quint64 completed = 0;
+		while (completed < info.frames)
+		{
+			const auto count = std::min<quint64>(input.size() / alignment, info.frames - completed);
+			const qint64 wanted = count * alignment;
+			qint64 received = 0;
+			while (received < wanted)
+			{
+				const auto read = source.read(input.data() + received, wanted - received);
+				if (read <= 0) return {QStringLiteral("audio_decode_failed"), info, {}};
+				received += read;
+			}
+			hash.addData(input.data(), static_cast<int>(wanted));
+			for (quint64 i = 0; i < count; ++i)
+			{
+				const auto bytes = reinterpret_cast<const uchar*>(input.data()) + i * alignment;
+				const float left = qFromLittleEndian<qint16>(bytes) / 32768.0f;
+				const float right = info.channels == 1 ? left : qFromLittleEndian<qint16>(bytes + 2) / 32768.0f;
+				data[static_cast<size_t>(completed + i)] = {left, right};
+			}
+			completed += count;
+		}
+		if (static_cast<quint64>(source.size()) != info.fileBytes)
+			return {QStringLiteral("audio_source_changed"), info, {}};
+		info.sourceSha256 = hash.result();
+		return {QStringLiteral("ok"), info, Result{std::move(data), info.sampleRate}};
+	}
+	catch (const std::bad_alloc&) { return {QStringLiteral("source_too_large"), info, {}}; }
+	catch (const std::length_error&) { return {QStringLiteral("source_too_large"), info, {}}; }
 }
 
 } // namespace lmms

@@ -373,6 +373,12 @@ QString ConfigManager::value(const QString& cls, const QString& attribute, const
 
 
 
+static bool affectsAudioImportPolicy(const QString& cls, const QString& attribute)
+{
+	return cls == "aibridge" && (attribute == "audio_import_roots" || attribute == "audio_import_max_file_bytes"
+		|| attribute == "audio_import_max_decoded_bytes");
+}
+
 void ConfigManager::setValue(const QString & cls,
 				const QString & attribute,
 				const QString & value)
@@ -386,6 +392,7 @@ void ConfigManager::setValue(const QString & cls,
 				if (pair.second != value)
 				{
 					pair.second = value;
+					if (affectsAudioImportPolicy(cls, attribute)) ++m_audioImportPolicyRevision;
 					emit valueChanged(cls, attribute, value);
 				}
 				return;
@@ -394,6 +401,7 @@ void ConfigManager::setValue(const QString & cls,
 	}
 	// not in map yet, so we have to add it...
 	m_settings[cls].push_back(qMakePair(attribute, value));
+	if (affectsAudioImportPolicy(cls, attribute)) ++m_audioImportPolicyRevision;
 }
 
 
@@ -407,6 +415,7 @@ void ConfigManager::deleteValue(const QString & cls, const QString & attribute)
 			if((*it).first == attribute)
 			{
 				m_settings[cls].erase(it);
+				if (affectsAudioImportPolicy(cls, attribute)) ++m_audioImportPolicyRevision;
 				return;
 			}
 		}
@@ -416,6 +425,7 @@ void ConfigManager::deleteValue(const QString & cls, const QString & attribute)
 
 void ConfigManager::loadConfigFile(const QString & configFile)
 {
+	++m_audioImportPolicyRevision;
 	// read the XML file and create DOM tree
 	// Allow configuration file override through --config commandline option
 	if (!configFile.isEmpty())

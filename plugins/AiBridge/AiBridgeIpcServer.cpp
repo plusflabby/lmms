@@ -1,4 +1,5 @@
 #include "AiBridgeIpcServer.h"
+#include "AiBridgeAudioWire.h"
 
 #include <QLocalSocket>
 
@@ -751,7 +752,8 @@ void AiBridgeIpcServer::readProbe()
 void AiBridgeIpcServer::executeRequest(const AiBridgeProtocolRequest &request)
 {
 	AiBridgeProtocolResponse response{2, request.requestId, false, QStringLiteral("internal_error"), QStringLiteral("Request did not execute")};
-	if (request.action == QStringLiteral("get_context"))
+	if (AiBridgeAudioWire::handles(request.action)) response=AiBridgeAudioWire::execute(request);
+	else if (request.action == QStringLiteral("get_context"))
 	{
 		const auto snapshot = AiBridgeProjectContext{}.currentContext();
 		QJsonObject data{{QStringLiteral("song_name"), snapshot.songName}, {QStringLiteral("tempo"), snapshot.tempo}, {QStringLiteral("has_current_midi_clip"), snapshot.hasCurrentMidiClip}, {QStringLiteral("clip_id"), snapshot.clipId}, {QStringLiteral("clip_length_ticks"), snapshot.clipLengthTicks}, {QStringLiteral("has_owning_instrument_track"), snapshot.hasOwningInstrumentTrack}, {QStringLiteral("track_id"), snapshot.trackId}, {QStringLiteral("track_name"), snapshot.trackName}, {QStringLiteral("track_volume"), snapshot.trackVolume}};

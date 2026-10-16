@@ -1,4 +1,6 @@
 #include <QtTest>
+#include <QJsonDocument>
+#include <QJsonArray>
 
 #include "AiBridgeProtocol.h"
 
@@ -7,6 +9,24 @@ class AiBridgeProtocolTest : public QObject
 	Q_OBJECT
 
 private slots:
+	void acceptsOnlyTheApprovedStrictAudioWireSurface()
+	{
+		auto parse=[](const QString& action,const QJsonObject& p){return lmms::AiBridgeProtocol::parseRequest(QJsonDocument(QJsonObject{{"version",2},{"request_id","audio"},{"action",action},{"parameters",p}}).toJson(QJsonDocument::Compact)+'\n');};
+		const QString hash(64,'a');
+		const QJsonObject edit{{"clip_id","clip"},{"expected_audio_state_hash",hash}};
+		QVector<QPair<QString,QJsonObject>> cases{{"get_audio_capabilities",{}},{"get_audio_clip",{{"clip_id","clip"}}},{"create_audio_track",{{"name","Voice"},{"dry_run",true}}},{"import_audio_file",{{"track_id","track"},{"path","G:/approved/Verse.wav"},{"position_ticks",3840},{"dry_run",true}}}};
+		auto move=edit;move.insert("position_ticks",10);auto copy=move;copy.insert("destination_track_id","track");
+		cases.append({"move_audio_clip",move});cases.append({"duplicate_audio_clip",copy});cases.append({"delete_audio_clip",edit});
+		auto op=move;op.insert("operation","move");cases.append({"batch_edit_audio_clips",{{"operations",QJsonArray{op}},{"dry_run",true}}});
+		for(const auto& row:cases){auto accepted=parse(row.first,row.second);QVERIFY2(accepted.success,qPrintable(row.first+":"+accepted.code));auto bad=row.second;bad.insert("unknown",true);QVERIFY(!parse(row.first,bad).success);bad=row.second;bad.insert("path","G:/private.wav");if(row.first!="import_audio_file")QVERIFY(!parse(row.first,bad).success);}
+		for(const auto& action:{"trim_audio_clip","split_audio_clip","load_audio_file","set_audio_clip"})QCOMPARE(parse(action,{}).code,QStringLiteral("unknown_action"));
+		for(const auto& key:{"clip_id","expected_audio_state_hash"}){auto bad=move;bad.remove(key);QVERIFY(!parse("move_audio_clip",bad).success);}
+		for(const QJsonValue value:{QJsonValue(-1),QJsonValue(0.5),QJsonValue(2147483648.0),QJsonValue("10")}){auto bad=move;bad.insert("position_ticks",value);QVERIFY(!parse("move_audio_clip",bad).success);}
+		auto bad=move;bad.insert("dry_run","true");QVERIFY(!parse("move_audio_clip",bad).success);
+		bad=cases[3].second;bad.insert("path",QString(1025,'x'));QVERIFY(!parse("import_audio_file",bad).success);
+		for(const auto& operation:{"import","trim","split","batch","shell"}){op.insert("operation",operation);QVERIFY(!parse("batch_edit_audio_clips",{{"operations",QJsonArray{op}}}).success);}
+		QJsonArray operations;for(int i=0;i<257;++i)operations.append(QJsonObject{{"operation","delete"},{"clip_id","clip"},{"expected_audio_state_hash",hash}});QVERIFY(!parse("batch_edit_audio_clips",{{"operations",operations}}).success);
+	}
 	void acceptsAllAllowlistedActions()
 	{
 		for (const auto test : {QPair<const char *, const char *>("get_context", "{}"), QPair<const char *, const char *>("set_tempo", "{\"bpm\":82}"), QPair<const char *, const char *>("adjust_current_track_volume", "{\"delta\":-10}"), QPair<const char *, const char *>("add_note_to_current_clip", "{\"key\":60,\"position\":0,\"length\":48,\"velocity\":100}")})

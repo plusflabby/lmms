@@ -249,6 +249,7 @@ public:
 	void setValue(const QString & cls, const QString & attribute,
 						const QString & value);
 	void deleteValue(const QString & cls, const QString & attribute);
+	quint64 audioImportPolicyRevision() const { return m_audioImportPolicyRevision; }
 
 	void loadConfigFile(const QString & configFile = "");
 	void saveConfigFile();
@@ -309,6 +310,7 @@ private:
 	using stringPairVector = std::vector<QPair<QString, QString>>;
 	using settingsMap = QMap<QString, stringPairVector>;
 	settingsMap m_settings;
+	quint64 m_audioImportPolicyRevision = 0;
 
 
 	friend class Engine;

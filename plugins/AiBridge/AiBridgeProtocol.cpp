@@ -280,6 +280,48 @@ MidiValidationFailure validateMidiRequest(const QString &action, const QJsonObje
 	return {};
 }
 
+const QSet<QString> audioActions{"get_audio_capabilities","get_audio_clip","create_audio_track","import_audio_file","move_audio_clip","duplicate_audio_clip","delete_audio_clip","batch_edit_audio_clips"};
+bool audioString(const QJsonValue& v,int maximum)
+{
+	return v.isString() && !v.toString().trimmed().isEmpty() && v.toString().size()<=maximum && !v.toString().contains(QChar(0));
+}
+bool audioTick(const QJsonValue& v) {return isInteger(v) && v.toDouble()>=0 && v.toDouble()<=std::numeric_limits<qint32>::max();}
+bool audioEdit(const QString& operation,const QJsonObject& p,bool inBatch)
+{
+	QSet<QString> keys{"clip_id","expected_audio_state_hash"};
+	if(inBatch)keys.insert("operation");else keys.insert("dry_run");
+	if(operation=="move" || operation=="duplicate")keys.insert("position_ticks");
+	if(operation=="duplicate")keys.insert("destination_track_id");
+	if(operation!="move" && operation!="duplicate" && operation!="delete")return false;
+	if(!hasOnlyKeys(p,keys) || !audioString(p.value("clip_id"),256))return false;
+	const auto hash=p.value("expected_audio_state_hash").toString();
+	if(!p.value("expected_audio_state_hash").isString() || hash.size()!=64)return false;
+	for(const auto c:hash)if(!QStringLiteral("0123456789abcdef").contains(c))return false;
+	if(operation!="delete" && !audioTick(p.value("position_ticks")))return false;
+	return operation!="duplicate" || audioString(p.value("destination_track_id"),256);
+}
+bool validAudioRequest(const QString& action,const QJsonObject& p)
+{
+	if(p.contains("dry_run") && !p.value("dry_run").isBool())return false;
+	if(action=="get_audio_capabilities")return p.isEmpty();
+	if(action=="get_audio_clip")return hasOnlyKeys(p,{"clip_id"}) && audioString(p.value("clip_id"),256);
+	if(action=="create_audio_track")
+	{
+		if(!hasOnlyKeys(p,{"name","volume","panning","muted","dry_run"}) || !audioString(p.value("name"),128))return false;
+		for(const auto key:{"volume","panning"})if(p.contains(key) && !isFiniteNumber(p.value(key)))return false;
+		return !p.contains("muted") || p.value("muted").isBool();
+	}
+	if(action=="import_audio_file")return hasOnlyKeys(p,{"track_id","path","position_ticks","dry_run"}) && audioString(p.value("track_id"),256) && audioString(p.value("path"),1024) && audioTick(p.value("position_ticks"));
+	if(action=="batch_edit_audio_clips")
+	{
+		if(!hasOnlyKeys(p,{"operations","dry_run"}) || !p.value("operations").isArray())return false;
+		const auto ops=p.value("operations").toArray();if(ops.isEmpty() || ops.size()>256)return false;
+		QSet<QString> clips;int copies=0;
+		for(const auto& value:ops){if(!value.isObject())return false;const auto op=value.toObject();const auto kind=op.value("operation").toString();if(!audioEdit(kind,op,true))return false;clips.insert(op.value("clip_id").toString());if(kind=="duplicate")++copies;}
+		return clips.size()+copies<=32;
+	}
+	return audioEdit(action=="move_audio_clip"?"move":action=="duplicate_audio_clip"?"duplicate":"delete",p,false);
+}
 } // namespace
 
 AiBridgeProtocolParseResult AiBridgeProtocol::parseRequest(const QByteArray &frame)
@@ -310,7 +352,7 @@ AiBridgeProtocolParseResult AiBridgeProtocol::parseRequest(const QByteArray &fra
 		return failure(QStringLiteral("invalid_action"), QStringLiteral("action must be a string"));
 	const auto action = object.value(QStringLiteral("action")).toString();
 	if (!QSet<QString>{QStringLiteral("get_context"), QStringLiteral("set_tempo"), QStringLiteral("adjust_current_track_volume"), QStringLiteral("add_note_to_current_clip"), QStringLiteral("get_windows"), QStringLiteral("set_window_geometry"), QStringLiteral("focus_window"), QStringLiteral("arrange_windows"), QStringLiteral("get_project_structure"), QStringLiteral("list_tracks"), QStringLiteral("list_clips"), QStringLiteral("get_clip"), QStringLiteral("open_clip_in_piano_roll"), QStringLiteral("add_notes"), QStringLiteral("delete_notes"), QStringLiteral("transpose_notes"), QStringLiteral("move_notes"), QStringLiteral("duplicate_region"), QStringLiteral("create_instrument_track"), QStringLiteral("rename_track"), QStringLiteral("create_midi_clip"), QStringLiteral("set_clip_properties"), QStringLiteral("list_instruments"), QStringLiteral("set_track_instrument"), QStringLiteral("set_track_properties"), QStringLiteral("list_bundled_samples"), QStringLiteral("load_bundled_sample"), QStringLiteral("list_bundled_presets"), QStringLiteral("load_bundled_preset"), QStringLiteral("get_mixer_structure"), QStringLiteral("create_mixer_channel"), QStringLiteral("delete_mixer_channel"), QStringLiteral("set_mixer_channel_properties"), QStringLiteral("route_track_to_mixer_channel"), QStringLiteral("create_mixer_route"), QStringLiteral("delete_mixer_route"), QStringLiteral("set_mixer_route_properties"), QStringLiteral("list_native_effects"), QStringLiteral("add_effect"), QStringLiteral("remove_effect"), QStringLiteral("move_effect"), QStringLiteral("set_effect_state"), QStringLiteral("get_effect_parameters"), QStringLiteral("set_effect_parameters"), QStringLiteral("get_mixer_meters"), QStringLiteral("get_arrangement"), QStringLiteral("get_timeline_region"), QStringLiteral("set_timeline_clip"), QStringLiteral("duplicate_timeline_clip"), QStringLiteral("delete_timeline_clip"), QStringLiteral("batch_edit_timeline_clips"), QStringLiteral("list_automation_targets"), QStringLiteral("get_automation_capabilities"), QStringLiteral("list_automation"), QStringLiteral("get_automation_clip"), QStringLiteral("create_automation_track"), QStringLiteral("delete_automation_track"), QStringLiteral("create_automation_clip"), QStringLiteral("delete_automation_clip"), QStringLiteral("set_automation_clip_properties"), QStringLiteral("set_automation_clip_target"), QStringLiteral("edit_automation_points"), QStringLiteral("duplicate_arrangement_region"), QStringLiteral("move_arrangement_region"), QStringLiteral("delete_arrangement_region"), QStringLiteral("insert_arrangement_space"), QStringLiteral("close_arrangement_gap"), QStringLiteral("replace_arrangement_region"), QStringLiteral("get_midi_capabilities"), QStringLiteral("get_midi_notes"), QStringLiteral("analyze_midi"), QStringLiteral("quantize_notes"), QStringLiteral("humanize_notes"), QStringLiteral("apply_groove"), QStringLiteral("shape_note_velocities"), QStringLiteral("shape_note_lengths"), QStringLiteral("cleanup_notes"), QStringLiteral("constrain_notes_to_scale")}.contains(action))
-		return failure(QStringLiteral("unknown_action"), QStringLiteral("Action is not allowlisted"));
+		if (!audioActions.contains(action)) return failure(QStringLiteral("unknown_action"), QStringLiteral("Action is not allowlisted"));
 	if (!object.contains(QStringLiteral("parameters")) || !object.value(QStringLiteral("parameters")).isObject())
 		return failure(QStringLiteral("invalid_parameters"), QStringLiteral("parameters must be an object"));
 
@@ -321,6 +363,8 @@ AiBridgeProtocolParseResult AiBridgeProtocol::parseRequest(const QByteArray &fra
 	};
 	if (const auto midiValidation = validateMidiRequest(action, parameters); !midiValidation.valid())
 		return requestFailure(midiValidation.code, midiValidation.message);
+	if(audioActions.contains(action) && !validAudioRequest(action,parameters))
+		return requestFailure("invalid_parameter","Audio request fields or bounds are invalid");
 	if (action == QStringLiteral("get_context") && !parameters.isEmpty())
 		return requestFailure(QStringLiteral("unknown_parameter"), QStringLiteral("get_context accepts no parameters"));
 	if (action == QStringLiteral("set_tempo") && (!hasOnlyKeys(parameters, {QStringLiteral("bpm")}) || !isInteger(parameters.value(QStringLiteral("bpm")))))

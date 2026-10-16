@@ -2,6 +2,8 @@ set(LMMS_SRCS
 	${LMMS_SRCS}
 
 	core/AudioBuffer.cpp
+	core/AudioFileAuthorization.cpp
+	core/AudioImportPolicy.cpp
 	core/AudioBusHandle.cpp
 	core/AudioEngine.cpp
 	core/AudioEngineProfiler.cpp
