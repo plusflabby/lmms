@@ -5,6 +5,7 @@ set(CMAKE_INCLUDE_CURRENT_DIR ON)
 set(CMAKE_AUTOMOC ON)
 
 set(LMMS_TESTS
+	src/plugins/AiBridgeSampleTrackAutomationTest.cpp
 	src/plugins/AiBridgeVocalTrackActionsTest.cpp
 	src/plugins/AiBridgeVocalJobsTest.cpp
 	src/plugins/AiBridgeVocalAnalysisTest.cpp
@@ -283,7 +284,7 @@ foreach(LMMS_TEST_SRC IN LISTS LMMS_TESTS)
 		target_sources(${LMMS_TEST_NAME} PRIVATE
 			${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeAutomationTargets.cpp)
 	endif()
-	if(LMMS_TEST_NAME STREQUAL "AiBridgeAutomationReconcilerTest")
+	if(LMMS_TEST_NAME STREQUAL "AiBridgeAutomationReconcilerTest" OR LMMS_TEST_NAME STREQUAL "AiBridgeSampleTrackAutomationTest")
 		target_include_directories(${LMMS_TEST_NAME} PRIVATE ${CMAKE_SOURCE_DIR}/plugins/AiBridge)
 		target_sources(${LMMS_TEST_NAME} PRIVATE
 			${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeAutomationReconciler.cpp
@@ -339,6 +340,10 @@ foreach(LMMS_TEST_SRC IN LISTS LMMS_TESTS)
 			${CMAKE_SOURCE_DIR}/plugins/ReverbSC/ReverbSC.cpp
 			PROPERTIES COMPILE_DEFINITIONS "lmms_plugin_main=reverbsc_plugin_main")
 		target_compile_definitions(${LMMS_TEST_NAME} PRIVATE PLUGIN_NAME=Amplifier PLUGIN_STATIC_DEFINE)
+		if(LMMS_TEST_NAME STREQUAL "AiBridgeSampleTrackAutomationTest")
+			target_sources(${LMMS_TEST_NAME} PRIVATE ${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeAutomationActions.cpp
+				${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeAutomationContext.cpp)
+		endif()
 	endif()
 	if(LMMS_TEST_NAME STREQUAL "AiBridgeAutomationContextTest")
 		target_include_directories(${LMMS_TEST_NAME} PRIVATE ${CMAKE_SOURCE_DIR}/plugins/AiBridge)
