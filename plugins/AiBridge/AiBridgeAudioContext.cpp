@@ -11,11 +11,34 @@
 #include <QFileInfo>
 #include <QJsonArray>
 #include <QJsonDocument>
+#include <algorithm>
 namespace lmms {
 namespace {
 bool applicationThread() { return QCoreApplication::instance() && QThread::currentThread()==QCoreApplication::instance()->thread(); }
 bool validPage(int offset,int limit) { return offset>=0 && limit>=1 && limit<=256; }
 bool fits(const QJsonObject& value) { return QJsonDocument(value).toJson(QJsonDocument::Compact).size()<=64*1024; }
+QByteArray invalidRangeDigest(const QDomDocument& document)
+{
+	QCryptographicHash hash(QCryptographicHash::Sha256);hash.addData("aibridge-invalid-audio-window-v1:");
+	const auto token=[&](const QString& value){const auto bytes=value.toUtf8();hash.addData(QByteArray::number(bytes.size()));hash.addData(":");hash.addData(bytes);};
+	const auto root=document.documentElement();auto node=QDomNode(root);
+	// Iterative tree walk: sorted attributes, preserved child/text order, explicit
+	// exit markers. No recursive stack proportional to hostile XML nesting.
+	while(!node.isNull())
+	{
+		hash.addData("N");token(QString::number(node.nodeType()));token(node.nodeName());token(node.nodeValue());
+		QStringList names;const auto attributes=node.attributes();for(int i=0;i<attributes.size();++i)names<<attributes.item(i).nodeName();
+		std::sort(names.begin(),names.end());for(const auto& name:names){hash.addData("A");token(name);token(attributes.namedItem(name).nodeValue());}
+		if(!node.firstChild().isNull()){node=node.firstChild();continue;}
+		while(!node.isNull())
+		{
+			hash.addData("X");if(node==root) return hash.result();
+			if(!node.nextSibling().isNull()){node=node.nextSibling();break;}
+			node=node.parentNode();
+		}
+	}
+	return hash.result();
+}
 AiBridgeAudioTrackSnapshot copyTrack(AiBridgeProjectContext& ids,SampleTrack* track)
 {
 	return {ids.idForTrack(track),track->displayName(),track->volumeModel()->value(),track->panningModel()->value(),
@@ -62,11 +85,26 @@ AiBridgeAudioClipResult AiBridgeAudioContext::clip(const QString& id) const
 		auto current=AudioImportPolicy::configured().prepare(reference,state.sourceDigest,state.sourceIdentity);
 		if(current.audio)
 		{
+			result.verifiedSourceInfo=current.audio->info();
 			result.sourceVerified=true;state.sourceFrames=current.audio->info().frames;state.sampleRate=current.audio->info().sampleRate;
 			state.sourceChannels=current.audio->info().channels;
 			state.sourceStatus=sample->sample().sampleSize() ? "available" : "available_unloaded";
 		}
 		else state.sourceStatus=current.code;
+	}
+	const auto& window=sample->audioWindowStorage();
+	if(window.kind!=AudioWindowStorageKind::Legacy)
+	{
+		state.rangeWindow=window.value;state.rangeWindowV2=window.valueV2;
+		state.rangeStatus=sample->audioWindowStatus();
+		if(!sample->sourceLoadError().isEmpty()) state.rangeStatus=sample->sourceLoadError();
+		else if(state.sourceStatus!="available" && state.sourceStatus!="available_unloaded"
+			&& state.sourceStatus!="empty" && state.sourceStatus!="embedded") state.rangeStatus=state.sourceStatus;
+		if(window.kind==AudioWindowStorageKind::InvalidMetadata)
+		{
+			state.rangeStatus=window.parseCode;
+			state.invalidRangeMetadataDigest=invalidRangeDigest(window.retainedInvalidXml);
+		}
 	}
 	result.stateHash=audioStateHash({state});
 	if(result.stateHash.isEmpty()) return {"unsupported_audio_operation",{}};
@@ -113,7 +151,19 @@ AiBridgeAudioClipPage AiBridgeAudioContext::clips(const QString& trackId,int off
 QJsonObject AiBridgeAudioContext::toJson(const AiBridgeAudioClipSnapshot& s)
 {
 	const auto& c=s.state;
+	QJsonValue window(QJsonValue::Null);
+	if(c.rangeWindowV2 || c.rangeWindow)
+	{
+		const bool v2=c.rangeWindowV2.has_value();const auto& w=v2?c.rangeWindowV2->base:*c.rangeWindow;
+		window=QJsonObject{{"version",v2?2:1},{"phase",v2?"linear_equal_ref256_v2":"linear_equal_v1"},
+			{"in_frame",double(w.inFrame)},{"out_frame",double(w.outFrame)},{"phase_origin_frame",double(w.phaseOriginFrame)},
+			{"reference_end_frame",v2?QJsonValue(double(c.rangeWindowV2->referenceEndFrame)):QJsonValue(QJsonValue::Null)},
+			{"source_frames",double(w.sourceFrameCount)},{"source_rate",w.sourceRate},{"reference_tempo_bpm",w.referenceTempoBpm},
+			{"reference_output_rate",w.referenceOutputRate},{"ticks_per_beat",w.ticksPerBeat},{"frames_per_tick",w.framesPerTick},
+			{"length_ticks",w.lengthTicks},{"offset_ticks",w.offsetTicks}};
+	}
 	return {{"clip_id",c.id},{"track_id",c.trackId},{"name",s.name},{"audio_state_hash",s.stateHash},
+		{"range_status",c.rangeStatus.isEmpty()?QStringLiteral("legacy"):c.rangeStatus},{"source_window",window},
 		{"project_generation",QString::number(s.generation)},{"position_ticks",double(c.position)},{"length_ticks",double(c.length)},
 		{"end_tick",double(s.endTick)},{"source_offset_ticks",double(c.offset)},{"ticks_per_bar",double(s.ticksPerBar)},{"ticks_per_beat",double(s.ticksPerBeat)},
 		{"source_label",s.sourceLabel},{"source_status",c.sourceStatus},{"source_verified",s.sourceVerified},

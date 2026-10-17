@@ -55,9 +55,21 @@ SamplePlayHandle::SamplePlayHandle( const QString& sampleFile ) :
 
 
 
-SamplePlayHandle::SamplePlayHandle( SampleClip* clip ) :
+SamplePlayHandle::SamplePlayHandle( SampleClip* clip,qint64 elapsed,qint64 maximum ) :
 	SamplePlayHandle(&clip->sample(), false)
 {
+	m_blockedAudioWindow = clip->hasAudioSourceWindow();
+	if(m_blockedAudioWindow)
+	{
+		if(const auto view=clip->audioWindowPlaybackView();view && elapsed>=0 && elapsed<=view->outputFrameCount)
+		{
+			m_windowPlaybackView=*view;
+			m_windowPlaybackView->firstRelativeOutputFrame=elapsed;
+			m_windowPlaybackView->outputFrameCount-=elapsed;
+			if(maximum>=0) m_windowPlaybackView->outputFrameCount=std::min(maximum,m_windowPlaybackView->outputFrameCount);
+			m_blockedAudioWindow=false;
+		}
+	}
 	m_track = clip->getTrack();
 	setAudioBusHandle(((SampleTrack *)clip->getTrack())->audioBusHandle());
 }
@@ -80,6 +92,17 @@ SamplePlayHandle::~SamplePlayHandle()
 void SamplePlayHandle::play( SampleFrame* buffer )
 {
 	const f_cnt_t fpp = Engine::audioEngine()->framesPerPeriod();
+	if(m_windowPlaybackView)
+	{
+		std::fill_n(buffer,fpp,SampleFrame{});
+		if(m_windowPlaybackView->guard->epoch.load(std::memory_order_acquire)!=m_windowPlaybackView->expectedEpoch) return;
+		const auto begin=m_frame==0?offset():0;
+		if(begin>=fpp) return;
+		if(!(m_track && m_track->isMuted()) && !(m_patternTrack && m_patternTrack->isMuted()))
+			renderAudioWindow(*m_windowPlaybackView,m_frame,{buffer+begin,fpp-begin});
+		m_frame+=fpp-begin;
+		return;
+	}
 	//play( 0, _try_parallelizing );
 	if( framesDone() >= totalFrames() )
 	{
@@ -120,6 +143,7 @@ void SamplePlayHandle::play( SampleFrame* buffer )
 
 bool SamplePlayHandle::isFinished() const
 {
+	if(m_windowPlaybackView && m_windowPlaybackView->guard->epoch.load(std::memory_order_acquire)!=m_windowPlaybackView->expectedEpoch) return true;
 	return framesDone() >= totalFrames() && m_doneMayReturnTrue == true;
 }
 
@@ -136,6 +160,8 @@ bool SamplePlayHandle::isFromTrack( const Track * _track ) const
 
 f_cnt_t SamplePlayHandle::totalFrames() const
 {
+	if(m_windowPlaybackView) return f_cnt_t(m_windowPlaybackView->outputFrameCount);
+	if (m_blockedAudioWindow) return 0;
 	return (m_sample->endFrame() - m_sample->startFrame()) *
 			(static_cast<float>(Engine::audioEngine()->outputSampleRate()) / m_sample->sampleRate());
 }

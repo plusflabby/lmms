@@ -50,7 +50,10 @@ class LMMS_EXPORT Clip : public Model, public JournallingObject
 {
 	Q_OBJECT
 	mapPropertyFromModel(bool,isMuted,setMuted,m_mutedModel);
-	mapPropertyFromModel(bool,isSolo,setSolo,m_soloModel);
+public:
+	bool isSolo() const { return m_soloModel.value(); }
+public slots:
+	void setSolo(bool value) { if(allowsGenericClipEdits()) m_soloModel.setValue(value); }
 public:
 	Clip( Track * track );
 	~Clip() override;
@@ -67,6 +70,7 @@ public:
 
 	inline void setName( const QString & name )
 	{
+		if(!allowsGenericClipEdits()) return;
 		m_name = name;
 		emit dataChanged();
 	}
@@ -99,6 +103,7 @@ public:
 	bool isInPattern() const;
 
 	bool manuallyResizable() const;
+	bool allowsTimeGeometryEdits() const { return allowsGenericClipEdits(); }
 
 	/*! \brief Set whether a clip has been resized yet by the user or the knife tool.
 	 *
@@ -108,6 +113,7 @@ public:
 	 */
 	void setAutoResize(const bool r)
 	{
+		if(!allowsGenericClipEdits()) return;
 		m_autoResize = r;
 	}
 
@@ -161,6 +167,7 @@ signals:
 	void colorChanged();
 
 protected:
+	virtual bool allowsGenericClipEdits() const { return true; }
 	Clip(const Clip& other);
 	Clip(const Clip& other, Track* target);
 

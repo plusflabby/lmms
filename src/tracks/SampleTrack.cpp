@@ -81,6 +81,7 @@ bool SampleTrack::play( const TimePos & _start, const f_cnt_t _frames,
 	if( _clip_num >= 0 )
 	{
 		auto sClip = dynamic_cast<SampleClip*>(getClip(_clip_num));
+		if (sClip->hasAudioSourceWindow()) return false;
 
 		if (_start > sClip->length())
 		{
@@ -108,6 +109,18 @@ bool SampleTrack::play( const TimePos & _start, const f_cnt_t _frames,
 		{
 			Clip * clip = getClip( i );
 			auto sClip = dynamic_cast<SampleClip*>(clip);
+			if (sClip->hasAudioSourceWindow())
+			{
+				const auto view=sClip->audioWindowPlaybackView();
+				if(!view) {sClip->setIsPlaying(false);continue;}
+				if(_start>=sClip->startPosition() && _start<sClip->endPosition())
+				{
+					if(!sClip->isPlaying()) {clips.push_back(sClip);sClip->setIsPlaying(true);}
+					nowPlaying=true;
+				}
+				else sClip->setIsPlaying(false);
+				continue;
+			}
 
 			if( _start >= sClip->startPosition() && _start < sClip->endPosition() )
 			{
@@ -157,7 +170,15 @@ bool SampleTrack::play( const TimePos & _start, const f_cnt_t _frames,
 			}
 			else
 			{
-				auto smpHandle = new SamplePlayHandle(st);
+				qint64 elapsed=0,maximum=-1;
+				if(const auto view=st->audioWindowPlaybackView())
+				{
+					elapsed=qint64(_start-st->startPosition())*view->window.base.framesPerTick;
+					const auto& timeline=Engine::getSong()->getTimeline(Song::PlayMode::Song);
+					if(timeline.loopEnabled() && timeline.loopEnd()>_start)
+						maximum=qint64(timeline.loopEnd()-_start)*view->window.base.framesPerTick;
+				}
+				auto smpHandle = new SamplePlayHandle(st,elapsed,maximum);
 				smpHandle->setPatternTrack(pattern_track);
 				handle = smpHandle;
 			}

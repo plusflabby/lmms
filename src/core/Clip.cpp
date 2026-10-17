@@ -229,6 +229,7 @@ void Clip::setStartTimeOffset( const TimePos &startTimeOffset )
 
 void Clip::setColor(const std::optional<QColor>& color)
 {
+	if(!allowsGenericClipEdits()) return;
 	m_color = color;
 	emit colorChanged();
 }

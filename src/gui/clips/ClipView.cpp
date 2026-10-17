@@ -653,6 +653,11 @@ void ClipView::mousePressEvent( QMouseEvent * me )
 			}
 			else
 			{
+				if(!m_clip->allowsTimeGeometryEdits() && (knifeMode || pos.x()>=width()-resizeGripWidth() || pos.x()<resizeGripWidth()))
+				{
+					setToolTip(tr("Generic trim/split is unavailable for source-frame audio windows."));
+					me->ignore();return;
+				}
 				getGUI()->songEditor()->m_editor->selectAllClips( false );
 				m_clip->addJournalCheckPoint();
 
@@ -1447,6 +1452,7 @@ auto ClipView::hasCustomColor() const -> bool
 
 bool ClipView::splitClip(const TimePos pos)
 {
+	if(!m_clip->allowsTimeGeometryEdits()) return false;
 	const TimePos splitPos = m_initialClipPos + pos;
 
 	// Don't split if we slid off the Clip or if we're on the clip's start/end

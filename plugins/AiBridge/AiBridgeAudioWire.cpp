@@ -1,5 +1,8 @@
 #include "AiBridgeAudioWire.h"
 #include "AiBridgeAudioActions.h"
+#include "AiBridgeAudioRangeActions.h"
+#include "AudioWindowPlayback.h"
+#include "AudioEngine.h"
 #include "AudioImportPolicy.h"
 #include "SampleDecoder.h"
 #include "Engine.h"
@@ -23,7 +26,7 @@ QJsonObject actionJson(const AiBridgeAudioActionResult& r)
 }
 bool AiBridgeAudioWire::handles(const QString& action)
 {
-	return QSet<QString>{"get_audio_capabilities","get_audio_clip","create_audio_track","import_audio_file","move_audio_clip","duplicate_audio_clip","delete_audio_clip","batch_edit_audio_clips"}.contains(action);
+	return QSet<QString>{"get_audio_capabilities","get_audio_clip","create_audio_track","import_audio_file","move_audio_clip","duplicate_audio_clip","delete_audio_clip","batch_edit_audio_clips","trim_audio_clip","split_audio_clip"}.contains(action);
 }
 AiBridgeProtocolResponse AiBridgeAudioWire::execute(const AiBridgeProtocolRequest& request)
 {
@@ -36,11 +39,24 @@ AiBridgeProtocolResponse AiBridgeAudioWire::execute(const AiBridgeProtocolReques
 			{"placement_unit","integer_ticks"},{"ticks_per_bar",TimePos::ticksPerBar()},
 			{"ticks_per_beat",TimePos::ticksPerBar()/Engine::getSong()->getTimeSigModel().getNumerator()},
 			{"max_affected_clips",32},{"max_batch_steps",256},{"max_preview_rows",128},{"max_path_utf16_units",1024},
-			{"max_frame_bytes",AiBridgeProtocol::MaxFrameBytes},{"trim_supported",false},{"split_supported",false}};
+			{"max_frame_bytes",AiBridgeProtocol::MaxFrameBytes},{"trim_supported",verifyAudioWindowReferenceProfile()},{"split_supported",verifyAudioWindowReferenceProfile()},
+			{"range_editing",QJsonObject{{"xml_version",2},{"phase","linear_equal_ref256_v2"},{"reference_tempo_bpm",125},
+				{"source_sample_rates",QJsonArray{44100,48000}},{"equal_rates_required",true},{"ticks_per_beat",48},
+				{"forward_only",true},{"authorized_source_required",true},{"reference_refill_frames",256},
+				{"excluded_reference_remainder",1},{"unsupported_state_behavior","quarantine"},
+				{"current_output_sample_rate",int(Engine::audioEngine()->outputSampleRate())}}}};
 	}
 	else if(request.action=="get_audio_clip")
 	{
 		const auto r=AiBridgeAudioContext{}.clip(p.value("clip_id").toString());code=r.code;if(r.value)data=AiBridgeAudioContext::toJson(*r.value);
+	}
+	else if(request.action=="trim_audio_clip" || request.action=="split_audio_clip")
+	{
+		const auto kind=request.action=="split_audio_clip"?AiBridgeAudioRangeKind::Split:
+			p.value("edge")=="left"?AiBridgeAudioRangeKind::TrimLeft:AiBridgeAudioRangeKind::TrimRight;
+		const auto boundary=p.value(request.action=="split_audio_clip"?"split_tick":"new_edge_tick").toDouble();
+		const auto plan=prepareAudioRange({kind,p.value("clip_id").toString(),p.value("expected_audio_state_hash").toString(),qint64(boundary),dry});
+		const auto result=executeAudioRange(plan,dry);code=result.code;data=result.toJson();data.insert("dry_run",dry);
 	}
 	else if(request.action=="create_audio_track" || request.action=="import_audio_file")
 	{

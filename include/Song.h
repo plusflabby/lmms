@@ -101,6 +101,8 @@ public:
 	QString errorSummary();
 
 	void processNextBuffer();
+	bool isAutomaticLoopJump() const;
+	void warnAudioWindowCompatibility();
 
 	inline int getLoadingTrackCount() const
 	{
@@ -428,6 +430,7 @@ private:
 
 	bool m_savingProject;
 	bool m_loadingProject;
+	bool m_audioWindowCompatibilityWarned=false;
 	bool m_isCancelled;
 
 	SaveOptions m_saveOptions;
@@ -464,6 +467,8 @@ private:
 	friend class gui::ControllerRackView;
 
 signals:
+	void tempoAutomationTopologyChanged();
+	void audioWindowCompatibilityWarning(const QString& message);
 	void projectAboutToChange();
 	void projectLoaded();
 	void playbackStateChanged();

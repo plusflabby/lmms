@@ -55,6 +55,7 @@ SampleClipView::SampleClipView( SampleClip * _clip, TrackView * _tv ) :
 
 	// track future changes of SampleClip
 	connect(m_clip, SIGNAL(sampleChanged()), this, SLOT(updateSample()));
+	connect(m_clip,&SampleClip::audioWindowStatusChanged,this,[this]{updateSample();});
 
 	connect(m_clip, SIGNAL(wasReversed()), this, SLOT(update()));
 
@@ -74,6 +75,8 @@ void SampleClipView::updateSample()
 			? PathUtil::toAbsolute(m_clip->m_sample.sampleFile())
 			: tr("Double-click to open sample")
 	);
+	if(m_clip->hasAudioSourceWindow() && m_clip->audioWindowStatus()!="ok")
+		setToolTip(tr("Audio range unavailable: %1").arg(m_clip->audioWindowStatus())+"\n"+toolTip());
 }
 
 
@@ -122,6 +125,7 @@ void SampleClipView::dragEnterEvent( QDragEnterEvent * _dee )
 
 void SampleClipView::dropEvent( QDropEvent * _de )
 {
+	if(m_clip->hasAudioSourceWindow()) { _de->ignore();return; }
 	if( StringPairDrag::decodeKey( _de ) == "samplefile" )
 	{
 		m_clip->setSampleFile( StringPairDrag::decodeValue( _de ) );
@@ -186,6 +190,7 @@ void SampleClipView::mouseReleaseEvent(QMouseEvent *_me)
 
 void SampleClipView::mouseDoubleClickEvent( QMouseEvent * )
 {
+	if(m_clip->hasAudioSourceWindow()) return;
 	if (m_trackView->trackContainerView()->knifeMode()) { return; }
 
 	const QString selectedAudioFile = FileDialog::openAudioFile();
@@ -355,6 +360,7 @@ void SampleClipView::paintEvent( QPaintEvent * pe )
 
 void SampleClipView::reverseSample()
 {
+	if(m_clip->hasAudioSourceWindow()) return;
 	m_clip->m_sample.setReversed(!m_clip->m_sample.reversed());
 	m_clip->setStartTimeOffset(m_clip->length() - m_clip->startTimeOffset() - m_clip->sampleLength());
 	Engine::getSong()->setModified();

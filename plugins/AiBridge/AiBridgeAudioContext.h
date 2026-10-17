@@ -11,6 +11,7 @@ struct AiBridgeAudioClipSnapshot
 	quint64 generation = 0;
 	qint64 endTick = 0, ticksPerBar = 0, ticksPerBeat = 0;
 	bool sourceVerified = false;
+	std::optional<SampleDecoder::PcmWaveInfo> verifiedSourceInfo;
 };
 struct AiBridgeAudioTrackSnapshot
 {

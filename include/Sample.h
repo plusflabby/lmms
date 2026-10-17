@@ -33,6 +33,7 @@
 #include "lmms_export.h"
 
 namespace lmms {
+struct AudioWindowPlaybackGuard;
 class LMMS_EXPORT Sample
 {
 public:
@@ -97,16 +98,19 @@ public:
 	auto frequency() const -> float { return m_frequency.load(std::memory_order_relaxed); }
 	auto reversed() const -> bool { return m_reversed.load(std::memory_order_relaxed); }
 
-	void setStartFrame(int startFrame) { m_startFrame.store(startFrame, std::memory_order_relaxed); }
-	void setEndFrame(int endFrame) { m_endFrame.store(endFrame, std::memory_order_relaxed); }
-	void setLoopStartFrame(int loopStartFrame) { m_loopStartFrame.store(loopStartFrame, std::memory_order_relaxed); }
-	void setLoopEndFrame(int loopEndFrame) { m_loopEndFrame.store(loopEndFrame, std::memory_order_relaxed); }
+	void setStartFrame(int startFrame) { if(!windowProtected()) m_startFrame.store(startFrame, std::memory_order_relaxed); }
+	void setEndFrame(int endFrame) { if(!windowProtected()) m_endFrame.store(endFrame, std::memory_order_relaxed); }
+	void setLoopStartFrame(int loopStartFrame) { if(!windowProtected()) m_loopStartFrame.store(loopStartFrame, std::memory_order_relaxed); }
+	void setLoopEndFrame(int loopEndFrame) { if(!windowProtected()) m_loopEndFrame.store(loopEndFrame, std::memory_order_relaxed); }
 	void setAllPointFrames(int startFrame, int endFrame, int loopStartFrame, int loopEndFrame);
-	void setAmplification(float amplification) { m_amplification.store(amplification, std::memory_order_relaxed); }
-	void setFrequency(float frequency) { m_frequency.store(frequency, std::memory_order_relaxed); }
-	void setReversed(bool reversed) { m_reversed.store(reversed, std::memory_order_relaxed); }
+	void setAmplification(float amplification) { if(!windowProtected()) m_amplification.store(amplification, std::memory_order_relaxed); }
+	void setFrequency(float frequency) { if(!windowProtected()) m_frequency.store(frequency, std::memory_order_relaxed); }
+	void setReversed(bool reversed) { if(!windowProtected()) m_reversed.store(reversed, std::memory_order_relaxed); }
 
 private:
+	friend class SampleClip;
+	bool windowProtected() const { return !m_audioWindowGuard.expired(); }
+	std::weak_ptr<AudioWindowPlaybackGuard> m_audioWindowGuard;
 	f_cnt_t render(SampleFrame* dst, f_cnt_t size, PlaybackState* state, Loop loop) const;
 	std::shared_ptr<const SampleBuffer> m_buffer = SampleBuffer::emptyBuffer();
 	std::atomic<int> m_startFrame = 0;
