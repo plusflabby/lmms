@@ -60,7 +60,7 @@ public:
 	}
 };
 
-AiBridge::AiBridge() : ToolPlugin(&aibridge_plugin_descriptor, nullptr), m_ipcServer(this)
+AiBridge::AiBridge() : ToolPlugin(&aibridge_plugin_descriptor, nullptr), m_vocalJobs(this), m_ipcServer(this)
 {
 	m_ipcServer.start();
 }
@@ -68,6 +68,7 @@ AiBridge::AiBridge() : ToolPlugin(&aibridge_plugin_descriptor, nullptr), m_ipcSe
 AiBridge::~AiBridge()
 {
 	m_ipcServer.stop();
+	m_vocalJobs.shutdown();
 }
 
 gui::PluginView *AiBridge::instantiateView(QWidget *parent)

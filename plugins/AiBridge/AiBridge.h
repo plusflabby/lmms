@@ -3,6 +3,7 @@
 
 #include "ToolPlugin.h"
 #include "AiBridgeIpcServer.h"
+#include "AiBridgeVocalJobs.h"
 
 namespace lmms
 {
@@ -16,8 +17,10 @@ public:
 	QString nodeName() const override;
 	void saveSettings(QDomDocument &, QDomElement &) override {}
 	void loadSettings(const QDomElement &) override {}
+	AiBridgeVocalJobs& vocalJobs() { return m_vocalJobs; }
 
 private:
+	AiBridgeVocalJobs m_vocalJobs;
 	AiBridgeIpcServer m_ipcServer;
 };
 

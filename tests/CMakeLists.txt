@@ -5,6 +5,7 @@ set(CMAKE_INCLUDE_CURRENT_DIR ON)
 set(CMAKE_AUTOMOC ON)
 
 set(LMMS_TESTS
+	src/plugins/AiBridgeVocalJobsTest.cpp
 	src/plugins/AiBridgeVocalAnalysisTest.cpp
 	src/plugins/AiBridgeVocalSourceTest.cpp
 	src/core/PcmWaveStreamingTest.cpp
@@ -112,7 +113,7 @@ foreach(LMMS_TEST_SRC IN LISTS LMMS_TESTS)
 		target_include_directories(${LMMS_TEST_NAME} PRIVATE ${CMAKE_SOURCE_DIR}/plugins/AiBridge)
 		target_sources(${LMMS_TEST_NAME} PRIVATE ${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeVocalAnalysis.cpp)
 	endif()
-	if(LMMS_TEST_NAME STREQUAL "AiBridgeVocalSourceTest")
+	if(LMMS_TEST_NAME STREQUAL "AiBridgeVocalJobsTest" OR LMMS_TEST_NAME STREQUAL "AiBridgeVocalSourceTest")
 		target_include_directories(${LMMS_TEST_NAME} PRIVATE ${CMAKE_SOURCE_DIR}/plugins/AiBridge)
 		target_sources(${LMMS_TEST_NAME} PRIVATE
 			${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeVocalTypes.cpp
@@ -122,6 +123,10 @@ foreach(LMMS_TEST_SRC IN LISTS LMMS_TESTS)
 			${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeAudioContext.cpp
 			${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeProjectContext.cpp
 			${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeMutationTypes.cpp)
+		if(LMMS_TEST_NAME STREQUAL "AiBridgeVocalJobsTest")
+			target_sources(${LMMS_TEST_NAME} PRIVATE ${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeVocalJobs.cpp
+				${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeVocalJobs.h ${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeVocalAnalysis.cpp)
+		endif()
 	endif()
 	if(LMMS_TEST_NAME STREQUAL "AiBridgeVocalTypesTest")
 		target_include_directories(${LMMS_TEST_NAME} PRIVATE ${CMAKE_SOURCE_DIR}/plugins/AiBridge)
@@ -639,6 +644,13 @@ foreach(LMMS_TEST_SRC IN LISTS LMMS_TESTS)
 			${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeEffectCatalog.cpp)
 	endif()
 	if(LMMS_TEST_NAME STREQUAL "AiBridgeViewTest")
+		target_sources(${LMMS_TEST_NAME} PRIVATE
+			${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeVocalTypes.cpp
+			${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeVocalContext.cpp
+			${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeVocalSource.cpp
+			${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeVocalAnalysis.cpp
+			${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeVocalJobs.cpp
+			${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeVocalJobs.h)
 		target_sources(${LMMS_TEST_NAME} PRIVATE
 			${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridge.cpp
 			${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeActions.cpp
