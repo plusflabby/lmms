@@ -116,6 +116,29 @@ void writeAudioWindow(const AudioWindowStorage& storage,QDomDocument& doc,QDomEl
 	node.setAttribute("offset_ticks",QString::number(w.offsetTicks)); clip.appendChild(node);
 }
 
+AudioWindowEligibility convertLegacyAudioWindow(const AudioWindowGeometry& g,const AudioWindowWorld& world,
+	const QString& sourceCode,const std::optional<SampleDecoder::PcmWaveInfo>& info)
+{
+	if(sourceCode!="ok") return {sourceCode};
+	if(!info || (info->channels!=1 && info->channels!=2)) return {"unsupported_audio_operation"};
+	if(world.tempoBpm!=125 || world.tempoAutomationPresent) return {"unsupported_tempo_map"};
+	if((info->sampleRate!=44100 && info->sampleRate!=48000) || world.outputRate!=info->sampleRate || world.ticksPerBeat!=48)
+		return {"unsupported_sample_rate_mapping"};
+	if(g.autoResize) return {"audio_window_geometry_mismatch"};
+	const qint64 q=info->sampleRate/100;
+	// Bound operands before negation, addition, multiplication or narrowing.
+	if(g.lengthTicks<1 || g.lengthTicks>INT_MAX || g.offsetTicks>0 || g.offsetTicks< -qint64(INT_MAX)
+		|| info->frames>INT_MAX || g.positionTicks<0 || g.positionTicks>INT_MAX-g.lengthTicks)
+		return {"unrepresentable_audio_boundary"};
+	const qint64 in=-g.offsetTicks*q;
+	const qint64 out=std::min(qint64(info->frames),(g.lengthTicks-g.offsetTicks)*q);
+	if(out-in!=g.lengthTicks*q) return {"unrepresentable_audio_boundary"};
+	AudioSourceWindowV2 w{{in,out,in,qint64(info->frames),info->sampleRate,125,info->sampleRate,48,
+		qint32(q),qint32(g.lengthTicks),qint32(g.offsetTicks)},out};
+	AudioWindowStorage storage;storage.kind=AudioWindowStorageKind::V2;storage.valueV2=w;
+	return evaluateAudioWindow(storage,g,world,sourceCode,info);
+}
+
 AudioWindowEligibility evaluateAudioWindow(const AudioWindowStorage& storage,const AudioWindowGeometry& geometry,
 	const AudioWindowWorld& world,const QString& sourceCode,const std::optional<SampleDecoder::PcmWaveInfo>& info)
 {

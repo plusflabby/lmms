@@ -53,7 +53,7 @@ LMMS_EXPORT AudioWindowStorage parseAudioWindow(const QDomElement& sampleClip);
 LMMS_EXPORT void writeAudioWindow(const AudioWindowStorage&, QDomDocument&, QDomElement& sampleClip);
 LMMS_EXPORT QString validateAudioWindowRecord(const AudioSourceWindowV1&);
 LMMS_EXPORT QString validateAudioWindowRecord(const AudioSourceWindowV2&);
-// The shared runtime predicate/conversion is implemented only at the scheduling gate.
+// Shared fail-closed runtime predicate and first-conversion contract.
 LMMS_EXPORT AudioWindowEligibility evaluateAudioWindow(const AudioWindowStorage&, const AudioWindowGeometry&,
 	const AudioWindowWorld&, const QString& sourceCode, const std::optional<SampleDecoder::PcmWaveInfo>&);
 LMMS_EXPORT AudioWindowEligibility convertLegacyAudioWindow(const AudioWindowGeometry&, const AudioWindowWorld&,

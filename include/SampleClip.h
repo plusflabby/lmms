@@ -69,6 +69,7 @@ public:
 	bool hasAudioSourceWindow() const { return m_audioWindowStorage.kind != AudioWindowStorageKind::Legacy; }
 	const AudioWindowStorage& audioWindowStorage() const { return m_audioWindowStorage; }
 	QString audioWindowStatus() const;
+	QString applyAudioWindow(const AudioSourceWindowV2&, const AudioWindowGeometry&);
 	std::shared_ptr<const struct AudioWindowPlaybackView> audioWindowPlaybackView() const;
 	QString adoptAuthorizedAudio(std::unique_ptr<AudioImportPolicy::Prepared> audio);
 	const QByteArray& sourceFileIdentity() const { return m_boundedSourceIdentity; }

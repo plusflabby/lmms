@@ -24,6 +24,8 @@ set(LMMS_TESTS
 	src/plugins/AiBridgeAudioLifecycleTest.cpp
 	src/plugins/AiBridgeAudioActionsTest.cpp
 	src/plugins/AiBridgeAudioPlannerTest.cpp
+	src/plugins/AiBridgeAudioRangePlannerTest.cpp
+	src/plugins/AiBridgeAudioRangeActionsTest.cpp
 	src/plugins/AiBridgeAudioManagementTest.cpp
 	src/core/SampleClipBoundedSourceTest.cpp
 	src/core/SampleDecoderAdmissionTest.cpp
@@ -108,11 +110,19 @@ foreach(LMMS_TEST_SRC IN LISTS LMMS_TESTS)
 		target_include_directories(${LMMS_TEST_NAME} PRIVATE ${CMAKE_SOURCE_DIR}/plugins/AiBridge)
 		target_sources(${LMMS_TEST_NAME} PRIVATE ${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeAudioTypes.cpp)
 	endif()
+	if(LMMS_TEST_NAME STREQUAL "AiBridgeAudioRangeActionsTest")
+		target_compile_definitions(${LMMS_TEST_NAME} PRIVATE LMMS_AUDIO_RANGE_TESTING)
+		target_sources(${LMMS_TEST_NAME} PRIVATE ${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeAudioRangePlanner.cpp ${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeAudioRangeActions.cpp ${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeAudioPlanner.cpp ${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeAudioEditActions.cpp)
+	endif()
+	if(LMMS_TEST_NAME STREQUAL "AiBridgeAudioRangePlannerTest")
+		target_include_directories(${LMMS_TEST_NAME} PRIVATE ${CMAKE_SOURCE_DIR}/plugins/AiBridge)
+		target_sources(${LMMS_TEST_NAME} PRIVATE ${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeAudioTypes.cpp ${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeAudioRangePlanner.cpp)
+	endif()
 	if(LMMS_TEST_NAME STREQUAL "AiBridgeAudioPlannerTest")
 		target_include_directories(${LMMS_TEST_NAME} PRIVATE ${CMAKE_SOURCE_DIR}/plugins/AiBridge)
 		target_sources(${LMMS_TEST_NAME} PRIVATE ${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeAudioPlanner.cpp ${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeAudioTypes.cpp)
 	endif()
-	if(LMMS_TEST_NAME STREQUAL "AiBridgeAudioWindowCompatibilityTest" OR LMMS_TEST_NAME STREQUAL "AiBridgeAudioContextTest" OR LMMS_TEST_NAME STREQUAL "AiBridgeAudioLifecycleTest" OR LMMS_TEST_NAME STREQUAL "AiBridgeAudioActionsTest" OR LMMS_TEST_NAME STREQUAL "AiBridgeAudioManagementTest")
+	if(LMMS_TEST_NAME STREQUAL "AiBridgeAudioRangeActionsTest" OR LMMS_TEST_NAME STREQUAL "AiBridgeAudioWindowCompatibilityTest" OR LMMS_TEST_NAME STREQUAL "AiBridgeAudioContextTest" OR LMMS_TEST_NAME STREQUAL "AiBridgeAudioLifecycleTest" OR LMMS_TEST_NAME STREQUAL "AiBridgeAudioActionsTest" OR LMMS_TEST_NAME STREQUAL "AiBridgeAudioManagementTest")
 		target_include_directories(${LMMS_TEST_NAME} PRIVATE ${CMAKE_SOURCE_DIR}/plugins/AiBridge)
 		target_sources(${LMMS_TEST_NAME} PRIVATE
 			${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeAudioTypes.cpp
