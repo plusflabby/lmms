@@ -4,6 +4,7 @@
 #include <QByteArray>
 #include <optional>
 #include <vector>
+#include "AudioSourceWindow.h"
 namespace lmms {
 // Copied native state only. No native pointer or raw source path crosses this boundary.
 struct AiBridgeAudioClipState
@@ -20,6 +21,10 @@ struct AiBridgeAudioClipState
 	std::optional<int> sourceChannels;
 	double trackVolume = 0, trackPanning = 0;
 	double playbackFrequency = 0, amplification = 0;
+	std::optional<AudioSourceWindowV1> rangeWindow;
+	std::optional<AudioSourceWindowV2> rangeWindowV2;
+	QString rangeStatus;
+	QByteArray invalidRangeMetadataDigest;
 };
 QString audioStateHash(std::vector<AiBridgeAudioClipState> clips);
 }

@@ -11,11 +11,34 @@
 #include <QFileInfo>
 #include <QJsonArray>
 #include <QJsonDocument>
+#include <algorithm>
 namespace lmms {
 namespace {
 bool applicationThread() { return QCoreApplication::instance() && QThread::currentThread()==QCoreApplication::instance()->thread(); }
 bool validPage(int offset,int limit) { return offset>=0 && limit>=1 && limit<=256; }
 bool fits(const QJsonObject& value) { return QJsonDocument(value).toJson(QJsonDocument::Compact).size()<=64*1024; }
+QByteArray invalidRangeDigest(const QDomDocument& document)
+{
+	QCryptographicHash hash(QCryptographicHash::Sha256);hash.addData("aibridge-invalid-audio-window-v1:");
+	const auto token=[&](const QString& value){const auto bytes=value.toUtf8();hash.addData(QByteArray::number(bytes.size()));hash.addData(":");hash.addData(bytes);};
+	const auto root=document.documentElement();auto node=QDomNode(root);
+	// Iterative tree walk: sorted attributes, preserved child/text order, explicit
+	// exit markers. No recursive stack proportional to hostile XML nesting.
+	while(!node.isNull())
+	{
+		hash.addData("N");token(QString::number(node.nodeType()));token(node.nodeName());token(node.nodeValue());
+		QStringList names;const auto attributes=node.attributes();for(int i=0;i<attributes.size();++i)names<<attributes.item(i).nodeName();
+		std::sort(names.begin(),names.end());for(const auto& name:names){hash.addData("A");token(name);token(attributes.namedItem(name).nodeValue());}
+		if(!node.firstChild().isNull()){node=node.firstChild();continue;}
+		while(!node.isNull())
+		{
+			hash.addData("X");if(node==root) return hash.result();
+			if(!node.nextSibling().isNull()){node=node.nextSibling();break;}
+			node=node.parentNode();
+		}
+	}
+	return hash.result();
+}
 AiBridgeAudioTrackSnapshot copyTrack(AiBridgeProjectContext& ids,SampleTrack* track)
 {
 	return {ids.idForTrack(track),track->displayName(),track->volumeModel()->value(),track->panningModel()->value(),
@@ -62,11 +85,26 @@ AiBridgeAudioClipResult AiBridgeAudioContext::clip(const QString& id) const
 		auto current=AudioImportPolicy::configured().prepare(reference,state.sourceDigest,state.sourceIdentity);
 		if(current.audio)
 		{
+			result.verifiedSourceInfo=current.audio->info();
 			result.sourceVerified=true;state.sourceFrames=current.audio->info().frames;state.sampleRate=current.audio->info().sampleRate;
 			state.sourceChannels=current.audio->info().channels;
 			state.sourceStatus=sample->sample().sampleSize() ? "available" : "available_unloaded";
 		}
 		else state.sourceStatus=current.code;
+	}
+	const auto& window=sample->audioWindowStorage();
+	if(window.kind!=AudioWindowStorageKind::Legacy)
+	{
+		state.rangeWindow=window.value;state.rangeWindowV2=window.valueV2;
+		state.rangeStatus=sample->audioWindowStatus();
+		if(!sample->sourceLoadError().isEmpty()) state.rangeStatus=sample->sourceLoadError();
+		else if(state.sourceStatus!="available" && state.sourceStatus!="available_unloaded"
+			&& state.sourceStatus!="empty" && state.sourceStatus!="embedded") state.rangeStatus=state.sourceStatus;
+		if(window.kind==AudioWindowStorageKind::InvalidMetadata)
+		{
+			state.rangeStatus=window.parseCode;
+			state.invalidRangeMetadataDigest=invalidRangeDigest(window.retainedInvalidXml);
+		}
 	}
 	result.stateHash=audioStateHash({state});
 	if(result.stateHash.isEmpty()) return {"unsupported_audio_operation",{}};

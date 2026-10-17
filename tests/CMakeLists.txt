@@ -20,6 +20,7 @@ set(LMMS_TESTS
 	src/core/SampleClipAudioCopyTest.cpp
 	src/plugins/AiBridgeAudioTypesTest.cpp
 	src/plugins/AiBridgeAudioContextTest.cpp
+	src/plugins/AiBridgeAudioWindowCompatibilityTest.cpp
 	src/plugins/AiBridgeAudioLifecycleTest.cpp
 	src/plugins/AiBridgeAudioActionsTest.cpp
 	src/plugins/AiBridgeAudioPlannerTest.cpp
@@ -111,17 +112,17 @@ foreach(LMMS_TEST_SRC IN LISTS LMMS_TESTS)
 		target_include_directories(${LMMS_TEST_NAME} PRIVATE ${CMAKE_SOURCE_DIR}/plugins/AiBridge)
 		target_sources(${LMMS_TEST_NAME} PRIVATE ${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeAudioPlanner.cpp ${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeAudioTypes.cpp)
 	endif()
-	if(LMMS_TEST_NAME STREQUAL "AiBridgeAudioContextTest" OR LMMS_TEST_NAME STREQUAL "AiBridgeAudioLifecycleTest" OR LMMS_TEST_NAME STREQUAL "AiBridgeAudioActionsTest" OR LMMS_TEST_NAME STREQUAL "AiBridgeAudioManagementTest")
+	if(LMMS_TEST_NAME STREQUAL "AiBridgeAudioWindowCompatibilityTest" OR LMMS_TEST_NAME STREQUAL "AiBridgeAudioContextTest" OR LMMS_TEST_NAME STREQUAL "AiBridgeAudioLifecycleTest" OR LMMS_TEST_NAME STREQUAL "AiBridgeAudioActionsTest" OR LMMS_TEST_NAME STREQUAL "AiBridgeAudioManagementTest")
 		target_include_directories(${LMMS_TEST_NAME} PRIVATE ${CMAKE_SOURCE_DIR}/plugins/AiBridge)
 		target_sources(${LMMS_TEST_NAME} PRIVATE
 			${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeAudioTypes.cpp
 			${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeAudioContext.cpp
 			${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeProjectContext.cpp
 			${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeMutationTypes.cpp)
-		if(LMMS_TEST_NAME STREQUAL "AiBridgeAudioActionsTest" OR LMMS_TEST_NAME STREQUAL "AiBridgeAudioManagementTest")
+		if(LMMS_TEST_NAME STREQUAL "AiBridgeAudioWindowCompatibilityTest" OR LMMS_TEST_NAME STREQUAL "AiBridgeAudioActionsTest" OR LMMS_TEST_NAME STREQUAL "AiBridgeAudioManagementTest")
 			target_sources(${LMMS_TEST_NAME} PRIVATE ${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeAudioActions.cpp)
 		endif()
-		if(LMMS_TEST_NAME STREQUAL "AiBridgeAudioManagementTest")
+		if(LMMS_TEST_NAME STREQUAL "AiBridgeAudioWindowCompatibilityTest" OR LMMS_TEST_NAME STREQUAL "AiBridgeAudioManagementTest")
 			target_sources(${LMMS_TEST_NAME} PRIVATE ${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeAudioPlanner.cpp ${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeAudioEditActions.cpp)
 		endif()
 	endif()
