@@ -280,7 +280,7 @@ MidiValidationFailure validateMidiRequest(const QString &action, const QJsonObje
 	return {};
 }
 
-const QSet<QString> audioActions{"get_audio_capabilities","get_audio_clip","create_audio_track","import_audio_file","move_audio_clip","duplicate_audio_clip","delete_audio_clip","batch_edit_audio_clips"};
+const QSet<QString> audioActions{"get_audio_capabilities","get_audio_clip","create_audio_track","import_audio_file","move_audio_clip","duplicate_audio_clip","delete_audio_clip","batch_edit_audio_clips","trim_audio_clip","split_audio_clip"};
 bool audioString(const QJsonValue& v,int maximum)
 {
 	return v.isString() && !v.toString().trimmed().isEmpty() && v.toString().size()<=maximum && !v.toString().contains(QChar(0));
@@ -305,6 +305,16 @@ bool validAudioRequest(const QString& action,const QJsonObject& p)
 	if(p.contains("dry_run") && !p.value("dry_run").isBool())return false;
 	if(action=="get_audio_capabilities")return p.isEmpty();
 	if(action=="get_audio_clip")return hasOnlyKeys(p,{"clip_id"}) && audioString(p.value("clip_id"),256);
+	if(action=="trim_audio_clip" || action=="split_audio_clip")
+	{
+		QSet<QString> keys{"clip_id","expected_audio_state_hash","dry_run"};
+		const auto tick=action=="trim_audio_clip"?QStringLiteral("new_edge_tick"):QStringLiteral("split_tick");keys.insert(tick);
+		if(action=="trim_audio_clip")keys.insert("edge");
+		if(!hasOnlyKeys(p,keys) || !audioString(p.value("clip_id"),256) || !audioTick(p.value(tick)))return false;
+		const auto hash=p.value("expected_audio_state_hash").toString();if(!p.value("expected_audio_state_hash").isString() || hash.size()!=64)return false;
+		for(const auto c:hash)if(!QStringLiteral("0123456789abcdef").contains(c))return false;
+		return action!="trim_audio_clip" || (p.value("edge").isString() && (p.value("edge")=="left" || p.value("edge")=="right"));
+	}
 	if(action=="create_audio_track")
 	{
 		if(!hasOnlyKeys(p,{"name","volume","panning","muted","dry_run"}) || !audioString(p.value("name"),128))return false;

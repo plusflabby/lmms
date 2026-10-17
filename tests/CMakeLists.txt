@@ -26,6 +26,7 @@ set(LMMS_TESTS
 	src/plugins/AiBridgeAudioPlannerTest.cpp
 	src/plugins/AiBridgeAudioRangePlannerTest.cpp
 	src/plugins/AiBridgeAudioRangeActionsTest.cpp
+	src/plugins/AiBridgeAudioRangeProtocolTest.cpp
 	src/plugins/AiBridgeAudioManagementTest.cpp
 	src/core/SampleClipBoundedSourceTest.cpp
 	src/core/SampleDecoderAdmissionTest.cpp
@@ -109,6 +110,10 @@ foreach(LMMS_TEST_SRC IN LISTS LMMS_TESTS)
 	if(LMMS_TEST_NAME STREQUAL "AiBridgeAudioTypesTest")
 		target_include_directories(${LMMS_TEST_NAME} PRIVATE ${CMAKE_SOURCE_DIR}/plugins/AiBridge)
 		target_sources(${LMMS_TEST_NAME} PRIVATE ${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeAudioTypes.cpp)
+	endif()
+	if(LMMS_TEST_NAME STREQUAL "AiBridgeAudioRangeProtocolTest")
+		target_compile_definitions(${LMMS_TEST_NAME} PRIVATE LMMS_AUDIO_RANGE_TESTING)
+		target_include_directories(${LMMS_TEST_NAME} PRIVATE ${CMAKE_SOURCE_DIR}/plugins/AiBridge)
 	endif()
 	if(LMMS_TEST_NAME STREQUAL "AiBridgeAudioRangeActionsTest")
 		target_compile_definitions(${LMMS_TEST_NAME} PRIVATE LMMS_AUDIO_RANGE_TESTING)
@@ -536,16 +541,18 @@ foreach(LMMS_TEST_SRC IN LISTS LMMS_TESTS)
 			${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeProtocol.cpp
 			${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeMutationTypes.cpp)
 	endif()
-	if(LMMS_TEST_NAME STREQUAL "AiBridgeIpcServerTest" OR LMMS_TEST_NAME STREQUAL "AiBridgeViewTest")
+	if(LMMS_TEST_NAME STREQUAL "AiBridgeIpcServerTest" OR LMMS_TEST_NAME STREQUAL "AiBridgeAudioRangeProtocolTest" OR LMMS_TEST_NAME STREQUAL "AiBridgeViewTest")
 		target_sources(${LMMS_TEST_NAME} PRIVATE
 			${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeAudioWire.cpp
+			${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeAudioRangePlanner.cpp
+			${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeAudioRangeActions.cpp
 			${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeAudioActions.cpp
 			${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeAudioEditActions.cpp
 			${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeAudioPlanner.cpp
 			${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeAudioContext.cpp
 			${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeAudioTypes.cpp)
 	endif()
-	if(LMMS_TEST_NAME STREQUAL "AiBridgeIpcServerTest")
+	if(LMMS_TEST_NAME STREQUAL "AiBridgeIpcServerTest" OR LMMS_TEST_NAME STREQUAL "AiBridgeAudioRangeProtocolTest")
 			target_sources(${LMMS_TEST_NAME} PRIVATE
 			${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeActions.cpp
 			${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeContext.cpp
@@ -666,7 +673,7 @@ foreach(LMMS_TEST_SRC IN LISTS LMMS_TESTS)
 		${QT_LIBRARIES}
 		${QT_QTTEST_LIBRARY}
 	)
-	if(LMMS_TEST_NAME STREQUAL "AiBridgeIpcServerTest")
+	if(LMMS_TEST_NAME STREQUAL "AiBridgeIpcServerTest" OR LMMS_TEST_NAME STREQUAL "AiBridgeAudioRangeProtocolTest")
 		target_link_libraries(${LMMS_TEST_NAME} PRIVATE Qt${QT_VERSION_MAJOR}::Network)
 	endif()
 

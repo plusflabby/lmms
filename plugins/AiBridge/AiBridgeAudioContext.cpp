@@ -151,7 +151,19 @@ AiBridgeAudioClipPage AiBridgeAudioContext::clips(const QString& trackId,int off
 QJsonObject AiBridgeAudioContext::toJson(const AiBridgeAudioClipSnapshot& s)
 {
 	const auto& c=s.state;
+	QJsonValue window(QJsonValue::Null);
+	if(c.rangeWindowV2 || c.rangeWindow)
+	{
+		const bool v2=c.rangeWindowV2.has_value();const auto& w=v2?c.rangeWindowV2->base:*c.rangeWindow;
+		window=QJsonObject{{"version",v2?2:1},{"phase",v2?"linear_equal_ref256_v2":"linear_equal_v1"},
+			{"in_frame",double(w.inFrame)},{"out_frame",double(w.outFrame)},{"phase_origin_frame",double(w.phaseOriginFrame)},
+			{"reference_end_frame",v2?QJsonValue(double(c.rangeWindowV2->referenceEndFrame)):QJsonValue(QJsonValue::Null)},
+			{"source_frames",double(w.sourceFrameCount)},{"source_rate",w.sourceRate},{"reference_tempo_bpm",w.referenceTempoBpm},
+			{"reference_output_rate",w.referenceOutputRate},{"ticks_per_beat",w.ticksPerBeat},{"frames_per_tick",w.framesPerTick},
+			{"length_ticks",w.lengthTicks},{"offset_ticks",w.offsetTicks}};
+	}
 	return {{"clip_id",c.id},{"track_id",c.trackId},{"name",s.name},{"audio_state_hash",s.stateHash},
+		{"range_status",c.rangeStatus.isEmpty()?QStringLiteral("legacy"):c.rangeStatus},{"source_window",window},
 		{"project_generation",QString::number(s.generation)},{"position_ticks",double(c.position)},{"length_ticks",double(c.length)},
 		{"end_tick",double(s.endTick)},{"source_offset_ticks",double(c.offset)},{"ticks_per_bar",double(s.ticksPerBar)},{"ticks_per_beat",double(s.ticksPerBeat)},
 		{"source_label",s.sourceLabel},{"source_status",c.sourceStatus},{"source_verified",s.sourceVerified},

@@ -19,7 +19,8 @@ private slots:
 		cases.append({"move_audio_clip",move});cases.append({"duplicate_audio_clip",copy});cases.append({"delete_audio_clip",edit});
 		auto op=move;op.insert("operation","move");cases.append({"batch_edit_audio_clips",{{"operations",QJsonArray{op}},{"dry_run",true}}});
 		for(const auto& row:cases){auto accepted=parse(row.first,row.second);QVERIFY2(accepted.success,qPrintable(row.first+":"+accepted.code));auto bad=row.second;bad.insert("unknown",true);QVERIFY(!parse(row.first,bad).success);bad=row.second;bad.insert("path","G:/private.wav");if(row.first!="import_audio_file")QVERIFY(!parse(row.first,bad).success);}
-		for(const auto& action:{"trim_audio_clip","split_audio_clip","load_audio_file","set_audio_clip"})QCOMPARE(parse(action,{}).code,QStringLiteral("unknown_action"));
+		for(const auto& action:{"load_audio_file","set_audio_clip"})QCOMPARE(parse(action,{}).code,QStringLiteral("unknown_action"));
+		for(const auto& action:{"trim_audio_clip","split_audio_clip"})QCOMPARE(parse(action,{}).code,QStringLiteral("invalid_parameter"));
 		for(const auto& key:{"clip_id","expected_audio_state_hash"}){auto bad=move;bad.remove(key);QVERIFY(!parse("move_audio_clip",bad).success);}
 		for(const QJsonValue value:{QJsonValue(-1),QJsonValue(0.5),QJsonValue(2147483648.0),QJsonValue("10")}){auto bad=move;bad.insert("position_ticks",value);QVERIFY(!parse("move_audio_clip",bad).success);}
 		auto bad=move;bad.insert("dry_run","true");QVERIFY(!parse("move_audio_clip",bad).success);
