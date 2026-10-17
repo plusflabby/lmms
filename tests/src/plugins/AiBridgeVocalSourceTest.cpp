@@ -9,6 +9,7 @@
 #include <cstring>
 #include "AiBridgeVocalContext.h"
 #include "AiBridgeVocalSource.h"
+#include "AiBridgeVocalTrackActions.h"
 #include "AiBridgeAudioContext.h"
 #include "AudioEngine.h"
 #include "AudioImportPolicy.h"
@@ -144,6 +145,13 @@ private slots:
 		AiBridgeProjectContext ids;const auto id=ids.idForClip(&clip);const auto before=AiBridgeAudioContext{}.clip(id);QVERIFY(before.value);
 		VocalAnalyzeRequest req{{{id,before.value->stateHash,{10*q,10*q+5}}},{}};
 		QCOMPARE(captureVocalInputs(req).code,QString("ok"));
+		QDomDocument beforeDoc;auto beforeXml=beforeDoc.createElement("sampleclip");beforeDoc.appendChild(beforeXml);clip.saveSettings(beforeDoc,beforeXml);
+		const auto trackId=ids.idForTrack(&track);const auto control=captureVocalTrack(trackId);QVERIFY(control.value);
+		const auto mixed=setAudioTrackProperties({trackId,control.value->hash,80.1,-0.1,false});QCOMPARE(mixed.code,QString("ok"));
+		QDomDocument afterDoc;auto afterXml=afterDoc.createElement("sampleclip");afterDoc.appendChild(afterXml);clip.saveSettings(afterDoc,afterXml);
+		QCOMPARE(afterDoc.toString(),beforeDoc.toString());QCOMPARE(clip.audioWindowStatus(),QString("ok"));
+		{QFile f(path);QVERIFY(f.open(QIODevice::ReadOnly));QCOMPARE(f.readAll(),bytes);}
+		const auto refreshed=AiBridgeAudioContext{}.clip(id);QVERIFY(refreshed.value);req.selections[0].expectedAudioHash=refreshed.value->stateHash;
 		req.selections[0].frames={0,5};QCOMPARE(captureVocalInputs(req).code,QString("invalid_parameter"));
 		Engine::getSong()->setTempo(126);QCOMPARE(captureVocalInputs(req).code,QString("unsupported_playback_world"));
 	}

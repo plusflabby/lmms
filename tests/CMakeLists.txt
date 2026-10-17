@@ -5,6 +5,7 @@ set(CMAKE_INCLUDE_CURRENT_DIR ON)
 set(CMAKE_AUTOMOC ON)
 
 set(LMMS_TESTS
+	src/plugins/AiBridgeVocalTrackActionsTest.cpp
 	src/plugins/AiBridgeVocalJobsTest.cpp
 	src/plugins/AiBridgeVocalAnalysisTest.cpp
 	src/plugins/AiBridgeVocalSourceTest.cpp
@@ -109,6 +110,17 @@ foreach(LMMS_TEST_SRC IN LISTS LMMS_TESTS)
 
 	# TODO CMake 3.12: Propagate usage requirements by linking to lmmsobjs
 	target_include_directories(${LMMS_TEST_NAME} PRIVATE $<TARGET_PROPERTY:lmmsobjs,INCLUDE_DIRECTORIES>)
+	if(LMMS_TEST_NAME STREQUAL "AiBridgeVocalTrackActionsTest")
+		target_include_directories(${LMMS_TEST_NAME} PRIVATE ${CMAKE_SOURCE_DIR}/plugins/AiBridge)
+		target_sources(${LMMS_TEST_NAME} PRIVATE
+			${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeVocalTypes.cpp
+			${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeVocalContext.cpp
+			${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeVocalTrackActions.cpp
+			${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeAudioTypes.cpp
+			${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeProjectContext.cpp
+			${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeMutationTypes.cpp
+			${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeMixerRegistry.cpp)
+	endif()
 	if(LMMS_TEST_NAME STREQUAL "AiBridgeVocalAnalysisTest")
 		target_include_directories(${LMMS_TEST_NAME} PRIVATE ${CMAKE_SOURCE_DIR}/plugins/AiBridge)
 		target_sources(${LMMS_TEST_NAME} PRIVATE ${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeVocalAnalysis.cpp)
@@ -126,6 +138,10 @@ foreach(LMMS_TEST_SRC IN LISTS LMMS_TESTS)
 		if(LMMS_TEST_NAME STREQUAL "AiBridgeVocalJobsTest")
 			target_sources(${LMMS_TEST_NAME} PRIVATE ${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeVocalJobs.cpp
 				${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeVocalJobs.h ${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeVocalAnalysis.cpp)
+		endif()
+		if(LMMS_TEST_NAME STREQUAL "AiBridgeVocalSourceTest")
+			target_sources(${LMMS_TEST_NAME} PRIVATE ${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeVocalTrackActions.cpp
+				${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeMixerRegistry.cpp)
 		endif()
 	endif()
 	if(LMMS_TEST_NAME STREQUAL "AiBridgeVocalTypesTest")

@@ -17,15 +17,17 @@ namespace lmms {
 namespace {
 bool qt(){return QCoreApplication::instance() && QThread::currentThread()==QCoreApplication::instance()->thread();}
 struct CopiedSource {QString code;AiBridgeAudioClipState state;VocalSourceTicket ticket;};
-CopiedSource copySource(const QString& id)
+CopiedSource copySource(const QString& id,bool requireAuthorized=true)
 {
 	AiBridgeProjectContext ids;auto* clip=dynamic_cast<SampleClip*>(ids.resolveClip(id));
 	if(!clip)return {"stale_id",{}, {}};
 	auto* track=dynamic_cast<SampleTrack*>(clip->getTrack());auto* song=Engine::getSong();
-	if(!track || !song || !clip->usesBoundedSampleSource() || !clip->authorizedSourceInfo()
-		|| !clip->sourceLoadError().isEmpty())return {"source_unavailable",{}, {}};
+	if(!track || !song)return {"source_unavailable",{}, {}};
+	if(requireAuthorized && (!clip->usesBoundedSampleSource() || !clip->authorizedSourceInfo()
+		|| !clip->sourceLoadError().isEmpty()))return {"source_unavailable",{}, {}};
 	CopiedSource result;result.code="ok";auto& t=result.ticket;auto& s=result.state;
-	t.clipId=id;t.expectedIdentity=clip->sourceFileIdentity();t.expectedInfo=*clip->authorizedSourceInfo();
+	t.clipId=id;t.expectedIdentity=clip->sourceFileIdentity();
+	if(clip->authorizedSourceInfo())t.expectedInfo=*clip->authorizedSourceInfo();
 	t.expectedInfo.sourceSha256=clip->expectedSourceDigest();
 	t.reference=PathUtil::toAbsolute(clip->sampleFile());
 	t.sourceStatus=clip->sample().sampleSize() ? "available" : "available_unloaded";
@@ -52,6 +54,14 @@ CopiedSource copySource(const QString& id)
 	s.sourceReferenceHash=QCryptographicHash::hash(clip->sampleFile().toUtf8(),QCryptographicHash::Sha256);
 	s.sourceIdentity=t.expectedIdentity;s.sourceDigest=t.expectedInfo.sourceSha256;
 	s.sourceFrames=t.expectedInfo.frames;s.sampleRate=t.expectedInfo.sampleRate;s.sourceChannels=t.expectedInfo.channels;s.sourceStatus=t.sourceStatus;
+	if(!requireAuthorized && !clip->usesBoundedSampleSource())
+	{
+		s.sourceFrames=clip->sample().sampleSize();s.sampleRate=clip->sample().sampleRate();s.sourceChannels.reset();
+		s.sourceIdentity=QCryptographicHash::hash(QByteArray("native-buffer-v1:")
+			+QByteArray::number(clip->sample().buffer()->contentRevision()),QCryptographicHash::Sha256).toHex();
+		s.sourceStatus=clip->sampleFile().isEmpty() ? (s.sourceFrames ? "embedded" : "empty")
+			: (clip->sourceLoadError().isEmpty() ? QString("unverified_legacy") : clip->sourceLoadError());
+	}
 	t.sourceRevision=QString::fromLatin1(QCryptographicHash::hash(QByteArray("vocal-source-v1:")+t.expectedIdentity
 		+t.expectedInfo.sourceSha256+QByteArray::number(ids.projectGeneration()),QCryptographicHash::Sha256).toHex());
 	return result;
@@ -104,6 +114,6 @@ QString validateVocalSnapshot(const VocalInputSnapshot& s)
 QString vocalClipStateHash(const QString& id)
 {
 	if(!qt())return {};
-	const auto copy=copySource(id);return copy.code=="ok" ? audioStateHash({copy.state}) : QString{};
+	const auto copy=copySource(id,false);return copy.code=="ok" ? audioStateHash({copy.state}) : QString{};
 }
 }
