@@ -103,6 +103,7 @@ public:
 	bool isInPattern() const;
 
 	bool manuallyResizable() const;
+	bool allowsTimeGeometryEdits() const { return allowsGenericClipEdits(); }
 
 	/*! \brief Set whether a clip has been resized yet by the user or the knife tool.
 	 *

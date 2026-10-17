@@ -28,6 +28,9 @@
 #include <QDebug>
 #include <QFile>
 #include <QMessageBox>
+#include <QThread>
+#include "SampleClip.h"
+#include "MainWindow.h"
 
 #include <algorithm>
 #include <cmath>
@@ -61,6 +64,24 @@ namespace lmms
 {
 namespace { thread_local bool automaticLoopJump=false; }
 bool Song::isAutomaticLoopJump() const { return automaticLoopJump; }
+void Song::warnAudioWindowCompatibility()
+{
+	if(m_audioWindowCompatibilityWarned || !QCoreApplication::instance()
+		|| QThread::currentThread()!=QCoreApplication::instance()->thread()) return;
+	bool containsWindow=false;
+	for(const auto* track:tracks())for(const auto* clip:track->getClips())
+		if(const auto* sample=dynamic_cast<const SampleClip*>(clip);sample && sample->hasAudioSourceWindow()) containsWindow=true;
+	if(!containsWindow) return;
+	m_audioWindowCompatibilityWarned=true;
+	const auto message=tr("This project contains source-frame audio windows and requires a compatible LMMS build. Older builds may play different audio.");
+	emit audioWindowCompatibilityWarning(message);
+	if(auto* ui=gui::getGUI();ui && ui->mainWindow())
+	{
+		auto* warning=new QMessageBox(QMessageBox::Warning,tr("Audio window compatibility"),message,QMessageBox::Ok,ui->mainWindow());
+		warning->setAttribute(Qt::WA_DeleteOnClose);warning->setWindowModality(Qt::NonModal);warning->setModal(false);warning->show();
+	}
+	else qWarning().noquote()<<message;
+}
 
 tick_t TimePos::s_ticksPerBar = DefaultTicksPerBar;
 
@@ -853,6 +874,7 @@ AutomatedValueMap Song::automatedValuesAt(TimePos time, int clipNum) const
 
 void Song::clearProject()
 {
+	m_audioWindowCompatibilityWarned=false;
 	using gui::getGUI;
 	emit projectAboutToChange();
 
@@ -1219,6 +1241,7 @@ void Song::loadProject( const QString & fileName )
 // only save current song as filename and do nothing else
 bool Song::saveProjectFile(const QString & filename, bool withResources)
 {
+	warnAudioWindowCompatibility();
 	using gui::getGUI;
 
 	DataFile dataFile( DataFile::Type::SongProject );

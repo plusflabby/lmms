@@ -137,6 +137,18 @@ private slots:
         AiBridgeProjectContext ids;const auto snapshot=AiBridgeAudioContext{}.clip(ids.idForClip(&clip));QCOMPARE(snapshot.code,QString("ok"));
         QCOMPARE(snapshot.value->state.rangeStatus,QString("audio_source_missing"));
     }
+    void genericTimeGeometryPredicateKeepsLegacySeparate()
+    {
+        using namespace lmms;SampleTrack track(Engine::getSong());SampleClip clip(&track);
+        QVERIFY(clip.allowsTimeGeometryEdits());clip.loadSettings(state());QVERIFY(!clip.allowsTimeGeometryEdits());
+    }
+    void compatibilityWarningIsOncePerProjectAndAbsentForLegacy()
+    {
+        using namespace lmms;auto* song=Engine::getSong();QSignalSpy warning(song,&Song::audioWindowCompatibilityWarning);
+        SampleTrack track(song);SampleClip clip(&track);song->warnAudioWindowCompatibility();QCOMPARE(warning.count(),0);
+        clip.loadSettings(state());song->warnAudioWindowCompatibility();song->warnAudioWindowCompatibility();QCOMPARE(warning.count(),1);
+        QVERIFY(warning.front().front().toString().contains("Older builds may play different audio"));
+    }
 };
 QTEST_MAIN(AiBridgeAudioWindowCompatibilityTest)
 #include "AiBridgeAudioWindowCompatibilityTest.moc"

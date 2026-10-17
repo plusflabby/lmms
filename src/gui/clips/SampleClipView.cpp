@@ -125,6 +125,7 @@ void SampleClipView::dragEnterEvent( QDragEnterEvent * _dee )
 
 void SampleClipView::dropEvent( QDropEvent * _de )
 {
+	if(m_clip->hasAudioSourceWindow()) { _de->ignore();return; }
 	if( StringPairDrag::decodeKey( _de ) == "samplefile" )
 	{
 		m_clip->setSampleFile( StringPairDrag::decodeValue( _de ) );
@@ -189,6 +190,7 @@ void SampleClipView::mouseReleaseEvent(QMouseEvent *_me)
 
 void SampleClipView::mouseDoubleClickEvent( QMouseEvent * )
 {
+	if(m_clip->hasAudioSourceWindow()) return;
 	if (m_trackView->trackContainerView()->knifeMode()) { return; }
 
 	const QString selectedAudioFile = FileDialog::openAudioFile();
@@ -358,6 +360,7 @@ void SampleClipView::paintEvent( QPaintEvent * pe )
 
 void SampleClipView::reverseSample()
 {
+	if(m_clip->hasAudioSourceWindow()) return;
 	m_clip->m_sample.setReversed(!m_clip->m_sample.reversed());
 	m_clip->setStartTimeOffset(m_clip->length() - m_clip->startTimeOffset() - m_clip->sampleLength());
 	Engine::getSong()->setModified();
