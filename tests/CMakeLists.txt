@@ -5,6 +5,8 @@ set(CMAKE_INCLUDE_CURRENT_DIR ON)
 set(CMAKE_AUTOMOC ON)
 
 set(LMMS_TESTS
+	src/plugins/AiBridgeVocalSourceTest.cpp
+	src/core/PcmWaveStreamingTest.cpp
 	src/plugins/AiBridgeVocalTypesTest.cpp
 	src/core/AudioSourceWindowPersistenceTest.cpp
 	src/core/AudioSourceWindowV2PersistenceTest.cpp
@@ -105,6 +107,17 @@ foreach(LMMS_TEST_SRC IN LISTS LMMS_TESTS)
 
 	# TODO CMake 3.12: Propagate usage requirements by linking to lmmsobjs
 	target_include_directories(${LMMS_TEST_NAME} PRIVATE $<TARGET_PROPERTY:lmmsobjs,INCLUDE_DIRECTORIES>)
+	if(LMMS_TEST_NAME STREQUAL "AiBridgeVocalSourceTest")
+		target_include_directories(${LMMS_TEST_NAME} PRIVATE ${CMAKE_SOURCE_DIR}/plugins/AiBridge)
+		target_sources(${LMMS_TEST_NAME} PRIVATE
+			${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeVocalTypes.cpp
+			${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeVocalContext.cpp
+			${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeVocalSource.cpp
+			${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeAudioTypes.cpp
+			${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeAudioContext.cpp
+			${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeProjectContext.cpp
+			${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeMutationTypes.cpp)
+	endif()
 	if(LMMS_TEST_NAME STREQUAL "AiBridgeVocalTypesTest")
 		target_include_directories(${LMMS_TEST_NAME} PRIVATE ${CMAKE_SOURCE_DIR}/plugins/AiBridge)
 		target_sources(${LMMS_TEST_NAME} PRIVATE ${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeVocalTypes.cpp)

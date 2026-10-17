@@ -6,6 +6,7 @@ BUILD_PLUGIN(aibridge AiBridge.cpp AiBridge.h AiBridgeActions.cpp AiBridgeAction
 target_link_libraries(aibridge Qt${QT_VERSION_MAJOR}::Network)
 target_sources(aibridge PRIVATE AiBridgeAudioTypes.cpp AiBridgeAudioTypes.h)
 target_sources(aibridge PRIVATE AiBridgeVocalTypes.cpp AiBridgeVocalTypes.h)
+target_sources(aibridge PRIVATE AiBridgeVocalContext.cpp AiBridgeVocalContext.h AiBridgeVocalSource.cpp AiBridgeVocalSource.h)
 target_sources(aibridge PRIVATE AiBridgeAudioContext.cpp AiBridgeAudioContext.h)
 target_sources(aibridge PRIVATE AiBridgeAudioActions.cpp AiBridgeAudioActions.h)
 target_sources(aibridge PRIVATE AiBridgeAudioPlanner.cpp AiBridgeAudioPlanner.h AiBridgeAudioEditActions.cpp)

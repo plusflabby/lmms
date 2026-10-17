@@ -286,6 +286,67 @@ auto SampleDecoder::admitPcmWave(const QByteArray& header, quint64 fileBytes, co
 	return {QStringLiteral("ok"), {frames, fileBytes, decodedBytes, static_cast<int>(channels), static_cast<int>(rate)}};
 }
 
+namespace {
+void convertPcm16(const char* input, int channels, std::span<SampleFrame> output)
+{
+	for(size_t i=0;i<output.size();++i)
+	{
+		const auto* bytes=reinterpret_cast<const uchar*>(input)+i*channels*sizeof(qint16);
+		const float left=qFromLittleEndian<qint16>(bytes)/32768.0f;
+		const float right=channels==1 ? left : qFromLittleEndian<qint16>(bytes+2)/32768.0f;
+		output[i]={left,right};
+	}
+}
+}
+
+auto SampleDecoder::scanPcmWave(QIODevice& source, const PcmWaveLimits& limits,const PcmWaveChunkVisitor& visitor,
+	const std::atomic_bool& cancelled) -> PcmWaveAdmission
+{
+	PcmWaveInfo info;
+	try
+	{
+		if(cancelled.load())return {QStringLiteral("cancelled"),{}};
+		if(!visitor || !source.isOpen() || !source.isReadable() || source.isWritable() || source.isSequential()
+			|| source.size()<0 || !source.seek(0))return {QStringLiteral("audio_decode_failed"),{}};
+		const auto header=source.read(44);
+		const auto admitted=admitPcmWave(header,quint64(source.size()),limits);
+		if(admitted.code!=QStringLiteral("ok"))return admitted;
+		info=admitted.info;
+		QCryptographicHash hash(QCryptographicHash::Sha256);hash.addData(header);
+		std::array<char,4096> input;
+		std::array<SampleFrame,2048> output;
+		const quint64 alignment=info.channels*sizeof(qint16);
+		quint64 completed=0;
+		while(completed<info.frames)
+		{
+			if(cancelled.load())return {QStringLiteral("cancelled"),info};
+			const auto count=std::min<quint64>(input.size()/alignment,info.frames-completed);
+			const qint64 wanted=count*alignment;
+			qint64 received=0;
+			while(received<wanted)
+			{
+				if(cancelled.load())return {QStringLiteral("cancelled"),info};
+				const auto read=source.read(input.data()+received,wanted-received);
+				if(read<=0)return {QStringLiteral("audio_decode_failed"),info};
+				received+=read;
+			}
+			hash.addData(input.data(),int(wanted));
+			convertPcm16(input.data(),info.channels,std::span(output.data(),size_t(count)));
+			if(cancelled.load())return {QStringLiteral("cancelled"),info};
+			const auto decision=visitor(completed,std::span<const SampleFrame>(output.data(),size_t(count)));
+			if(decision!=PcmWaveVisitDecision::Continue)
+				return {decision==PcmWaveVisitDecision::Cancelled ? QStringLiteral("cancelled") : QStringLiteral("resource_limit"),info};
+			completed+=count;
+		}
+		if(cancelled.load())return {QStringLiteral("cancelled"),info};
+		if(source.size()<0 || quint64(source.size())!=info.fileBytes)return {QStringLiteral("audio_source_changed"),info};
+		info.sourceSha256=hash.result();
+		return {QStringLiteral("ok"),info};
+	}
+	catch(const std::bad_alloc&){return {QStringLiteral("source_too_large"),info};}
+	catch(const std::length_error&){return {QStringLiteral("source_too_large"),info};}
+}
+
 auto SampleDecoder::decodePcmWave(QIODevice& source, const PcmWaveLimits& limits) -> PcmWaveResult
 {
 	if (!source.isOpen() || !source.isReadable() || source.isWritable() || source.isSequential()
@@ -316,13 +377,7 @@ auto SampleDecoder::decodePcmWave(QIODevice& source, const PcmWaveLimits& limits
 				received += read;
 			}
 			hash.addData(input.data(), static_cast<int>(wanted));
-			for (quint64 i = 0; i < count; ++i)
-			{
-				const auto bytes = reinterpret_cast<const uchar*>(input.data()) + i * alignment;
-				const float left = qFromLittleEndian<qint16>(bytes) / 32768.0f;
-				const float right = info.channels == 1 ? left : qFromLittleEndian<qint16>(bytes + 2) / 32768.0f;
-				data[static_cast<size_t>(completed + i)] = {left, right};
-			}
+			convertPcm16(input.data(),info.channels,std::span(data.data()+completed,size_t(count)));
 			completed += count;
 		}
 		if (static_cast<quint64>(source.size()) != info.fileBytes)
