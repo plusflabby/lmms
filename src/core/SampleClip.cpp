@@ -26,6 +26,8 @@
 
 #include <QDomElement>
 #include <QFileInfo>
+#include <QThread>
+#include "AudioWindowPlayback.h"
 
 #include "PatternStore.h"
 #include "PathUtil.h"
@@ -67,6 +69,7 @@ SampleClip::SampleClip(Track* _track, Sample sample, bool isPlaying):
 	//care about Clip position
 	connect( this, SIGNAL(positionChanged()), this, SLOT(updateTrackClips()));
 
+	initializeAudioWindowConnections();
 	updateTrackClips();
 }
 
@@ -98,8 +101,8 @@ SampleClip::SampleClip(const SampleClip& orig, Track* target) :
 	// we need to receive bpm-change-events, because then we have to
 	// change length of this Clip
 	connect(Engine::getSong(), &Song::tempoChanged, this, &SampleClip::tempoChanged, Qt::DirectConnection);
-	connect( Engine::getSong(), SIGNAL(timeSignatureChanged(int,int)),
-					this, SLOT(updateLength()));
+	// Versioned clones receive synchronous meter invalidation below. The old
+	// string connection targeted a non-slot; do not alter legacy clone rendering.
 
 	//playbutton clicked or space key / on Export Song set isPlaying to false
 	connect( Engine::getSong(), SIGNAL(playbackStateChanged()),
@@ -115,6 +118,7 @@ SampleClip::SampleClip(const SampleClip& orig, Track* target) :
 	//care about Clip position
 	connect( this, SIGNAL(positionChanged()), this, SLOT(updateTrackClips()));
 
+	initializeAudioWindowConnections();
 	updateTrackClips();
 }
 
@@ -123,6 +127,7 @@ SampleClip::SampleClip(const SampleClip& orig, Track* target) :
 
 SampleClip::~SampleClip()
 {
+	m_audioWindowGuard->epoch.fetch_add(1,std::memory_order_acq_rel);
 	auto sampletrack = dynamic_cast<SampleTrack*>(getTrack());
 	if ( sampletrack )
 	{
@@ -141,6 +146,7 @@ SampleClip* SampleClip::cloneToTrack(SampleTrack* target) const
 
 void SampleClip::changeLength( const TimePos & _length )
 {
+	if(!allowsGenericClipEdits()) return;
 	Clip::changeLength(std::max(static_cast<int>(_length), 1));
 }
 
@@ -154,6 +160,12 @@ const QString& SampleClip::sampleFile() const
 QString SampleClip::audioWindowStatus() const
 {
 	if (!hasAudioSourceWindow()) return QStringLiteral("ok");
+	if(m_audioWindowStorage.kind==AudioWindowStorageKind::V2)
+	{
+		const auto result=audioWindowEligibility();
+		if(result.code!="ok") return result.code;
+		return verifyAudioWindowReferenceProfile()?QStringLiteral("ok"):QStringLiteral("unsupported_audio_operation");
+	}
 	if (m_audioWindowStorage.kind == AudioWindowStorageKind::InvalidMetadata) return m_audioWindowStorage.parseCode;
 	if (!m_sourceLoadError.isEmpty()) return m_sourceLoadError;
 	if (!m_boundedSampleSource || !m_sourceInfo) return QStringLiteral("unsupported_audio_operation");
@@ -163,6 +175,73 @@ QString SampleClip::audioWindowStatus() const
 		return QStringLiteral("audio_source_changed");
 	// Persistence ships fail-closed until independent renderer/scheduler gates pass.
 	return QStringLiteral("unsupported_audio_operation");
+}
+
+AudioWindowEligibility SampleClip::audioWindowEligibility() const
+{
+	AudioWindowGeometry geometry{startPosition().getTicks(),length().getTicks(),startTimeOffset().getTicks(),
+		getAutoResize(),m_sample.reversed(),isSolo(),name(),color()?color()->name(QColor::HexArgb):QString{},
+		m_sample.frequency(),m_sample.amplification()};
+	auto* song=Engine::getSong();
+	AudioWindowWorld world{song->getTempo(),int(Engine::audioEngine()->outputSampleRate()),
+		TimePos::ticksPerBar()/song->getTimeSigModel().getNumerator(),song->tempoModel().isAutomatedOrControlled()};
+	const auto sourceCode=!m_sourceLoadError.isEmpty()?m_sourceLoadError:
+		!m_boundedSampleSource?QStringLiteral("unsupported_audio_operation"):QStringLiteral("ok");
+	return evaluateAudioWindow(m_audioWindowStorage,geometry,world,sourceCode,m_sourceInfo);
+}
+
+std::shared_ptr<const AudioWindowPlaybackView> SampleClip::audioWindowPlaybackView() const
+{
+	auto view=m_audioWindowView.load(std::memory_order_acquire);
+	if(view && view->guard->epoch.load(std::memory_order_acquire)==view->expectedEpoch) return view;
+	return {};
+}
+
+void SampleClip::initializeAudioWindowConnections()
+{
+	const auto invalidate=[this]
+	{
+		if(!hasAudioSourceWindow()) return;
+		m_audioWindowGuard->epoch.fetch_add(1,std::memory_order_acq_rel);
+		m_audioWindowView.store({},std::memory_order_release);
+		// Graph producers may still own an automation-clip mutex. Invalidate
+		// synchronously, but traverse/requalify only after the edit completes.
+		QMetaObject::invokeMethod(this,[this]{refreshAudioWindowPlayback();},Qt::QueuedConnection);
+	};
+	connect(Engine::getSong(),&Song::tempoAutomationTopologyChanged,this,invalidate,Qt::DirectConnection);
+	connect(Engine::getSong(),&Song::timeSignatureChanged,this,invalidate,Qt::DirectConnection);
+	connect(this,&SampleClip::sampleChanged,this,&SampleClip::refreshAudioWindowPlayback,Qt::DirectConnection);
+	connect(this,&Clip::positionChanged,this,&SampleClip::refreshAudioWindowPlayback,Qt::DirectConnection);
+	connect(this,&Clip::lengthChanged,this,&SampleClip::refreshAudioWindowPlayback,Qt::DirectConnection);
+	connect(Engine::audioEngine(),&AudioEngine::sampleRateChanged,this,&SampleClip::refreshAudioWindowPlayback,Qt::DirectConnection);
+	refreshAudioWindowPlayback();
+}
+
+void SampleClip::refreshAudioWindowPlayback()
+{
+	if(!hasAudioSourceWindow() || m_loadingAudioWindow) return;
+	const auto epoch=m_audioWindowGuard->epoch.fetch_add(1,std::memory_order_acq_rel)+1;
+	m_audioWindowView.store({},std::memory_order_release);
+	if(QThread::currentThread()!=thread())
+	{
+		QMetaObject::invokeMethod(this,[this]{refreshAudioWindowPlayback();},Qt::QueuedConnection);
+		return;
+	}
+	m_sample.m_audioWindowGuard=m_audioWindowGuard;
+	const auto code=audioWindowStatus();
+	if(code=="ok")
+	{
+		auto view=makeAudioWindowPlaybackView(m_sample.buffer(),*m_audioWindowStorage.valueV2,0,
+			m_sample.amplification(),m_audioWindowGuard,epoch);
+		if(view)
+		{
+			auto published=std::make_shared<const AudioWindowPlaybackView>(std::move(*view));
+			const auto changes=Engine::audioEngine()->requestChangesGuard();
+			setIsPlaying(false);
+			m_audioWindowView.store(std::move(published),std::memory_order_release);
+		}
+	}
+	emit audioWindowStatusChanged(code);
 }
 
 bool SampleClip::hasSampleFileLoaded(const QString & filename) const
@@ -282,6 +361,13 @@ void SampleClip::toggleRecord()
 
 void SampleClip::playbackPositionChanged()
 {
+	if(m_audioWindowStorage.kind==AudioWindowStorageKind::V2 && Engine::getSong()->isAutomaticLoopJump())
+	{
+		// Already-scheduled views own the prefix before this loop seam. Their
+		// exact output span ends at the loop edge; let that prefix render once.
+		setIsPlaying(false);
+		return;
+	}
 	Engine::audioEngine()->removePlayHandlesOfTypes( getTrack(), PlayHandle::Type::SamplePlayHandle );
 	auto st = dynamic_cast<SampleTrack*>(getTrack());
 	st->setPlayingClips( false );
@@ -341,8 +427,7 @@ void SampleClip::tempoChanged()
 {
 	if (hasAudioSourceWindow())
 	{
-		m_audioWindowGuard->epoch.fetch_add(1, std::memory_order_acq_rel);
-		emit audioWindowStatusChanged(audioWindowStatus());
+		refreshAudioWindowPlayback();
 		emit sampleChanged();
 		return;
 	}
@@ -353,6 +438,7 @@ void SampleClip::tempoChanged()
 
 void SampleClip::setStartTimeOffset(const TimePos& startTimeOffset)
 {
+	if(!allowsGenericClipEdits()) return;
 	m_startFrameOffset = startTimeOffset * Engine::framesPerTick();
 	Clip::setStartTimeOffset(startTimeOffset);
 }
@@ -440,9 +526,18 @@ void SampleClip::saveSettings( QDomDocument & _doc, QDomElement & _this )
 
 void SampleClip::loadSettings( const QDomElement & _this )
 {
+	struct LoadingReset { std::atomic_bool& flag; bool previous; ~LoadingReset(){flag.store(previous,std::memory_order_release);} };
+	LoadingReset loading{m_loadingAudioWindow,m_loadingAudioWindow.exchange(true,std::memory_order_acq_rel)};
 	{
 		const auto guard = Engine::audioEngine()->requestChangesGuard();
 		m_audioWindowGuard->epoch.fetch_add(1, std::memory_order_acq_rel);
+		if(hasAudioSourceWindow() || !_this.firstChildElement("audio_source_window").isNull())
+		{
+			Engine::audioEngine()->removePlayHandlesOfTypes(getTrack(),PlayHandle::Type::SamplePlayHandle);
+			setIsPlaying(false);
+		}
+		m_audioWindowView.store({},std::memory_order_release);
+		m_sample.m_audioWindowGuard.reset();
 		m_audioWindowStorage = parseAudioWindow(_this);
 	}
 	m_unavailableSampleFile.clear();
@@ -542,8 +637,10 @@ void SampleClip::loadSettings( const QDomElement & _this )
 	}
 	if (hasAudioSourceWindow())
 	{
+		m_loadingAudioWindow=false;
+		refreshAudioWindowPlayback();
 		const auto code = audioWindowStatus();
-		Engine::getSong()->collectError(tr("Audio range unavailable: %1").arg(code));
+		if(code!="ok") Engine::getSong()->collectError(tr("Audio range unavailable: %1").arg(code));
 		emit audioWindowStatusChanged(code);
 	}
 

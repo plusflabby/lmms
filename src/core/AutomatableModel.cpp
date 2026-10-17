@@ -488,6 +488,7 @@ void AutomatableModel::unlink()
 void AutomatableModel::setControllerConnection( ControllerConnection* c )
 {
 	m_controllerConnection = c;
+	if(auto* song=Engine::getSong();song && this==&song->tempoModel()) emit song->tempoAutomationTopologyChanged();
 	if( c )
 	{
 		QObject::connect( m_controllerConnection, SIGNAL(valueChanged()),
@@ -629,6 +630,7 @@ void AutomatableModel::unlinkControllerConnection()
 	}
 
 	m_controllerConnection = nullptr;
+	if(auto* song=Engine::getSong();song && this==&song->tempoModel()) emit song->tempoAutomationTopologyChanged();
 }
 
 

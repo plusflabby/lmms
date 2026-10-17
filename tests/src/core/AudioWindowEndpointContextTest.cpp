@@ -308,14 +308,21 @@ private slots:
 		QDomDocument persisted;auto persistedNode=persisted.createElement("sampleclip");persisted.appendChild(persistedNode);
 		playbackClip.saveSettings(persisted,persistedNode);
 		QCOMPARE(persistedNode.firstChildElement("audio_source_window").attribute("reference_end"),QString::number(p.referenceEndFrame));
-		if(scenario=="one-frame-tail-seek")
-			QFAIL("Native immutable view at elapsedOutputFrames=out-in-1 must be exercised when its API is implemented; a one-tick seek is not a one-frame seek");
 		// Production-facing assertions deliberately remain behind codec recognition:
 		// they must become separate renderer/transport REDs after codec work, not be
 		// claimed as passed by the proposal-only oracle above.
 		const auto whole=reference(legacy,int(p.base.phaseOriginFrame),int(p.referenceEndFrame));
 		legacy.setMuted(true);auto* song=Engine::getSong();auto* engine=Engine::audioEngine();
 		const auto period=engine->framesPerPeriod();const qint64 length=p.base.outFrame-p.base.inFrame;
+		if(scenario=="one-frame-tail-seek")
+		{
+			SamplePlayHandle tail(&playbackClip,length-1);
+			QCOMPARE(tail.totalFrames(),f_cnt_t(1));
+			std::vector<SampleFrame> output(period,SampleFrame{9,9});tail.play(output.data());
+			for(int ch=0;ch<2;++ch) QCOMPARE(output[0][ch],whole[p.base.inFrame-p.base.phaseOriginFrame+length-1][ch]);
+			for(size_t j=1;j<output.size();++j)for(int ch=0;ch<2;++ch) QCOMPARE(output[j][ch],0.0f);
+			return;
+		}
 		const int seek=scenario=="seek" ? p.base.lengthTicks/2 : 0;
 		for(int run=0;run<(scenario=="stop-start" ? 2:1);++run)
 		{

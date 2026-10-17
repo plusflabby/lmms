@@ -27,6 +27,7 @@
 #define LMMS_SAMPLE_PLAY_HANDLE_H
 
 #include "Sample.h"
+#include "AudioWindowPlayback.h"
 #include "PlayHandle.h"
 
 namespace lmms
@@ -43,7 +44,7 @@ class LMMS_EXPORT SamplePlayHandle : public PlayHandle
 public:
 	SamplePlayHandle(Sample* sample, bool ownAudioBusHandle = true);
 	SamplePlayHandle( const QString& sampleFile );
-	SamplePlayHandle( SampleClip* clip );
+	SamplePlayHandle( SampleClip* clip, qint64 elapsedOutputFrames=0, qint64 maxOutputFrames=-1 );
 	~SamplePlayHandle() override;
 
 	inline bool affinityMatters() const override
@@ -73,6 +74,7 @@ public:
 	}
 
 private:
+	std::optional<AudioWindowPlaybackView> m_windowPlaybackView;
 	Sample::PlaybackState m_state;
 	f_cnt_t m_frame = 0;
 	Sample* m_sample = nullptr;

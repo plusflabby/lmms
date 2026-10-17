@@ -59,6 +59,8 @@
 
 namespace lmms
 {
+namespace { thread_local bool automaticLoopJump=false; }
+bool Song::isAutomaticLoopJump() const { return automaticLoopJump; }
 
 tick_t TimePos::s_ticksPerBar = DefaultTicksPerBar;
 
@@ -254,7 +256,9 @@ void Song::processNextBuffer()
 	{
 		if (getPlayPos() < begin || getPlayPos() >= end)
 		{
+			const auto previous=automaticLoopJump;automaticLoopJump=true;
 			getTimeline().setTicks(begin.getTicks());
+			automaticLoopJump=previous;
 			return true;
 		}
 		return false;

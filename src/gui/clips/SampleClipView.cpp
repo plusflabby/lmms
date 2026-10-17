@@ -55,6 +55,7 @@ SampleClipView::SampleClipView( SampleClip * _clip, TrackView * _tv ) :
 
 	// track future changes of SampleClip
 	connect(m_clip, SIGNAL(sampleChanged()), this, SLOT(updateSample()));
+	connect(m_clip,&SampleClip::audioWindowStatusChanged,this,[this]{updateSample();});
 
 	connect(m_clip, SIGNAL(wasReversed()), this, SLOT(update()));
 
@@ -74,6 +75,8 @@ void SampleClipView::updateSample()
 			? PathUtil::toAbsolute(m_clip->m_sample.sampleFile())
 			: tr("Double-click to open sample")
 	);
+	if(m_clip->hasAudioSourceWindow() && m_clip->audioWindowStatus()!="ok")
+		setToolTip(tr("Audio range unavailable: %1").arg(m_clip->audioWindowStatus())+"\n"+toolTip());
 }
 
 

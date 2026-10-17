@@ -57,7 +57,7 @@ Sample::Sample(const Sample& other)
 }
 
 Sample::Sample(Sample&& other) noexcept
-	: m_buffer(std::move(other.m_buffer))
+	: m_buffer(other.windowProtected()?other.m_buffer:std::move(other.m_buffer))
 	, m_startFrame(other.startFrame())
 	, m_endFrame(other.endFrame())
 	, m_loopStartFrame(other.loopStartFrame())
@@ -70,6 +70,7 @@ Sample::Sample(Sample&& other) noexcept
 
 auto Sample::operator=(const Sample& other) -> Sample&
 {
+	if(windowProtected()) return *this;
 	m_buffer = other.m_buffer;
 	m_startFrame = other.startFrame();
 	m_endFrame = other.endFrame();
@@ -84,7 +85,8 @@ auto Sample::operator=(const Sample& other) -> Sample&
 
 auto Sample::operator=(Sample&& other) noexcept -> Sample&
 {
-	m_buffer = std::move(other.m_buffer);
+	if(windowProtected()) return *this;
+	m_buffer = other.windowProtected()?other.m_buffer:std::move(other.m_buffer);
 	m_startFrame = other.startFrame();
 	m_endFrame = other.endFrame();
 	m_loopStartFrame = other.loopStartFrame();
@@ -98,6 +100,7 @@ auto Sample::operator=(Sample&& other) noexcept -> Sample&
 
 bool Sample::play(SampleFrame* dst, PlaybackState* state, size_t numFrames, Loop loop, double ratio) const
 {
+	if(windowProtected()) { std::fill_n(dst,numFrames,SampleFrame{}); return false; }
 	if (!m_buffer || m_buffer->empty()) { return false; }
 
 	state->m_frameIndex = std::max<int>(m_startFrame, state->m_frameIndex);

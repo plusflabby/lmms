@@ -56,6 +56,7 @@ AutomationClip::AutomationClip( AutomationTrack * _auto_track ) :
 	m_lastRecordedValue( 0 )
 {
 	changeLength( TimePos( 1, 0 ) );
+	initializeTempoNotifications();
 }
 
 
@@ -83,6 +84,32 @@ AutomationClip::AutomationClip( const AutomationClip & _clip_to_copy ) :
 		// Sets the node's clip to this one
 		m_timeMap[POS(it)].setClip(this);
 	}
+	initializeTempoNotifications();
+	notifyTempoTargetChange();
+}
+
+void AutomationClip::initializeTempoNotifications()
+{
+	connect(this,&Model::dataChanged,this,&AutomationClip::notifyTempoTargetChange,Qt::DirectConnection);
+}
+
+void AutomationClip::notifyTempoTargetChange()
+{
+	QMutexLocker lock(&m_clipMutex);
+	auto* song=Engine::getSong();
+	const bool now=song && std::any_of(m_objects.begin(),m_objects.end(),[&](const auto& model){return model==&song->tempoModel();});
+	const bool changed=now || m_wasTempoTarget;m_wasTempoTarget=now;
+	if(song && changed) emit song->tempoAutomationTopologyChanged();
+}
+
+AutomationClip::~AutomationClip()
+{
+	notifyTempoTargetChange();
+}
+
+void AutomationClip::clearObjects()
+{
+	QMutexLocker lock(&m_clipMutex);m_objects.clear();notifyTempoTargetChange();
 }
 
 bool AutomationClip::addObject( AutomatableModel * _obj, bool _search_dup )

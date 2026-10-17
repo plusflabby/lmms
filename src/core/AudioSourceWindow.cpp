@@ -2,6 +2,8 @@
 #include <QRegularExpression>
 #include <QStringList>
 #include <climits>
+#include "AudioEngine.h"
+#include "Sample.h"
 
 namespace lmms {
 namespace {
@@ -112,5 +114,27 @@ void writeAudioWindow(const AudioWindowStorage& storage,QDomDocument& doc,QDomEl
 	node.setAttribute("reference_output_rate",QString::number(w.referenceOutputRate)); node.setAttribute("ticks_per_beat",QString::number(w.ticksPerBeat));
 	node.setAttribute("frames_per_tick",QString::number(w.framesPerTick)); node.setAttribute("length_ticks",QString::number(w.lengthTicks));
 	node.setAttribute("offset_ticks",QString::number(w.offsetTicks)); clip.appendChild(node);
+}
+
+AudioWindowEligibility evaluateAudioWindow(const AudioWindowStorage& storage,const AudioWindowGeometry& geometry,
+	const AudioWindowWorld& world,const QString& sourceCode,const std::optional<SampleDecoder::PcmWaveInfo>& info)
+{
+	if(storage.kind==AudioWindowStorageKind::InvalidMetadata) return {storage.parseCode};
+	if(storage.kind!=AudioWindowStorageKind::V2 || !storage.valueV2) return {"unsupported_audio_operation"};
+	const auto& window=*storage.valueV2;const auto& w=window.base;
+	if(validateAudioWindowRecord(window)!="ok") return {"invalid_audio_window"};
+	if(sourceCode!="ok") return {sourceCode};
+	if(!info) return {"unsupported_audio_operation"};
+	if(info->frames!=quint64(w.sourceFrameCount) || info->sampleRate!=w.sourceRate) return {"audio_source_changed"};
+	if(world.tempoBpm!=125 || world.tempoAutomationPresent) return {"unsupported_tempo_map"};
+	if(world.outputRate!=w.sourceRate || world.ticksPerBeat!=w.ticksPerBeat) return {"unsupported_sample_rate_mapping"};
+	if(geometry.positionTicks<0 || geometry.positionTicks>INT_MAX-w.lengthTicks) return {"unrepresentable_audio_boundary"};
+	if(geometry.lengthTicks!=w.lengthTicks || geometry.offsetTicks!=w.offsetTicks || geometry.autoResize) return {"audio_window_geometry_mismatch"};
+	static const QRegularExpression opaqueColor(QStringLiteral("\\A#ff[0-9a-fA-F]{6}\\z"));
+	if(geometry.reversed || geometry.frequency!=DefaultBaseFreq || geometry.amplification!=1 || geometry.solo
+		|| !geometry.nativeName.isEmpty() || (!geometry.color.isEmpty() && !opaqueColor.match(geometry.color).hasMatch())) return {"unsupported_audio_operation"};
+	if(DEFAULT_BUFFER_SIZE!=256) return {"unsupported_audio_operation"};
+	if((window.referenceEndFrame-w.phaseOriginFrame)%DEFAULT_BUFFER_SIZE==1) return {"unrepresentable_audio_boundary"};
+	return {"ok",{},window};
 }
 }

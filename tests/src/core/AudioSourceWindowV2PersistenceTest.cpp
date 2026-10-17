@@ -188,11 +188,12 @@ private slots:
 		QCOMPARE(clip.sampleFile(),source); QCOMPARE(clip.sourceFileIdentity(),identity); QCOMPARE(clip.sample().sampleSize(),size_t(88200));
 		QCOMPARE(save(clip).firstChildElement("audio_source_window").attribute("in"),QString("4410"));
 	}
-	void taggedPlaybackIsBlockedBeforeRendererExists()
+	void taggedPlaybackIsBlockedInUnsupportedWorld()
 	{
 		using namespace lmms; SampleTrack track(Engine::getSong()); SampleClip clip(&track); clip.loadSettings(state());
+		Engine::getSong()->setTempo(123);
 		const bool started=track.play(110,1,0,-1); Engine::audioEngine()->renderNextPeriod(); Engine::audioEngine()->clear(); Engine::audioEngine()->renderNextPeriod();
-		QVERIFY(!started); QCOMPARE(clip.property("audioWindowStatus").toString(),QString("unsupported_audio_operation"));
+		QVERIFY(!started); QCOMPARE(clip.property("audioWindowStatus").toString(),QString("unsupported_tempo_map"));
 	}
 	void untaggedLegacyStateStaysUntagged()
 	{
@@ -201,9 +202,10 @@ private slots:
 		QVERIFY(save(clip).firstChildElement("audio_source_window").isNull());
 		QCOMPARE(clip.sample().sampleSize(),size_t(88200)); QCOMPARE(clip.startTimeOffset().getTicks(),-10);
 	}
-	void directClipHandleCannotBypassTaggedPlaybackGuard()
+	void directClipHandleCannotBypassUnsupportedWorldGuard()
 	{
 		using namespace lmms; SampleTrack track(Engine::getSong()); SampleClip clip(&track); clip.loadSettings(state());
+		Engine::getSong()->setTempo(123);
 		SamplePlayHandle handle(&clip);
 		std::vector<SampleFrame> output(Engine::audioEngine()->framesPerPeriod()); handle.play(output.data());
 		QVERIFY(std::all_of(output.begin(),output.end(),[](const auto& f){return f[0]==0 && f[1]==0;}));

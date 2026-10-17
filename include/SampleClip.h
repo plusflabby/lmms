@@ -69,6 +69,7 @@ public:
 	bool hasAudioSourceWindow() const { return m_audioWindowStorage.kind != AudioWindowStorageKind::Legacy; }
 	const AudioWindowStorage& audioWindowStorage() const { return m_audioWindowStorage; }
 	QString audioWindowStatus() const;
+	std::shared_ptr<const struct AudioWindowPlaybackView> audioWindowPlaybackView() const;
 	QString adoptAuthorizedAudio(std::unique_ptr<AudioImportPolicy::Prepared> audio);
 	const QByteArray& sourceFileIdentity() const { return m_boundedSourceIdentity; }
 	const QByteArray& expectedSourceDigest() const { return m_boundedSourceDigest; }
@@ -111,10 +112,16 @@ public slots:
 	void tempoChanged();
 
 protected:
+	bool allowsGenericClipEdits() const override { return !hasAudioSourceWindow() || m_loadingAudioWindow; }
 	SampleClip( const SampleClip& orig );
 	SampleClip(const SampleClip& orig, Track* target);
 
 private:
+	void initializeAudioWindowConnections();
+	void refreshAudioWindowPlayback();
+	AudioWindowEligibility audioWindowEligibility() const;
+	std::atomic_bool m_loadingAudioWindow{false};
+	std::atomic<std::shared_ptr<const struct AudioWindowPlaybackView>> m_audioWindowView;
 	void setSampleFileImpl(const QString& source, const QByteArray& expectedDigest, const QByteArray& expectedIdentity = {});
 	Sample m_sample;
 	// Preserve an intended file link when no file-backed buffer could be loaded.

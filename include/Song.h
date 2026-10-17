@@ -101,6 +101,7 @@ public:
 	QString errorSummary();
 
 	void processNextBuffer();
+	bool isAutomaticLoopJump() const;
 
 	inline int getLoadingTrackCount() const
 	{
@@ -464,6 +465,7 @@ private:
 	friend class gui::ControllerRackView;
 
 signals:
+	void tempoAutomationTopologyChanged();
 	void projectAboutToChange();
 	void projectLoaded();
 	void playbackStateChanged();

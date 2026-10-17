@@ -122,6 +122,7 @@ private slots:
             const auto length=w.base.outFrame-w.base.inFrame;
             std::vector<SampleFrame> actual(size_t(length)+13,SampleFrame{9,9});
             renderAudioWindow(*view,0,actual);
+            QCOMPARE(std::memcmp(actual.data(),expected.data(),expected.size()*sizeof(SampleFrame)),0);
             for(qint64 i=0;i<qint64(actual.size());++i)for(int ch=0;ch<2;++ch)
                 QCOMPARE(actual[i][ch],i<length?expected[i][ch]:0.0f);
             ++checked;
@@ -157,6 +158,12 @@ private slots:
                         {
                             std::fill(actual.begin(),actual.end(),SampleFrame{9,9});
                             renderAudioWindow(*view,at,actual);
+                            for(int j=0;j<block;++j)
+                            {
+                                const auto relative=seek+at+j;
+                                const SampleFrame expectedFrame=relative<length?expected[w.base.inFrame-original.base.phaseOriginFrame+relative]:SampleFrame{};
+                                QCOMPARE(std::memcmp(&actual[j],&expectedFrame,sizeof(SampleFrame)),0);
+                            }
                             for(int j=0;j<block;++j)for(int ch=0;ch<2;++ch)
                             {
                                 const auto relative=seek+at+j;

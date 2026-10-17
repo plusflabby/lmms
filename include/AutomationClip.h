@@ -65,7 +65,7 @@ public:
 	using TimemapIterator = timeMap::const_iterator;
 
 	AutomationClip( AutomationTrack * _auto_track );
-	~AutomationClip() override = default;
+	~AutomationClip() override;
 
 	bool addObject( AutomatableModel * _obj, bool _search_dup = true );
 
@@ -197,7 +197,7 @@ public:
 		return new AutomationClip(*this);
 	}
 
-	void clearObjects() { m_objects.clear(); }
+	void clearObjects();
 
 public slots:
 	void clear();
@@ -210,6 +210,9 @@ protected:
 	AutomationClip( const AutomationClip & _clip_to_copy );
 
 private:
+	void initializeTempoNotifications();
+	void notifyTempoTargetChange();
+	bool m_wasTempoTarget=false;
 	void cleanObjects();
 	void generateTangents();
 	void generateTangents(timeMap::iterator it, int numToGenerate);
