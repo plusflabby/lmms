@@ -51,16 +51,19 @@ private slots:
 	void servesAuthorizedAudioPlansAndNativeMutationsWithoutReplay()
 	{
 		using namespace lmms;
+		const auto nativeReady=qEnvironmentVariable("LMMS_PHASE3JA_HOST_READY");
+		const bool nativeHost=!nativeReady.isEmpty();
 		QTemporaryDir root(QCoreApplication::applicationDirPath()+"/audio-ipc-XXXXXX");QVERIFY(root.isValid());
 		const QStringList keys{"audio_import_roots","audio_import_max_file_bytes","audio_import_max_decoded_bytes"};QStringList old;
 		for(const auto& key:keys)old<<ConfigManager::inst()->value("aibridge",key,"absent");
 		auto restore=qScopeGuard([&]{for(int i=0;i<keys.size();++i){if(old[i]=="absent")ConfigManager::inst()->deleteValue("aibridge",keys[i]);else ConfigManager::inst()->setValue("aibridge",keys[i],old[i]);}AudioImportPolicy::configured().refresh();});
-		QByteArray wav(88244,0);std::memcpy(wav.data(),"RIFF",4);std::memcpy(wav.data()+8,"WAVEfmt ",8);std::memcpy(wav.data()+36,"data",4);
-		qToLittleEndian<quint32>(88236,wav.data()+4);qToLittleEndian<quint32>(16,wav.data()+16);qToLittleEndian<quint16>(1,wav.data()+20);qToLittleEndian<quint16>(1,wav.data()+22);qToLittleEndian<quint32>(44100,wav.data()+24);qToLittleEndian<quint32>(88200,wav.data()+28);qToLittleEndian<quint16>(2,wav.data()+32);qToLittleEndian<quint16>(16,wav.data()+34);qToLittleEndian<quint32>(88200,wav.data()+40);
+		const int pcmBytes=88200*(nativeHost?120:1);
+		QByteArray wav(pcmBytes+44,0);std::memcpy(wav.data(),"RIFF",4);std::memcpy(wav.data()+8,"WAVEfmt ",8);std::memcpy(wav.data()+36,"data",4);
+		qToLittleEndian<quint32>(pcmBytes+36,wav.data()+4);qToLittleEndian<quint32>(16,wav.data()+16);qToLittleEndian<quint16>(1,wav.data()+20);qToLittleEndian<quint16>(1,wav.data()+22);qToLittleEndian<quint32>(44100,wav.data()+24);qToLittleEndian<quint32>(88200,wav.data()+28);qToLittleEndian<quint16>(2,wav.data()+32);qToLittleEndian<quint16>(16,wav.data()+34);qToLittleEndian<quint32>(pcmBytes,wav.data()+40);
 		const auto path=root.filePath("Verse.wav");{QFile f(path);QVERIFY(f.open(QIODevice::WriteOnly|QIODevice::NewOnly));QCOMPARE(f.write(wav),qint64(wav.size()));}
-		ConfigManager::inst()->setValue("aibridge",keys[0],QString::fromUtf8(QJsonDocument(QJsonArray{root.path()}).toJson(QJsonDocument::Compact)));for(int i=1;i<3;++i)ConfigManager::inst()->setValue("aibridge",keys[i],"1000000");
+		ConfigManager::inst()->setValue("aibridge",keys[0],QString::fromUtf8(QJsonDocument(QJsonArray{root.path()}).toJson(QJsonDocument::Compact)));for(int i=1;i<3;++i)ConfigManager::inst()->setValue("aibridge",keys[i],nativeHost?"134217728":"1000000");
 		AiBridgeVocalJobs vocalJobs;
-		AiBridgeIpcServer server(nullptr,"lmms-audio-wire-test",&vocalJobs);QVERIFY(server.start());QLocalSocket socket;socket.connectToServer(server.endpointName());QVERIFY(socket.waitForConnected(1000));
+		AiBridgeIpcServer server(nullptr,nativeHost?"lmms-aibridge-v2":"lmms-audio-wire-test",&vocalJobs);QVERIFY(server.start());QLocalSocket socket;socket.connectToServer(server.endpointName());QVERIFY(socket.waitForConnected(1000));
 		auto call=[&](const QString& action,QJsonObject p){socket.write(QJsonDocument(QJsonObject{{"version",2},{"request_id","audio"},{"action",action},{"parameters",p}}).toJson(QJsonDocument::Compact)+'\n');socket.flush();QElapsedTimer t;t.start();QByteArray bytes;while(!bytes.endsWith('\n') && t.elapsed()<3000){QTest::qWait(1);bytes+=socket.readAll();}return QJsonDocument::fromJson(bytes).object();};
 		auto caps=call("get_audio_capabilities",{});QCOMPARE(caps.value("code").toString(),QStringLiteral("ok"));QVERIFY(caps.value("data").toObject().value("import_roots_configured").toBool());QVERIFY(!QJsonDocument(caps).toJson().contains(root.path().toUtf8()));
 		const auto tracks=Engine::getSong()->tracks().size();QCOMPARE(call("create_audio_track",{{"name","Voice"},{"dry_run",true}}).value("code").toString(),QStringLiteral("ok"));QCOMPARE(Engine::getSong()->tracks().size(),tracks);
@@ -70,6 +73,17 @@ private slots:
 		auto read=call("get_audio_clip",{{"clip_id",id}}).value("data").toObject();QCOMPARE(read.value("position_ticks").toInt(),3840);QCOMPARE(read.value("sample_rate").toInt(),44100);QCOMPARE(read.value("source_status").toString(),QStringLiteral("available"));
 		const QJsonObject vocalSelection{{"clip_id",id},{"expected_audio_state_hash",read["audio_state_hash"]},{"source_frames",QJsonObject{{"in_frame","0"},{"out_frame","44100"}}}};
 		const QJsonObject vocalRequest{{"kind","levels"},{"selections",QJsonArray{vocalSelection}}};
+		if(nativeHost)
+		{
+			// Explicit test-harness mode only. Expose no additional production route.
+			socket.disconnectFromServer();QTRY_VERIFY(socket.state()==QLocalSocket::UnconnectedState);QTest::qWait(5);
+			QFile ready(nativeReady);QVERIFY(ready.open(QIODevice::WriteOnly|QIODevice::NewOnly));
+			QVERIFY(ready.write(QJsonDocument(QJsonObject{{"pid",double(QCoreApplication::applicationPid())},{"request",vocalRequest}}).toJson(QJsonDocument::Compact))>0);ready.close();
+			QElapsedTimer timer;timer.start();while(!QFile::exists(nativeReady+".done") && timer.elapsed()<45000)QTest::qWait(5);
+			QVERIFY2(QFile::exists(nativeReady+".done"),"Explicit native MCP harness timed out");
+			vocalJobs.shutdown();QFile unchanged(path);QVERIFY(unchanged.open(QIODevice::ReadOnly));QCOMPARE(unchanged.readAll(),wav);
+			QCOMPARE(clip->startPosition().getTicks(),3840);QCOMPARE(track->numOfClips(),1);return;
+		}
 		QCOMPARE(call("get_vocal_capabilities",{}).value("code").toString(),QString("ok"));
 		const auto vocalStart=call("analyze_vocal_audio",vocalRequest);QCOMPARE(vocalStart["code"].toString(),QString("ok"));
 		const auto jobId=vocalStart["data"].toObject()["job_id"].toString();QVERIFY(!jobId.isEmpty());
@@ -87,7 +101,8 @@ private slots:
 			QLocalSocket transientClient;transientClient.connectToServer(transient->endpointName());QVERIFY(transientClient.waitForConnected(1000));
 			bool notified=false;
 			const auto observer=connect(&vocalJobs,&AiBridgeVocalJobs::jobsChanged,&vocalJobs,[&]{
-				if(notified)return;notified=true;
+				if(notified)return;
+				notified=true;
 				if(disposal==1)transient.reset();else if(disposal==0)transient->stop();else delete transient->findChild<QLocalSocket*>();
 			});
 			transientClient.write(QJsonDocument(QJsonObject{{"version",2},{"request_id","dispose"},{"action","analyze_vocal_audio"},{"parameters",vocalRequest}}).toJson(QJsonDocument::Compact)+'\n');transientClient.flush();
