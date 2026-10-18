@@ -9,6 +9,10 @@
 #include "EffectControls.h"
 #include "Engine.h"
 #include "Song.h"
+#include <atomic>
+#include <condition_variable>
+#include <future>
+#include <mutex>
 using namespace lmms;
 namespace lmms {extern "C" Plugin* lmms_plugin_main(Model*,void*);}
 
@@ -69,6 +73,30 @@ private slots:
 		// Feature RED: advertised enum0/12dB must select the actual native stages.
 		QVERIFY2(hp12->value() && !hp24->value() && !hp48->value(),
 			"Automated enum0 emitted no signal; native DSP still selects the retained HP48 stage. EqControls-only signal sync cannot satisfy this gate.");
+	}
+	void nativeStageSetterPreservesObserverDispatchBoundary()
+	{
+		std::unique_ptr<Effect> effect(dynamic_cast<Effect*>(lmms_plugin_main(nullptr,nullptr)));QVERIFY(effect);
+		auto* stage=namedModel<BoolModel>(effect->controls(),"HP 24");QVERIFY(stage);QVERIFY(!stage->value());
+		std::mutex mutex;std::condition_variable cv;bool release=false,guiDelivered=false;
+		std::atomic_bool entered=false,finished=false;
+		// Instrument the real native setter; no substitute model or simulated signal.
+		// A valid direct observer holds the application until the control thread releases it.
+		const auto direct=connect(stage,&BoolModel::dataChanged,this,[&]{
+			entered=true;std::unique_lock lock(mutex);cv.wait(lock,[&]{return release;});
+		},Qt::DirectConnection);
+		const auto queued=connect(stage,&BoolModel::dataChanged,this,[&]{guiDelivered=true;},Qt::QueuedConnection);
+		auto worker=std::async(std::launch::async,[&]{stage->setValue(1,true);finished=true;});
+		const auto unblock=qScopeGuard([&]{std::lock_guard lock(mutex);release=true;cv.notify_all();});
+		QTRY_VERIFY(entered.load() || finished.load());
+		const bool applicationBlocked=entered.load() && !finished.load();
+		{std::lock_guard lock(mutex);release=true;cv.notify_all();}
+		worker.get();disconnect(direct);disconnect(queued);
+		QCoreApplication::sendPostedEvents(this,QEvent::MetaCall);
+		// Baseline/diagnostic, not feature GREEN: these notifications are existing
+		// native behavior which the default-no-op amendment must preserve.
+		QVERIFY(applicationBlocked);QVERIFY(guiDelivered);
+		qInfo("Native stage setter: direct observer blocked the caller; queued observer delivered on the control thread. This setter cannot be used inside the bounded hook.");
 	}
 };
 QTEST_MAIN(AiBridgeEqAdapterTest)
