@@ -5,6 +5,8 @@ set(CMAKE_INCLUDE_CURRENT_DIR ON)
 set(CMAKE_AUTOMOC ON)
 
 set(LMMS_TESTS
+	src/plugins/AiBridgeVocalOperationSafetyAuditTest.cpp
+	src/plugins/AiBridgeRestrictedEqAdapterTest.cpp
 	src/plugins/AiBridgeEqAdapterTest.cpp
 	src/plugins/AiBridgeSampleTrackAutomationTest.cpp
 	src/plugins/AiBridgeVocalTrackActionsTest.cpp
@@ -112,7 +114,7 @@ foreach(LMMS_TEST_SRC IN LISTS LMMS_TESTS)
 
 	# TODO CMake 3.12: Propagate usage requirements by linking to lmmsobjs
 	target_include_directories(${LMMS_TEST_NAME} PRIVATE $<TARGET_PROPERTY:lmmsobjs,INCLUDE_DIRECTORIES>)
-	if(LMMS_TEST_NAME STREQUAL "AiBridgeEqAdapterTest")
+	if(LMMS_TEST_NAME STREQUAL "AiBridgeEqAdapterTest" OR LMMS_TEST_NAME STREQUAL "AiBridgeRestrictedEqAdapterTest")
 		target_include_directories(${LMMS_TEST_NAME} PRIVATE ${CMAKE_SOURCE_DIR}/plugins/Eq ${CMAKE_BINARY_DIR}/plugins/Eq)
 		target_compile_definitions(${LMMS_TEST_NAME} PRIVATE PLUGIN_NAME=eq PLUGIN_STATIC_DEFINE)
 		target_sources(${LMMS_TEST_NAME} PRIVATE
@@ -124,7 +126,7 @@ foreach(LMMS_TEST_SRC IN LISTS LMMS_TESTS)
 			${CMAKE_SOURCE_DIR}/plugins/Eq/EqFader.h
 			${CMAKE_SOURCE_DIR}/plugins/Eq/EqSpectrumView.cpp ${CMAKE_SOURCE_DIR}/plugins/Eq/EqSpectrumView.h)
 	endif()
-	if(LMMS_TEST_NAME STREQUAL "AiBridgeVocalTrackActionsTest")
+	if(LMMS_TEST_NAME STREQUAL "AiBridgeVocalTrackActionsTest" OR LMMS_TEST_NAME STREQUAL "AiBridgeVocalOperationSafetyAuditTest")
 		target_include_directories(${LMMS_TEST_NAME} PRIVATE ${CMAKE_SOURCE_DIR}/plugins/AiBridge)
 		target_sources(${LMMS_TEST_NAME} PRIVATE
 			${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeVocalTypes.cpp
