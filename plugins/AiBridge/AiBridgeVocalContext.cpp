@@ -2,6 +2,9 @@
 #include "AiBridgeAudioTypes.h"
 #include "AudioEngine.h"
 #include "AudioWindowPlayback.h"
+#include "AutomationClip.h"
+#include "AutomationTrack.h"
+#include "PatternStore.h"
 #include "ConfigManager.h"
 #include "Engine.h"
 #include "PathUtil.h"
@@ -67,10 +70,38 @@ CopiedSource copySource(const QString& id,bool requireAuthorized=true)
 	return result;
 }
 }
+QString validateVocalProjectBounds()
+{
+	if(!qt())return "wrong_thread";
+	auto* song=Engine::getSong();auto* patterns=Engine::patternStore();
+	if(!song || !patterns)return "source_unavailable";
+	if(song->isLoadingProject())return "job_invalidated";
+	const auto& songTracks=song->tracks();const auto& patternTracks=patterns->tracks();
+	if(songTracks.size()>VocalLimits::projectTracks || patternTracks.size()>VocalLimits::projectTracks
+		|| songTracks.size()+patternTracks.size()+1>VocalLimits::projectTracks)return "resource_limit";
+	size_t clips=0,bindings=0;
+	const auto inspect=[&](const Track* track){
+		if(!track)return true;
+		const auto& items=track->getClips();
+		if(items.size()>VocalLimits::projectClips-clips)return false;
+		clips+=items.size();
+		for(const auto* item:items)if(const auto* automation=dynamic_cast<const AutomationClip*>(item))
+		{
+			const auto count=automation->objects().size();
+			if(count>VocalLimits::automationBindings-bindings)return false;
+			bindings+=count;
+		}
+		return true;
+	};
+	for(const auto* track:songTracks)if(!inspect(track))return "resource_limit";
+	for(const auto* track:patternTracks)if(!inspect(track))return "resource_limit";
+	return inspect(song->globalAutomationTrack()) ? "ok" : "resource_limit";
+}
 VocalSnapshotResult captureVocalInputs(const VocalAnalyzeRequest& request)
 {
 	if(!qt())return {"wrong_thread",{}};
 	const auto valid=validateVocalRequest(request);if(valid!="ok")return {valid,{}};
+	const auto bounded=validateVocalProjectBounds();if(bounded!="ok")return {bounded,{}};
 	VocalInputSnapshot s;AiBridgeProjectContext ids;s.generation=ids.projectGeneration();s.request=request;
 	auto* config=ConfigManager::inst();s.policyRevision=config->audioImportPolicyRevision();
 	const auto text=config->value("aibridge","audio_import_roots");
@@ -114,6 +145,7 @@ QString validateVocalSnapshot(const VocalInputSnapshot& s)
 QString vocalClipStateHash(const QString& id)
 {
 	if(!qt())return {};
+	if(validateVocalProjectBounds()!="ok")return {};
 	const auto copy=copySource(id,false);return copy.code=="ok" ? audioStateHash({copy.state}) : QString{};
 }
 }

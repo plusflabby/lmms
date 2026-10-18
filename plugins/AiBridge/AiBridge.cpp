@@ -60,7 +60,7 @@ public:
 	}
 };
 
-AiBridge::AiBridge() : ToolPlugin(&aibridge_plugin_descriptor, nullptr), m_vocalJobs(this), m_ipcServer(this)
+AiBridge::AiBridge() : ToolPlugin(&aibridge_plugin_descriptor, nullptr), m_vocalJobs(this), m_ipcServer(this,QStringLiteral("lmms-aibridge-v2"),&m_vocalJobs)
 {
 	m_ipcServer.start();
 }

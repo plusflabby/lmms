@@ -15,6 +15,7 @@ inline constexpr size_t selections=8, retainedJobs=8;
 inline constexpr quint64 seconds=120, jobBytes=256ULL*1024*1024, sessionBytes=16ULL*1024*1024;
 inline constexpr quint64 selectionRecords=4096, jobRecords=8192;
 inline constexpr int page=256, tracks=128, idBytes=256, pathChars=32768, rootCount=32, rootChars=65536;
+inline constexpr size_t projectTracks=4096, projectClips=4096, automationBindings=65536;
 }
 struct VocalFrameRange { qint64 inFrame=0, outFrame=0; };
 struct VocalSelection { QString clipId, expectedAudioHash; VocalFrameRange frames; };

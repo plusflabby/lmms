@@ -14,6 +14,7 @@
 #include "SampleClip.h"
 
 #include "AiBridgeIpcServer.h"
+#include "AiBridgeVocalJobs.h"
 #include "AiBridgeProjectContext.h"
 #include "Engine.h"
 #include "InstrumentTrack.h"
@@ -58,7 +59,8 @@ private slots:
 		qToLittleEndian<quint32>(88236,wav.data()+4);qToLittleEndian<quint32>(16,wav.data()+16);qToLittleEndian<quint16>(1,wav.data()+20);qToLittleEndian<quint16>(1,wav.data()+22);qToLittleEndian<quint32>(44100,wav.data()+24);qToLittleEndian<quint32>(88200,wav.data()+28);qToLittleEndian<quint16>(2,wav.data()+32);qToLittleEndian<quint16>(16,wav.data()+34);qToLittleEndian<quint32>(88200,wav.data()+40);
 		const auto path=root.filePath("Verse.wav");{QFile f(path);QVERIFY(f.open(QIODevice::WriteOnly|QIODevice::NewOnly));QCOMPARE(f.write(wav),qint64(wav.size()));}
 		ConfigManager::inst()->setValue("aibridge",keys[0],QString::fromUtf8(QJsonDocument(QJsonArray{root.path()}).toJson(QJsonDocument::Compact)));for(int i=1;i<3;++i)ConfigManager::inst()->setValue("aibridge",keys[i],"1000000");
-		AiBridgeIpcServer server(nullptr,"lmms-audio-wire-test");QVERIFY(server.start());QLocalSocket socket;socket.connectToServer(server.endpointName());QVERIFY(socket.waitForConnected(1000));
+		AiBridgeVocalJobs vocalJobs;
+		AiBridgeIpcServer server(nullptr,"lmms-audio-wire-test",&vocalJobs);QVERIFY(server.start());QLocalSocket socket;socket.connectToServer(server.endpointName());QVERIFY(socket.waitForConnected(1000));
 		auto call=[&](const QString& action,QJsonObject p){socket.write(QJsonDocument(QJsonObject{{"version",2},{"request_id","audio"},{"action",action},{"parameters",p}}).toJson(QJsonDocument::Compact)+'\n');socket.flush();QElapsedTimer t;t.start();QByteArray bytes;while(!bytes.endsWith('\n') && t.elapsed()<3000){QTest::qWait(1);bytes+=socket.readAll();}return QJsonDocument::fromJson(bytes).object();};
 		auto caps=call("get_audio_capabilities",{});QCOMPARE(caps.value("code").toString(),QStringLiteral("ok"));QVERIFY(caps.value("data").toObject().value("import_roots_configured").toBool());QVERIFY(!QJsonDocument(caps).toJson().contains(root.path().toUtf8()));
 		const auto tracks=Engine::getSong()->tracks().size();QCOMPARE(call("create_audio_track",{{"name","Voice"},{"dry_run",true}}).value("code").toString(),QStringLiteral("ok"));QCOMPARE(Engine::getSong()->tracks().size(),tracks);
@@ -66,6 +68,43 @@ private slots:
 		QJsonObject imp{{"track_id",trackId},{"path",path},{"position_ticks",3840},{"dry_run",true}};auto preview=call("import_audio_file",imp);QCOMPARE(preview.value("code").toString(),QStringLiteral("ok"));QCOMPARE(track->numOfClips(),0);imp.insert("dry_run",false);auto imported=call("import_audio_file",imp);QCOMPARE(imported.value("code").toString(),QStringLiteral("ok"));QCOMPARE(imported.value("data").toObject().value("preview"),preview.value("data").toObject().value("preview"));
 		const auto id=imported.value("data").toObject().value("clip_id").toString();auto* clip=dynamic_cast<SampleClip*>(ids.resolveClip(id));QVERIFY(clip);QVERIFY(!clip->sourceFileIdentity().isEmpty());
 		auto read=call("get_audio_clip",{{"clip_id",id}}).value("data").toObject();QCOMPARE(read.value("position_ticks").toInt(),3840);QCOMPARE(read.value("sample_rate").toInt(),44100);QCOMPARE(read.value("source_status").toString(),QStringLiteral("available"));
+		const QJsonObject vocalSelection{{"clip_id",id},{"expected_audio_state_hash",read["audio_state_hash"]},{"source_frames",QJsonObject{{"in_frame","0"},{"out_frame","44100"}}}};
+		const QJsonObject vocalRequest{{"kind","levels"},{"selections",QJsonArray{vocalSelection}}};
+		QCOMPARE(call("get_vocal_capabilities",{}).value("code").toString(),QString("ok"));
+		const auto vocalStart=call("analyze_vocal_audio",vocalRequest);QCOMPARE(vocalStart["code"].toString(),QString("ok"));
+		const auto jobId=vocalStart["data"].toObject()["job_id"].toString();QVERIFY(!jobId.isEmpty());
+		QJsonObject vocalStatus;
+		QTRY_VERIFY((vocalStatus=call("get_vocal_job",{{"job_id",jobId},{"mode","status"}}))["data"].toObject()["state"].toString()=="succeeded");
+		const auto analysisId=vocalStatus["data"].toObject()["analysis_id"].toString();
+		const auto vocalPage=call("get_vocal_analysis",{{"analysis_id",analysisId},{"limit",2}});QCOMPARE(vocalPage["code"].toString(),QString("ok"));
+		QCOMPARE(vocalPage["data"].toObject()["records"].toArray().size(),2);QVERIFY(!QJsonDocument(vocalPage).toJson().contains(root.path().toUtf8()));
+		QVERIFY(!call("cancel_vocal_job",{{"job_id",jobId}})["data"].toObject()["cancel_applied"].toBool());
+		QCOMPARE(call("get_vocal_job",{{"job_id",jobId},{"mode","release"}})["code"].toString(),QString("ok"));
+		QCOMPARE(call("get_vocal_analysis",{{"analysis_id",analysisId}})["code"].toString(),QString("stale_id"));
+		for(int disposal=0;disposal<3;++disposal)
+		{
+			auto transient=std::make_unique<AiBridgeIpcServer>(nullptr,QString("lmms-vocal-dispose-%1").arg(disposal),&vocalJobs);QVERIFY(transient->start());
+			QLocalSocket transientClient;transientClient.connectToServer(transient->endpointName());QVERIFY(transientClient.waitForConnected(1000));
+			bool notified=false;
+			const auto observer=connect(&vocalJobs,&AiBridgeVocalJobs::jobsChanged,&vocalJobs,[&]{
+				if(notified)return;notified=true;
+				if(disposal==1)transient.reset();else if(disposal==0)transient->stop();else delete transient->findChild<QLocalSocket*>();
+			});
+			transientClient.write(QJsonDocument(QJsonObject{{"version",2},{"request_id","dispose"},{"action","analyze_vocal_audio"},{"parameters",vocalRequest}}).toJson(QJsonDocument::Compact)+'\n');transientClient.flush();
+			QTRY_VERIFY(notified);disconnect(observer);
+			QTRY_VERIFY(transientClient.state()==QLocalSocket::UnconnectedState);QVERIFY(transientClient.readAll().isEmpty());
+			if(disposal==2)
+			{
+				QLocalSocket replacement;replacement.connectToServer(transient->endpointName());QVERIFY(replacement.waitForConnected(1000));
+				replacement.write("{\"version\":2,\"request_id\":\"replacement\",\"action\":\"get_vocal_capabilities\",\"parameters\":{}}\n");replacement.flush();
+				QTRY_VERIFY(replacement.bytesAvailable()>0);
+				QCOMPARE(QJsonDocument::fromJson(replacement.readAll()).object()["code"].toString(),QString("ok"));
+			}
+			const auto retained=vocalJobs.snapshots();QCOMPARE(retained.size(),size_t(1));const auto retainedId=retained[0].jobId;
+			QTRY_VERIFY(vocalJobs.job(retainedId).value->state==VocalJobState::Succeeded);
+			QCOMPARE(vocalJobs.release(retainedId).code,QString("ok"));
+		}
+		QCOMPARE(clip->startPosition().getTicks(),3840);QCOMPARE(track->numOfClips(),1);
 		QJsonObject move{{"clip_id",id},{"expected_audio_state_hash",read.value("audio_state_hash")},{"position_ticks",5000},{"dry_run",true}};auto movedry=call("move_audio_clip",move);QCOMPARE(movedry.value("code").toString(),QStringLiteral("ok"));QCOMPARE(clip->startPosition().getTicks(),3840);move.insert("dry_run",false);QCOMPARE(call("move_audio_clip",move).value("code").toString(),QStringLiteral("ok"));QCOMPARE(clip->startPosition().getTicks(),5000);QCOMPARE(call("move_audio_clip",move).value("code").toString(),QStringLiteral("clip_state_mismatch"));
 		read=call("get_audio_clip",{{"clip_id",id}}).value("data").toObject();QJsonObject copy{{"clip_id",id},{"expected_audio_state_hash",read.value("audio_state_hash")},{"destination_track_id",trackId},{"position_ticks",5000}};QCOMPARE(call("duplicate_audio_clip",copy).value("code").toString(),QStringLiteral("destination_conflict"));copy.insert("position_ticks",6000);auto copied=call("duplicate_audio_clip",copy);QCOMPARE(copied.value("code").toString(),QStringLiteral("ok"));const auto copiedId=copied.value("data").toObject().value("created_clip_ids").toArray()[0].toString();QVERIFY(copiedId!=id);
 		QJsonObject op{{"operation","move"},{"clip_id",id},{"expected_audio_state_hash",read.value("audio_state_hash")},{"position_ticks",7000}};auto aligned=call("batch_edit_audio_clips",{{"operations",QJsonArray{op}},{"dry_run",true}});QCOMPARE(aligned.value("code").toString(),QStringLiteral("ok"));QCOMPARE(clip->startPosition().getTicks(),5000);auto done=call("batch_edit_audio_clips",{{"operations",QJsonArray{op}}});QCOMPARE(done.value("code").toString(),QStringLiteral("ok"));QCOMPARE(done.value("data").toObject().value("preview"),aligned.value("data").toObject().value("preview"));QCOMPARE(clip->startPosition().getTicks(),7000);
