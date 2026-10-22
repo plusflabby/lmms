@@ -4,6 +4,8 @@ set(LMMS_SRCS
 	core/AudioBuffer.cpp
 	core/recording/RecordingDuplexTypes.cpp
 	core/recording/RecordingOutputQueue.cpp
+	core/recording/RecordingTypes.cpp
+	core/recording/RecordingSessionState.cpp
 	core/AudioFileAuthorization.cpp
 	core/AudioImportPolicy.cpp
 	core/AudioSourceWindow.cpp
