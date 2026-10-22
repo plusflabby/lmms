@@ -5,6 +5,7 @@ set(CMAKE_INCLUDE_CURRENT_DIR ON)
 set(CMAKE_AUTOMOC ON)
 
 set(LMMS_TESTS
+	src/core/RecordingOutputQueueTest.cpp
 	src/plugins/AiBridgeVocalJobSafetyTest.cpp
 	src/plugins/AiBridgeVocalJobViewTest.cpp
 	src/plugins/AiBridgeVocalOperationSafetyAuditTest.cpp
