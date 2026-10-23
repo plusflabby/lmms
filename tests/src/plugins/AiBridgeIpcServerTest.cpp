@@ -330,6 +330,14 @@ private slots:
 		QCOMPARE(identity.value(QStringLiteral("availability")).toString(), QStringLiteral("available"));
 		QVERIFY(identity.value(QStringLiteral("client_pid")).toInt() > 0);
 		QCOMPARE(identity.value(QStringLiteral("client_pid")).toInt(), static_cast<int>(QCoreApplication::applicationPid()));
+		bool serverCreationParsed = false;
+		const auto serverCreationTime = identity.value(QStringLiteral("server_creation_time")).toString().toULongLong(&serverCreationParsed);
+		QVERIFY(serverCreationParsed);
+		QVERIFY(serverCreationTime > 0);
+		bool clientCreationParsed = false;
+		const auto clientCreationTime = identity.value(QStringLiteral("client_creation_time")).toString().toULongLong(&clientCreationParsed);
+		QVERIFY(clientCreationParsed);
+		QVERIFY(clientCreationTime > 0);
 		QCOMPARE(identity.value(QStringLiteral("document_state")).toString(), QStringLiteral("unsaved"));
 
 		QTemporaryDir projectRoot;

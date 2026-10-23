@@ -46,6 +46,16 @@ namespace lmms
 
 namespace
 {
+#ifdef Q_OS_WIN
+QString processCreationTime(HANDLE process)
+{
+	FILETIME creation{}, exit{}, kernel{}, user{};
+	if (!GetProcessTimes(process, &creation, &exit, &kernel, &user)) return {};
+	const quint64 value = (static_cast<quint64>(creation.dwHighDateTime) << 32) | creation.dwLowDateTime;
+	return QString::number(value);
+}
+#endif
+
 QJsonObject trackJson(const AiBridgeTrackValue& v)
 {
 	QJsonObject o{{"id",v.id},{"name",v.name},{"type",v.type},{"index",v.index},{"clip_count",v.clipCount}};
@@ -1044,12 +1054,30 @@ void AiBridgeIpcServer::executeRequest(const AiBridgeProtocolRequest &request)
 					const auto pipeHandle = reinterpret_cast<HANDLE>(static_cast<qintptr>(descriptor));
 					DWORD serverPid = 0;
 					DWORD clientPid = 0;
+					DWORD clientPidAfter = 0;
+					const auto serverCreationTime = processCreationTime(GetCurrentProcess());
 					if (GetNamedPipeServerProcessId(pipeHandle, &serverPid)
 						&& serverPid == static_cast<DWORD>(QCoreApplication::applicationPid())
+						&& !serverCreationTime.isEmpty()
 						&& GetNamedPipeClientProcessId(pipeHandle, &clientPid))
 					{
-						identity.insert(QStringLiteral("client_pid"), static_cast<qint64>(clientPid));
-						identity.insert(QStringLiteral("availability"), QStringLiteral("available"));
+						HANDLE clientProcess = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION | SYNCHRONIZE, FALSE, clientPid);
+						if (clientProcess != nullptr)
+						{
+							const auto clientCreationTime = processCreationTime(clientProcess);
+							const bool clientAlive = GetProcessId(clientProcess) == clientPid
+								&& WaitForSingleObject(clientProcess, 0) == WAIT_TIMEOUT
+								&& GetNamedPipeClientProcessId(pipeHandle, &clientPidAfter)
+								&& clientPidAfter == clientPid;
+							if (clientAlive && !clientCreationTime.isEmpty())
+							{
+								identity.insert(QStringLiteral("client_pid"), static_cast<qint64>(clientPid));
+								identity.insert(QStringLiteral("server_creation_time"), serverCreationTime);
+								identity.insert(QStringLiteral("client_creation_time"), clientCreationTime);
+								identity.insert(QStringLiteral("availability"), QStringLiteral("available"));
+							}
+							CloseHandle(clientProcess);
+						}
 					}
 				}
 #endif
