@@ -4,11 +4,13 @@
 #include "AiBridgeVocalWire.h"
 
 #include <QLocalSocket>
+#include <QCoreApplication>
 
 #include <QJsonObject>
 #include <QJsonArray>
 #include <QMetaObject>
 #include <optional>
+
 
 #include "AiBridgeActions.h"
 #include "AiBridgeProjectActions.h"
@@ -1029,7 +1031,9 @@ void AiBridgeIpcServer::executeRequest(const AiBridgeProtocolRequest &request)
 			if (request.action == QStringLiteral("get_project_structure"))
 			{
 				QJsonArray tracks; for (const auto& item : result.project.tracks) tracks.append(trackJson(item));
-				data = {{"project_generation", static_cast<qint64>(AiBridgeProjectContext{}.projectGeneration())}, {"song", QJsonObject{{"name",result.project.songName},{"tempo",result.project.tempo},{"length_bars",result.project.lengthBars},{"length_ticks",result.project.lengthTicks},{"track_count",result.project.trackCount}}}, {"tracks",tracks}};
+				auto identity = AiBridgeProjectContext{}.projectIdentity();
+				identity.insert(QStringLiteral("server_pid"), static_cast<qint64>(QCoreApplication::applicationPid()));
+				data = {{"project_generation", static_cast<qint64>(AiBridgeProjectContext{}.projectGeneration())}, {"identity", identity}, {"song", QJsonObject{{"name",result.project.songName},{"tempo",result.project.tempo},{"length_bars",result.project.lengthBars},{"length_ticks",result.project.lengthTicks},{"track_count",result.project.trackCount}}}, {"tracks",tracks}};
 			}
 			else if (request.action == QStringLiteral("list_tracks")) { QJsonArray items; for(const auto& item:result.tracks)items.append(trackJson(item)); data=pageJson(result.page);data.insert("tracks",items); }
 			else if (request.action == QStringLiteral("list_clips")) { QJsonArray items; for(const auto& item:result.clips)items.append(clipJson(item)); data=pageJson(result.page);data.insert("clips",items); }

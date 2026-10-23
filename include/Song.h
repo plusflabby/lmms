@@ -28,6 +28,7 @@
 #include <array>
 #include <memory>
 
+#include <QByteArray>
 #include <QString>
 #include <QHash>  // IWYU pragma: keep
 
@@ -260,6 +261,8 @@ public:
 	{
 		return m_fileName;
 	}
+	QByteArray projectSourceSha256() const { return m_projectSourceSha256; }
+	QString projectSourceFileId() const { return m_projectSourceFileId; }
 
 	bool isLoadingProject() const
 	{
@@ -420,6 +423,8 @@ private:
 
 	QString m_fileName;
 	QString m_oldFileName;
+	QByteArray m_projectSourceSha256;
+	QString m_projectSourceFileId;
 	bool m_modified;
 	bool m_loadOnLaunch;
 

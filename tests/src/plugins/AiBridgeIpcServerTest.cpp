@@ -1,6 +1,8 @@
 #include <QtTest>
 
 #include <QElapsedTimer>
+#include <QCryptographicHash>
+#include <QFileInfo>
 #include <QJsonDocument>
 #include <QLocalSocket>
 #include <QTemporaryDir>
@@ -301,6 +303,60 @@ private slots:
 		QCOMPARE(result.value(QStringLiteral("preview")).toArray().size(), 128);
 		QVERIFY(result.value(QStringLiteral("preview_has_more")).toBool());
 		QCOMPARE(clip.notes().at(0)->pos().getTicks(), qint64(1));
+	}
+
+	void projectStructureIncludesLoadedProjectIdentity()
+	{
+		using namespace lmms;
+		AiBridgeIpcServer server(nullptr, QStringLiteral("lmms-identity-wire-test"));
+		QVERIFY(server.start());
+		QLocalSocket socket;
+		socket.connectToServer(server.endpointName());
+		QVERIFY(socket.waitForConnected(1000));
+		socket.write(QByteArrayLiteral("{\"version\":2,\"request_id\":\"identity\",\"action\":\"get_project_structure\",\"parameters\":{}}\n"));
+		socket.flush();
+		QTRY_VERIFY_WITH_TIMEOUT(socket.bytesAvailable() > 0, 1000);
+		const auto response = QJsonDocument::fromJson(socket.readAll()).object();
+		QCOMPARE(response.value(QStringLiteral("code")).toString(), QStringLiteral("ok"));
+		const auto identity = response.value(QStringLiteral("data")).toObject().value(QStringLiteral("identity")).toObject();
+		QVERIFY(!identity.isEmpty());
+		QCOMPARE(identity.value(QStringLiteral("schema_version")).toInt(), 1);
+		QVERIFY(!identity.value(QStringLiteral("process_session_id")).toString().isEmpty());
+		QVERIFY(!identity.value(QStringLiteral("project_load_generation")).toString().isEmpty());
+		QVERIFY(!identity.value(QStringLiteral("identity_revision")).toString().isEmpty());
+		QVERIFY(!identity.value(QStringLiteral("document_state")).toString().isEmpty());
+		QVERIFY(identity.contains(QStringLiteral("loaded_project")));
+		QVERIFY(identity.value(QStringLiteral("server_pid")).toInt() > 0);
+		QCOMPARE(identity.value(QStringLiteral("availability")).toString(), QStringLiteral("unavailable"));
+		QVERIFY(!identity.contains(QStringLiteral("client_pid")));
+		QCOMPARE(identity.value(QStringLiteral("document_state")).toString(), QStringLiteral("unsaved"));
+
+		QTemporaryDir projectRoot;
+		QVERIFY(projectRoot.isValid());
+		const auto projectPath = projectRoot.filePath(QStringLiteral("identity.mmp"));
+		QVERIFY(Engine::getSong()->saveProjectFile(projectPath, false));
+		QFile savedFile(projectPath);
+		QVERIFY(savedFile.open(QIODevice::ReadOnly));
+		const auto expectedHash = QCryptographicHash::hash(savedFile.readAll(), QCryptographicHash::Sha256).toHex();
+		Engine::getSong()->loadProject(projectPath);
+		socket.write(QByteArrayLiteral("{\"version\":2,\"request_id\":\"identity-loaded\",\"action\":\"get_project_structure\",\"parameters\":{}}\n"));
+		socket.flush();
+		QTRY_VERIFY_WITH_TIMEOUT(socket.bytesAvailable() > 0, 1000);
+		const auto loaded = QJsonDocument::fromJson(socket.readAll()).object().value(QStringLiteral("data")).toObject().value(QStringLiteral("identity")).toObject();
+		QCOMPARE(loaded.value(QStringLiteral("document_state")).toString(), QStringLiteral("saved"));
+		QCOMPARE(loaded.value(QStringLiteral("loaded_project")).toObject().value(QStringLiteral("canonical_path")).toString(), QFileInfo(projectPath).canonicalFilePath());
+		QCOMPARE(loaded.value(QStringLiteral("loaded_project")).toObject().value(QStringLiteral("sha256")).toString().toLatin1(), expectedHash);
+		QVERIFY(!loaded.value(QStringLiteral("loaded_project")).toObject().value(QStringLiteral("windows_file_id")).toString().isEmpty());
+		QVERIFY(loaded.value(QStringLiteral("project_load_generation")).toString().toULongLong() > identity.value(QStringLiteral("project_load_generation")).toString().toULongLong());
+
+		Engine::getSong()->setModified();
+		socket.write(QByteArrayLiteral("{\"version\":2,\"request_id\":\"identity-modified\",\"action\":\"get_project_structure\",\"parameters\":{}}\n"));
+		socket.flush();
+		QTRY_VERIFY_WITH_TIMEOUT(socket.bytesAvailable() > 0, 1000);
+		const auto modified = QJsonDocument::fromJson(socket.readAll()).object().value(QStringLiteral("data")).toObject().value(QStringLiteral("identity")).toObject();
+		QCOMPARE(modified.value(QStringLiteral("document_state")).toString(), QStringLiteral("modified"));
+		QVERIFY(modified.value(QStringLiteral("dirty")).toBool());
+		QVERIFY(modified.value(QStringLiteral("identity_revision")).toString().toULongLong() > loaded.value(QStringLiteral("identity_revision")).toString().toULongLong());
 	}
 };
 

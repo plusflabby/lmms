@@ -3,11 +3,15 @@
 #include <algorithm>
 #include <tuple>
 #include <QApplication>
+#include <QDir>
+#include <QFileInfo>
 #include <QRandomGenerator>
+#include <QUuid>
 #include <QThread>
 #include "Clip.h"
 #include "Engine.h"
 #include "GuiApplication.h"
+#include "MainWindow.h"
 #include "InstrumentTrack.h"
 #include "MidiClip.h"
 #include "Note.h"
@@ -22,7 +26,9 @@ QPointer<Song> AiBridgeProjectContext::s_hookedSong;
 QHash<QString,AiBridgeProjectContext::TrackEntry> AiBridgeProjectContext::s_tracks;
 QHash<QString,AiBridgeProjectContext::ClipEntry> AiBridgeProjectContext::s_clips;
 QString AiBridgeProjectContext::s_session;
+QString AiBridgeProjectContext::s_identitySession;
 quint64 AiBridgeProjectContext::s_generation=1;
+quint64 AiBridgeProjectContext::s_identityRevision=1;
 quint64 AiBridgeProjectContext::s_nextId=1;
 bool AiBridgeProjectContext::s_hookInstalled=false;
 namespace {
@@ -46,16 +52,44 @@ AiBridgeMutationState mutationState(const MidiClip *midi) {
 	return state;
 }
 }
-AiBridgeProjectContext::AiBridgeProjectContext() { if(s_session.isEmpty()) s_session=QString::number(QRandomGenerator::global()->generate64(),16); ensureLifecycleHook(); }
+AiBridgeProjectContext::AiBridgeProjectContext() { if(s_session.isEmpty()) s_session=QString::number(QRandomGenerator::global()->generate64(),16); if(s_identitySession.isEmpty()) s_identitySession=QUuid::createUuid().toString(QUuid::WithoutBraces); ensureLifecycleHook(); }
 void AiBridgeProjectContext::ensureLifecycleHook() const {
  if(!qt()) return;
  auto* song=Engine::getSong();
  if(!song || (s_hookInstalled && s_hookedSong==song)) return;
  s_hookedSong=song; s_hookInstalled=true;
- QObject::connect(song,&Song::projectAboutToChange,song,[] { AiBridgeProjectContext context; context.invalidate(); },Qt::DirectConnection);
+	QObject::connect(song,&Song::projectAboutToChange,song,[] { AiBridgeProjectContext context; context.invalidate(); ++s_identityRevision; },Qt::DirectConnection);
+	QObject::connect(song,&Song::projectLoaded,song,[] { ++s_identityRevision; },Qt::DirectConnection);
+	QObject::connect(song,&Song::modified,song,[] { ++s_identityRevision; },Qt::DirectConnection);
+	QObject::connect(song,&Song::projectFileNameChanged,song,[] { ++s_identityRevision; },Qt::DirectConnection);
 }
 void AiBridgeProjectContext::invalidate() const { if(!qt()) return; for(auto& e:s_tracks)e.generation=0; for(auto& e:s_clips)e.generation=0; ++s_generation; }
 quint64 AiBridgeProjectContext::projectGeneration() const { return s_generation; }
+QJsonObject AiBridgeProjectContext::projectIdentity() const {
+	QJsonObject loaded;
+	auto *song = Engine::getSong();
+	QString state = QStringLiteral("unknown");
+	bool dirty = false;
+	if (qt() && song) {
+		dirty = song->isModified();
+		if (gui::getGUI() && gui::getGUI()->mainWindow() && gui::getGUI()->mainWindow()->getSession() == gui::MainWindow::SessionState::Recover) state = QStringLiteral("recovered");
+		else if (!song->projectFileName().isEmpty()) state = dirty ? QStringLiteral("modified") : QStringLiteral("saved");
+		else state = QStringLiteral("unsaved");
+		if (!song->projectFileName().isEmpty()) {
+			const QFileInfo file(song->projectFileName());
+			const auto canonical = file.canonicalFilePath();
+			if (!canonical.isEmpty()) loaded.insert(QStringLiteral("canonical_path"), QDir::cleanPath(canonical));
+			if (!song->projectSourceSha256().isEmpty()) loaded.insert(QStringLiteral("sha256"), QString::fromLatin1(song->projectSourceSha256()));
+			if (!song->projectSourceFileId().isEmpty()) loaded.insert(QStringLiteral("windows_file_id"), song->projectSourceFileId());
+		}
+	}
+	return {{QStringLiteral("schema_version"), 1}, {QStringLiteral("availability"), QStringLiteral("unavailable")},
+		{QStringLiteral("process_session_id"), s_identitySession},
+		{QStringLiteral("project_load_generation"), QString::number(s_generation)},
+		{QStringLiteral("identity_revision"), QString::number(s_identityRevision)},
+		{QStringLiteral("document_state"), state}, {QStringLiteral("dirty"), dirty},
+		{QStringLiteral("loaded_project"), loaded}};
+}
 QString AiBridgeProjectContext::trackId(Track* track) const {
  for(auto i=s_tracks.cbegin();i!=s_tracks.cend();++i) if(i->object==track&&i->generation==s_generation)return i.key();
  const auto value=makeId(QStringLiteral("track"),s_session,s_generation,s_nextId++); s_tracks.insert(value,{QPointer<Track>(track),s_generation}); return value;
