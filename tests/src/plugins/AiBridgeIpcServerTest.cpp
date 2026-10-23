@@ -327,8 +327,9 @@ private slots:
 		QVERIFY(!identity.value(QStringLiteral("document_state")).toString().isEmpty());
 		QVERIFY(identity.contains(QStringLiteral("loaded_project")));
 		QVERIFY(identity.value(QStringLiteral("server_pid")).toInt() > 0);
-		QCOMPARE(identity.value(QStringLiteral("availability")).toString(), QStringLiteral("unavailable"));
-		QVERIFY(!identity.contains(QStringLiteral("client_pid")));
+		QCOMPARE(identity.value(QStringLiteral("availability")).toString(), QStringLiteral("available"));
+		QVERIFY(identity.value(QStringLiteral("client_pid")).toInt() > 0);
+		QCOMPARE(identity.value(QStringLiteral("client_pid")).toInt(), static_cast<int>(QCoreApplication::applicationPid()));
 		QCOMPARE(identity.value(QStringLiteral("document_state")).toString(), QStringLiteral("unsaved"));
 
 		QTemporaryDir projectRoot;
