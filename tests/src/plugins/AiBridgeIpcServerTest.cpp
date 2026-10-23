@@ -366,6 +366,33 @@ private slots:
 		QCOMPARE(modified.value(QStringLiteral("document_state")).toString(), QStringLiteral("modified"));
 		QVERIFY(modified.value(QStringLiteral("dirty")).toBool());
 		QVERIFY(modified.value(QStringLiteral("identity_revision")).toString().toULongLong() > loaded.value(QStringLiteral("identity_revision")).toString().toULongLong());
+
+		const auto saveAsPath = projectRoot.filePath(QStringLiteral("identity-save-as.mmp"));
+		QVERIFY(Engine::getSong()->guiSaveProjectAs(saveAsPath));
+		socket.write(QByteArrayLiteral("{\"version\":2,\"request_id\":\"identity-save-as\",\"action\":\"get_project_structure\",\"parameters\":{}}\n"));
+		socket.flush();
+		QTRY_VERIFY_WITH_TIMEOUT(socket.bytesAvailable() > 0, 1000);
+		const auto savedAs = QJsonDocument::fromJson(socket.readAll()).object().value(QStringLiteral("data")).toObject().value(QStringLiteral("identity")).toObject();
+		QCOMPARE(savedAs.value(QStringLiteral("document_state")).toString(), QStringLiteral("saved"));
+		QCOMPARE(savedAs.value(QStringLiteral("loaded_project")).toObject().value(QStringLiteral("canonical_path")).toString(), QFileInfo(saveAsPath).canonicalFilePath());
+		QVERIFY(savedAs.value(QStringLiteral("identity_revision")).toString().toULongLong() > modified.value(QStringLiteral("identity_revision")).toString().toULongLong());
+
+		const auto secondPath = projectRoot.filePath(QStringLiteral("identity-second.mmp"));
+		QVERIFY(Engine::getSong()->saveProjectFile(secondPath, false));
+		Engine::getSong()->loadProject(secondPath);
+		socket.write(QByteArrayLiteral("{\"version\":2,\"request_id\":\"identity-switched\",\"action\":\"get_project_structure\",\"parameters\":{}}\n"));
+		socket.flush();
+		QTRY_VERIFY_WITH_TIMEOUT(socket.bytesAvailable() > 0, 1000);
+		const auto switched = QJsonDocument::fromJson(socket.readAll()).object().value(QStringLiteral("data")).toObject().value(QStringLiteral("identity")).toObject();
+		QCOMPARE(switched.value(QStringLiteral("loaded_project")).toObject().value(QStringLiteral("canonical_path")).toString(), QFileInfo(secondPath).canonicalFilePath());
+		QVERIFY(switched.value(QStringLiteral("project_load_generation")).toString().toULongLong() > savedAs.value(QStringLiteral("project_load_generation")).toString().toULongLong());
+		Engine::getSong()->loadProject(secondPath);
+		socket.write(QByteArrayLiteral("{\"version\":2,\"request_id\":\"identity-reloaded\",\"action\":\"get_project_structure\",\"parameters\":{}}\n"));
+		socket.flush();
+		QTRY_VERIFY_WITH_TIMEOUT(socket.bytesAvailable() > 0, 1000);
+		const auto reloaded = QJsonDocument::fromJson(socket.readAll()).object().value(QStringLiteral("data")).toObject().value(QStringLiteral("identity")).toObject();
+		QVERIFY(reloaded.value(QStringLiteral("project_load_generation")).toString().toULongLong() > switched.value(QStringLiteral("project_load_generation")).toString().toULongLong());
+		QCOMPARE(reloaded.value(QStringLiteral("process_session_id")).toString(), identity.value(QStringLiteral("process_session_id")).toString());
 	}
 };
 
