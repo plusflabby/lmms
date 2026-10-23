@@ -6,6 +6,8 @@ set(LMMS_SRCS
 	core/recording/RecordingOutputQueue.cpp
 	core/recording/RecordingTypes.cpp
 	core/recording/RecordingSessionState.cpp
+	core/recording/RecordingLibrary.cpp
+	core/recording/RecordingProjectIdentity.cpp
 	core/AudioFileAuthorization.cpp
 	core/AudioImportPolicy.cpp
 	core/AudioSourceWindow.cpp
