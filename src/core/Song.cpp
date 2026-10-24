@@ -100,6 +100,8 @@ Song::Song() :
 	m_nLoadingTrack( 0 ),
 	m_fileName(),
 	m_oldFileName(),
+	m_projectSourceSha256(),
+	m_projectSourceFileId(),
 	m_modified( false ),
 	m_loadOnLaunch( true ),
 	m_recording( false ),
@@ -987,6 +989,8 @@ void Song::createNewProject()
 
 	m_oldFileName = "";
 	setProjectFileName("");
+	m_projectSourceSha256.clear();
+	m_projectSourceFileId.clear();
 
 	auto tripleOscTrack = Track::create(Track::Type::Instrument, this);
 	dynamic_cast<InstrumentTrack*>(tripleOscTrack)->loadInstrument("tripleoscillator");
@@ -1220,6 +1224,8 @@ void Song::loadProject( const QString & fileName )
 	ConfigManager::inst()->addRecentlyOpenedProject( fileName );
 
 	Engine::projectJournal()->setJournalling( true );
+	m_projectSourceSha256 = dataFile.sourceSha256();
+	m_projectSourceFileId = dataFile.sourceFileId();
 
 	emit projectLoaded();
 
@@ -1321,6 +1327,9 @@ bool Song::guiSaveProjectAs(const QString & filename)
 	{
 		setModified(false);
 		setProjectFileName(fileNameWithExtension);
+		DataFile savedIdentity(fileNameWithExtension);
+		m_projectSourceSha256 = savedIdentity.sourceSha256();
+		m_projectSourceFileId = savedIdentity.sourceFileId();
 	}
 
 	return saveResult;
@@ -1462,6 +1471,11 @@ void Song::setProjectFileName(QString const & projectFileName)
 	if (m_fileName != projectFileName)
 	{
 		m_fileName = projectFileName;
+		if (m_fileName.isEmpty())
+		{
+			m_projectSourceSha256.clear();
+			m_projectSourceFileId.clear();
+		}
 		emit projectFileNameChanged();
 	}
 }

@@ -2,6 +2,7 @@
 #define LMMS_AIBRIDGE_PROJECT_CONTEXT_H
 
 #include <QHash>
+#include <QJsonObject>
 #include <QPointer>
 #include <QString>
 #include <QVector>
@@ -25,6 +26,7 @@ public:
  static constexpr int StructureTrackCap=16;
  AiBridgeProjectContext();
  quint64 projectGeneration() const;
+ QJsonObject projectIdentity() const;
  AiBridgeProjectValue projectStructure() const;
  QVector<AiBridgeTrackValue> tracks(AiBridgePage&) const;
  AiBridgeTrackValue trackSnapshot(Track*) const;
@@ -50,7 +52,9 @@ private:
  static QHash<QString, TrackEntry> s_tracks;
  static QHash<QString, ClipEntry> s_clips;
  static QString s_session;
+ static QString s_identitySession;
  static quint64 s_generation;
+ static quint64 s_identityRevision;
  static quint64 s_nextId;
  static bool s_hookInstalled;
 };

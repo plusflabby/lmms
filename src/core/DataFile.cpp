@@ -31,12 +31,18 @@
 #include <map>
 
 #include <QDebug>
+#include <QCryptographicHash>
 #include <QFile>
 #include <QFileInfo>
 #include <QDir>
 #include <QMessageBox>
 #include <QRegularExpression>
 #include <QSaveFile>
+
+#ifdef Q_OS_WIN
+#include <windows.h>
+#include <io.h>
+#endif
 
 #include "base64.h"
 #include "ConfigManager.h"
@@ -130,7 +136,9 @@ DataFile::DataFile( Type type ) :
 	m_content(),
 	m_head(),
 	m_type( type ),
-	m_fileVersion( UPGRADE_METHODS.size() )
+	m_fileVersion( UPGRADE_METHODS.size() ),
+	m_sourceSha256(),
+	m_sourceFileId()
 {
 	appendChild( createProcessingInstruction("xml", "version=\"1.0\""));
 	QDomElement root = createElement( "lmms-project" );
@@ -158,7 +166,9 @@ DataFile::DataFile( const QString & _fileName ) :
 	m_fileName(_fileName),
 	m_content(),
 	m_head(),
-	m_fileVersion( UPGRADE_METHODS.size() )
+	m_fileVersion( UPGRADE_METHODS.size() ),
+	m_sourceSha256(),
+	m_sourceFileId()
 {
 	QFile inFile( _fileName );
 	if( !inFile.open( QIODevice::ReadOnly ) )
@@ -177,7 +187,24 @@ DataFile::DataFile( const QString & _fileName ) :
 		return;
 	}
 
-	loadData( inFile.readAll(), _fileName );
+	const QByteArray sourceBytes = inFile.readAll();
+	m_sourceSha256 = QCryptographicHash::hash(sourceBytes, QCryptographicHash::Sha256).toHex();
+#ifdef Q_OS_WIN
+	BY_HANDLE_FILE_INFORMATION fileInfo{};
+	HANDLE nativeHandle = reinterpret_cast<HANDLE>(static_cast<qintptr>(inFile.handle()));
+	if (!GetFileInformationByHandle(nativeHandle, &fileInfo) && inFile.handle() >= 0)
+	{
+		nativeHandle = reinterpret_cast<HANDLE>(_get_osfhandle(static_cast<int>(inFile.handle())));
+	}
+	if (nativeHandle != INVALID_HANDLE_VALUE && GetFileInformationByHandle(nativeHandle, &fileInfo))
+	{
+		m_sourceFileId = QStringLiteral("%1:%2:%3")
+			.arg(fileInfo.dwVolumeSerialNumber, 8, 16, QLatin1Char('0'))
+			.arg(fileInfo.nFileIndexHigh, 8, 16, QLatin1Char('0'))
+			.arg(fileInfo.nFileIndexLow, 8, 16, QLatin1Char('0'));
+	}
+#endif
+	loadData(sourceBytes, _fileName);
 }
 
 
@@ -188,7 +215,9 @@ DataFile::DataFile( const QByteArray & _data ) :
 	m_fileName(""),
 	m_content(),
 	m_head(),
-	m_fileVersion( UPGRADE_METHODS.size() )
+	m_fileVersion( UPGRADE_METHODS.size() ),
+	m_sourceSha256(),
+	m_sourceFileId()
 {
 	loadData( _data, "<internal data>" );
 }

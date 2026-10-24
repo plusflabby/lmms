@@ -4,11 +4,17 @@
 #include "AiBridgeVocalWire.h"
 
 #include <QLocalSocket>
+#include <QCoreApplication>
 
 #include <QJsonObject>
 #include <QJsonArray>
 #include <QMetaObject>
 #include <optional>
+
+#ifdef Q_OS_WIN
+#include <windows.h>
+#endif
+
 
 #include "AiBridgeActions.h"
 #include "AiBridgeProjectActions.h"
@@ -40,6 +46,16 @@ namespace lmms
 
 namespace
 {
+#ifdef Q_OS_WIN
+QString processCreationTime(HANDLE process)
+{
+	FILETIME creation{}, exit{}, kernel{}, user{};
+	if (!GetProcessTimes(process, &creation, &exit, &kernel, &user)) return {};
+	const quint64 value = (static_cast<quint64>(creation.dwHighDateTime) << 32) | creation.dwLowDateTime;
+	return QString::number(value);
+}
+#endif
+
 QJsonObject trackJson(const AiBridgeTrackValue& v)
 {
 	QJsonObject o{{"id",v.id},{"name",v.name},{"type",v.type},{"index",v.index},{"clip_count",v.clipCount}};
@@ -1029,7 +1045,43 @@ void AiBridgeIpcServer::executeRequest(const AiBridgeProtocolRequest &request)
 			if (request.action == QStringLiteral("get_project_structure"))
 			{
 				QJsonArray tracks; for (const auto& item : result.project.tracks) tracks.append(trackJson(item));
-				data = {{"project_generation", static_cast<qint64>(AiBridgeProjectContext{}.projectGeneration())}, {"song", QJsonObject{{"name",result.project.songName},{"tempo",result.project.tempo},{"length_bars",result.project.lengthBars},{"length_ticks",result.project.lengthTicks},{"track_count",result.project.trackCount}}}, {"tracks",tracks}};
+				auto identity = AiBridgeProjectContext{}.projectIdentity();
+				identity.insert(QStringLiteral("server_pid"), static_cast<qint64>(QCoreApplication::applicationPid()));
+#ifdef Q_OS_WIN
+				const auto descriptor = m_client ? m_client->socketDescriptor() : -1;
+				if (descriptor != -1)
+				{
+					const auto pipeHandle = reinterpret_cast<HANDLE>(static_cast<qintptr>(descriptor));
+					DWORD serverPid = 0;
+					DWORD clientPid = 0;
+					DWORD clientPidAfter = 0;
+					const auto serverCreationTime = processCreationTime(GetCurrentProcess());
+					if (GetNamedPipeServerProcessId(pipeHandle, &serverPid)
+						&& serverPid == static_cast<DWORD>(QCoreApplication::applicationPid())
+						&& !serverCreationTime.isEmpty()
+						&& GetNamedPipeClientProcessId(pipeHandle, &clientPid))
+					{
+						HANDLE clientProcess = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION | SYNCHRONIZE, FALSE, clientPid);
+						if (clientProcess != nullptr)
+						{
+							const auto clientCreationTime = processCreationTime(clientProcess);
+							const bool clientAlive = GetProcessId(clientProcess) == clientPid
+								&& WaitForSingleObject(clientProcess, 0) == WAIT_TIMEOUT
+								&& GetNamedPipeClientProcessId(pipeHandle, &clientPidAfter)
+								&& clientPidAfter == clientPid;
+							if (clientAlive && !clientCreationTime.isEmpty())
+							{
+								identity.insert(QStringLiteral("client_pid"), static_cast<qint64>(clientPid));
+								identity.insert(QStringLiteral("server_creation_time"), serverCreationTime);
+								identity.insert(QStringLiteral("client_creation_time"), clientCreationTime);
+								identity.insert(QStringLiteral("availability"), QStringLiteral("available"));
+							}
+							CloseHandle(clientProcess);
+						}
+					}
+				}
+#endif
+				data = {{"project_generation", static_cast<qint64>(AiBridgeProjectContext{}.projectGeneration())}, {"identity", identity}, {"song", QJsonObject{{"name",result.project.songName},{"tempo",result.project.tempo},{"length_bars",result.project.lengthBars},{"length_ticks",result.project.lengthTicks},{"track_count",result.project.trackCount}}}, {"tracks",tracks}};
 			}
 			else if (request.action == QStringLiteral("list_tracks")) { QJsonArray items; for(const auto& item:result.tracks)items.append(trackJson(item)); data=pageJson(result.page);data.insert("tracks",items); }
 			else if (request.action == QStringLiteral("list_clips")) { QJsonArray items; for(const auto& item:result.clips)items.append(clipJson(item)); data=pageJson(result.page);data.insert("clips",items); }

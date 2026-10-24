@@ -27,6 +27,7 @@
 #define LMMS_DATA_FILE_H
 
 #include <map>
+#include <QByteArray>
 #include <QDomDocument>
 #include <vector>
 
@@ -94,6 +95,8 @@ public:
 	}
 
 	unsigned int legacyFileVersion();
+	QByteArray sourceSha256() const { return m_sourceSha256; }
+	QString sourceFileId() const { return m_sourceFileId; }
 
 private:
 	static Type type( const QString& typeName );
@@ -154,6 +157,8 @@ private:
 	QDomElement m_head;
 	Type m_type;
 	unsigned int m_fileVersion;
+	QByteArray m_sourceSha256;
+	QString m_sourceFileId;
 } ;
 
 
