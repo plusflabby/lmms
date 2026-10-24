@@ -10,6 +10,7 @@ set(LMMS_SRCS
 	core/recording/RecordingProjectIdentity.cpp
 	core/recording/RecordingRing.cpp
 	core/recording/RecordingPcm16.cpp
+	core/recording/RecordingInputRuntime.cpp
 	core/AudioFileAuthorization.cpp
 	core/AudioImportPolicy.cpp
 	core/AudioSourceWindow.cpp
