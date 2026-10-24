@@ -5,6 +5,7 @@
 #include "Engine.h"
 #include "Effect.h"
 #include "InstrumentTrack.h"
+#include "SampleTrack.h"
 #include "Mixer.h"
 #include "Song.h"
 
@@ -27,31 +28,34 @@ void AiBridgeAutomationReconciler::reconcile()
 	for (auto *base : Engine::getSong()->tracks())
 	{
 		auto *track = dynamic_cast<InstrumentTrack *>(base);
-		if (!track) continue;
-		const auto ownerId = m_project.idForTrack(track);
+		auto *sample = dynamic_cast<SampleTrack *>(base);
+		if (!track && !sample) continue;
+		auto *volumeModel = track ? track->volumeModel() : sample->volumeModel();
+		auto *panningModel = track ? track->panningModel() : sample->panningModel();
+		const auto ownerId = m_project.idForTrack(base);
 		liveTrackOwners.insert(ownerId);
 
 		AiBridgeAutomationTargetSnapshot volume;
-		volume.valueType = QStringLiteral("integer");
+		volume.valueType = sample ? QStringLiteral("float") : QStringLiteral("integer");
 		volume.minimum = MinVolume;
 		volume.maximum = MaxVolume;
 		volume.defaultValue = DefaultVolume;
-		volume.step = 1.0f;
+		volume.step = sample ? 0.1f : 1.0f;
 		volume.unit = QStringLiteral("percent");
 		volume.capability = QStringLiteral("read_write");
 		m_targets.registerTarget(ownerId, QStringLiteral("track_volume"),
-			QStringLiteral("volume"), volume, track->volumeModel());
+			QStringLiteral("volume"), volume, volumeModel);
 
 		AiBridgeAutomationTargetSnapshot panning;
-		panning.valueType = QStringLiteral("integer");
+		panning.valueType = sample ? QStringLiteral("float") : QStringLiteral("integer");
 		panning.minimum = PanningLeft;
 		panning.maximum = PanningRight;
 		panning.defaultValue = DefaultPanning;
-		panning.step = 1.0f;
+		panning.step = sample ? 0.1f : 1.0f;
 		panning.unit = QStringLiteral("percent");
 		panning.capability = QStringLiteral("read_write");
 		m_targets.registerTarget(ownerId, QStringLiteral("track_pan"),
-			QStringLiteral("panning"), panning, track->panningModel());
+			QStringLiteral("panning"), panning, panningModel);
 	}
 
 	for (auto *channel : Engine::mixer()->mixerChannels())

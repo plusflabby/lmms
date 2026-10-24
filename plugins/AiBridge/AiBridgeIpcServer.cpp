@@ -1,5 +1,7 @@
 #include "AiBridgeIpcServer.h"
 #include "AiBridgeAudioWire.h"
+#include "AiBridgeVocalJobs.h"
+#include "AiBridgeVocalWire.h"
 
 #include <QLocalSocket>
 
@@ -666,7 +668,7 @@ bool isPhase3GAction(const QString &action)
 }
 }
 
-AiBridgeIpcServer::AiBridgeIpcServer(QObject *parent, QString endpoint) : QObject(parent), m_server(this), m_endpoint(std::move(endpoint))
+AiBridgeIpcServer::AiBridgeIpcServer(QObject *parent, QString endpoint, AiBridgeVocalJobs* jobs) : QObject(parent), m_server(this), m_endpoint(std::move(endpoint)), m_vocalJobs(jobs)
 {
 	connect(&m_server, &QLocalServer::newConnection, this, &AiBridgeIpcServer::acceptConnection);
 }
@@ -684,16 +686,12 @@ bool AiBridgeIpcServer::start()
 
 void AiBridgeIpcServer::stop()
 {
-	if (m_client != nullptr)
-	{
-		m_client->disconnect(this);
-		m_client->close();
-		m_client->deleteLater();
-		m_client = nullptr;
-	}
+	const auto socket=m_client;m_client=nullptr;++m_connectionRevision;
 	m_input.clear();
 	m_busy = false;
 	m_server.close();
+	// Retire member state before close can invoke synchronous observers.
+	if(socket){socket->disconnect(this);socket->deleteLater();socket->close();}
 }
 
 void AiBridgeIpcServer::acceptConnection()
@@ -708,6 +706,7 @@ void AiBridgeIpcServer::acceptConnection()
 			continue;
 		}
 		m_client = socket;
+		++m_connectionRevision;
 		connect(m_client, &QLocalSocket::readyRead, this, &AiBridgeIpcServer::readProbe);
 		connect(m_client, &QLocalSocket::disconnected, this, &AiBridgeIpcServer::clientDisconnected);
 	}
@@ -716,6 +715,7 @@ void AiBridgeIpcServer::acceptConnection()
 void AiBridgeIpcServer::readProbe()
 {
 	if (m_client == nullptr) return;
+	const QPointer<AiBridgeIpcServer> self(this);const auto client=m_client;const auto revision=m_connectionRevision;
 	m_input += m_client->readAll();
 	if (m_input.size() > AiBridgeProtocol::MaxFrameBytes)
 	{
@@ -729,30 +729,39 @@ void AiBridgeIpcServer::readProbe()
 		if (frame == QByteArrayLiteral("ping\n"))
 		{
 			m_client->write(QByteArrayLiteral("pong\n"));
-			m_client->flush();
+			if(!self || !client || revision!=m_connectionRevision || client!=m_client)return;
+			client->flush();
+			if(!self || !client || revision!=m_connectionRevision || client!=m_client)return;
 			continue;
 		}
 		const auto parsed = AiBridgeProtocol::parseRequest(frame);
 		if (!parsed.success)
 		{
 			sendResponse({2, parsed.request.requestId, false, parsed.code, parsed.message});
+			if(!self || !client || revision!=m_connectionRevision || client!=m_client)return;
 			continue;
 		}
 		if (m_busy)
 		{
 			sendResponse({2, parsed.request.requestId, false, QStringLiteral("busy"), QStringLiteral("Another LMMS request is in flight")});
+			if(!self || !client || revision!=m_connectionRevision || client!=m_client)return;
 			continue;
 		}
 		m_busy = true;
 		const auto request = parsed.request;
-		QMetaObject::invokeMethod(this, [this, request] { executeRequest(request); }, Qt::QueuedConnection);
+		QMetaObject::invokeMethod(this, [self, client, revision, request] {
+			if(self && client && self->m_client==client && self->m_connectionRevision==revision && client->state()==QLocalSocket::ConnectedState)
+				self->executeRequest(request);
+		}, Qt::QueuedConnection);
 	}
 }
 
 void AiBridgeIpcServer::executeRequest(const AiBridgeProtocolRequest &request)
 {
+	const QPointer<AiBridgeIpcServer> self(this);const auto client=m_client;const auto revision=m_connectionRevision;
 	AiBridgeProtocolResponse response{2, request.requestId, false, QStringLiteral("internal_error"), QStringLiteral("Request did not execute")};
-	if (AiBridgeAudioWire::handles(request.action)) response=AiBridgeAudioWire::execute(request);
+	if (AiBridgeVocalWire::handles(request.action)) response=AiBridgeVocalWire::execute(request,m_vocalJobs);
+	else if (AiBridgeAudioWire::handles(request.action)) response=AiBridgeAudioWire::execute(request);
 	else if (request.action == QStringLiteral("get_context"))
 	{
 		const auto snapshot = AiBridgeProjectContext{}.currentContext();
@@ -1144,6 +1153,7 @@ void AiBridgeIpcServer::executeRequest(const AiBridgeProtocolRequest &request)
 		}
 		}
 	}
+	if(!self || !client || revision!=m_connectionRevision || client!=m_client)return;
 	m_busy = false;
 	sendResponse(response);
 }
@@ -1151,8 +1161,10 @@ void AiBridgeIpcServer::executeRequest(const AiBridgeProtocolRequest &request)
 void AiBridgeIpcServer::sendResponse(const AiBridgeProtocolResponse &response)
 {
 	if (m_client == nullptr || m_client->state() != QLocalSocket::ConnectedState) return;
-	m_client->write(AiBridgeProtocol::serializeResponse(response));
-	m_client->flush();
+	const QPointer<AiBridgeIpcServer> self(this);const auto client=m_client;const auto revision=m_connectionRevision;
+	client->write(AiBridgeProtocol::serializeResponse(response));
+	if(!self || !client || revision!=m_connectionRevision || client!=m_client)return;
+	client->flush();
 }
 
 void AiBridgeIpcServer::clientDisconnected()
@@ -1160,9 +1172,9 @@ void AiBridgeIpcServer::clientDisconnected()
 	if (m_client == nullptr) return;
 	const auto *socket = sender();
 	if (socket != m_client) return;
-	m_client->deleteLater();
-	m_client = nullptr;
+	const auto client=m_client;m_client=nullptr;++m_connectionRevision;m_busy=false;
 	m_input.clear();
+	client->deleteLater();
 }
 
 } // namespace lmms

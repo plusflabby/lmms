@@ -32,11 +32,16 @@ class QIODevice;
 #include <optional>
 #include <string>
 #include <vector>
+#include <atomic>
+#include <functional>
+#include <span>
 
 #include "SampleFrame.h"
 #include "lmms_export.h"
 
 namespace lmms {
+enum class PcmWaveVisitDecision { Continue, Cancelled, ResourceLimit };
+using PcmWaveChunkVisitor=std::function<PcmWaveVisitDecision(quint64,std::span<const SampleFrame>)>;
 class SampleDecoder
 {
 public:
@@ -78,6 +83,8 @@ public:
 	static LMMS_EXPORT PcmWaveLimits configuredImportLimits();
 	static LMMS_EXPORT PcmWaveAdmission admitPcmWave(const QByteArray& header, quint64 fileBytes, const PcmWaveLimits& limits);
 	static LMMS_EXPORT PcmWaveResult decodePcmWave(QIODevice& source, const PcmWaveLimits& limits);
+	static LMMS_EXPORT PcmWaveAdmission scanPcmWave(QIODevice& source, const PcmWaveLimits& limits,
+		const PcmWaveChunkVisitor& visitor, const std::atomic_bool& cancelled);
 
 	struct AudioType
 	{

@@ -39,6 +39,7 @@
 #include "Timeline.h"
 #include "TrackContainer.h"
 #include "VstSyncController.h"
+#include "RecordingProjectIdentity.h"
 
 namespace lmms
 {
@@ -253,6 +254,7 @@ public:
 	bool guiSaveProject();
 	bool guiSaveProjectAs(const QString & filename);
 	bool saveProjectFile(const QString & filename, bool withResources = false);
+	recording::RecordingProjectIdentity& recordingProjectIdentity() {return m_recordingProjectIdentity;}
 
 	const QString & projectFileName() const
 	{
@@ -431,6 +433,7 @@ private:
 	bool m_savingProject;
 	bool m_loadingProject;
 	bool m_audioWindowCompatibilityWarned=false;
+	recording::RecordingProjectIdentity m_recordingProjectIdentity{this};
 	bool m_isCancelled;
 
 	SaveOptions m_saveOptions;

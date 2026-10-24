@@ -877,6 +877,9 @@ void Song::clearProject()
 	m_audioWindowCompatibilityWarned=false;
 	using gui::getGUI;
 	emit projectAboutToChange();
+	// Session owners consume the old copied project identity while revoking their
+	// work. Retire it only after every direct invalidation observer has returned.
+	m_recordingProjectIdentity.resetForNewProject();
 
 	Engine::projectJournal()->setJournalling( false );
 
@@ -1037,6 +1040,7 @@ void Song::loadProject( const QString & fileName )
 	using gui::getGUI;
 
 	QDomNode node;
+	const bool journallingBeforeLoad = Engine::projectJournal()->isJournalling();
 
 	m_loadingProject = true;
 
@@ -1046,6 +1050,13 @@ void Song::loadProject( const QString & fileName )
 	setProjectFileName(fileName);
 
 	DataFile dataFile( m_fileName );
+	if (!recording::RecordingProjectIdentity::metadataSupported(dataFile.head()))
+	{
+		m_loadingProject=false;
+		Engine::projectJournal()->setJournalling(journallingBeforeLoad);
+		setProjectFileName(m_oldFileName);
+		return;
+	}
 
 	bool cantLoadProject = false;
 	// if file could not be opened, head-node is null and we create
@@ -1090,6 +1101,7 @@ void Song::loadProject( const QString & fileName )
 	m_oldFileName = m_fileName;
 
 	clearProject();
+	m_recordingProjectIdentity.acceptLoad(dataFile.head(),m_fileName);
 
 	clearErrors();
 
@@ -1271,7 +1283,12 @@ bool Song::saveProjectFile(const QString & filename, bool withResources)
 
 	m_savingProject = false;
 
-	return dataFile.writeFile(filename, withResources);
+	if (!m_recordingProjectIdentity.beginSave(dataFile,filename,withResources)) { return false; }
+	const auto recordingRevision=m_recordingProjectIdentity.revision();
+	QPointer<Song> saveOwner(this);
+	const bool nativeSaved=dataFile.writeFile(filename,withResources);
+	if (!saveOwner || m_recordingProjectIdentity.revision()!=recordingRevision) { return false; }
+	return m_recordingProjectIdentity.finishSave(dataFile.nameWithExtension(filename),nativeSaved);
 }
 
 

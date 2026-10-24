@@ -4,16 +4,18 @@
 #include <QByteArray>
 #include <QLocalServer>
 #include <QLocalSocket>
+#include <QPointer>
 
 #include "AiBridgeProtocol.h"
 
 namespace lmms
 {
+class AiBridgeVocalJobs;
 
 class AiBridgeIpcServer : public QObject
 {
 public:
-	explicit AiBridgeIpcServer(QObject *parent = nullptr, QString endpoint = QStringLiteral("lmms-aibridge-v2"));
+	explicit AiBridgeIpcServer(QObject *parent = nullptr, QString endpoint = QStringLiteral("lmms-aibridge-v2"), AiBridgeVocalJobs* jobs = nullptr);
 	~AiBridgeIpcServer() override;
 
 	bool start();
@@ -29,10 +31,12 @@ private:
 	void sendResponse(const AiBridgeProtocolResponse &response);
 
 	QLocalServer m_server;
-	QLocalSocket *m_client = nullptr;
+	QPointer<QLocalSocket> m_client;
 	QByteArray m_input;
 	bool m_busy = false;
 	QString m_endpoint;
+	QPointer<AiBridgeVocalJobs> m_vocalJobs;
+	quint64 m_connectionRevision = 0;
 };
 
 } // namespace lmms

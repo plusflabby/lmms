@@ -2,6 +2,14 @@ set(LMMS_SRCS
 	${LMMS_SRCS}
 
 	core/AudioBuffer.cpp
+	core/recording/RecordingDuplexTypes.cpp
+	core/recording/RecordingOutputQueue.cpp
+	core/recording/RecordingTypes.cpp
+	core/recording/RecordingSessionState.cpp
+	core/recording/RecordingLibrary.cpp
+	core/recording/RecordingProjectIdentity.cpp
+	core/recording/RecordingRing.cpp
+	core/recording/RecordingPcm16.cpp
 	core/AudioFileAuthorization.cpp
 	core/AudioImportPolicy.cpp
 	core/AudioSourceWindow.cpp
