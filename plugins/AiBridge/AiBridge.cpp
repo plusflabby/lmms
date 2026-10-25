@@ -78,7 +78,7 @@ private:
 	QPointer<QDialog> m_vocalInspector;
 };
 
-AiBridge::AiBridge() : ToolPlugin(&aibridge_plugin_descriptor, nullptr), m_vocalJobs(this), m_ipcServer(this,QStringLiteral("lmms-aibridge-v2"),&m_vocalJobs)
+AiBridge::AiBridge() : ToolPlugin(&aibridge_plugin_descriptor, nullptr), m_vocalJobs(this), m_midiExportJobs(this), m_ipcServer(this,QStringLiteral("lmms-aibridge-v2"),&m_vocalJobs,&m_midiExportJobs)
 {
 	m_ipcServer.start();
 }
@@ -86,6 +86,7 @@ AiBridge::AiBridge() : ToolPlugin(&aibridge_plugin_descriptor, nullptr), m_vocal
 AiBridge::~AiBridge()
 {
 	m_ipcServer.stop();
+	m_midiExportJobs.shutdown();
 	m_vocalJobs.shutdown();
 }
 

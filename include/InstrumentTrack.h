@@ -241,6 +241,7 @@ public:
 
 	//! Returns a non-owning pointer to the model for the knob at the given index in the track's MIDI CC rack
 	FloatModel* midiCCModel(int index) const { return m_midiCCModel[index].get(); }
+	bool midiCCEnabled() const { return m_midiCCEnable && m_midiCCEnable->value(); }
 
 signals:
 	void instrumentChanged();

@@ -11,6 +11,9 @@ set(LMMS_SRCS
 	core/recording/RecordingRing.cpp
 	core/recording/RecordingPcm16.cpp
 	core/AudioFileAuthorization.cpp
+	core/midi/StandardMidiWriter.cpp
+	core/midi/MidiExportService.cpp
+	core/midi/MidiExportOutput.cpp
 	core/AudioImportPolicy.cpp
 	core/AudioSourceWindow.cpp
 	core/AudioWindowPlayback.cpp

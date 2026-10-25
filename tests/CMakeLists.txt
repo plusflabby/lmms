@@ -5,6 +5,10 @@ set(CMAKE_INCLUDE_CURRENT_DIR ON)
 set(CMAKE_AUTOMOC ON)
 
 set(LMMS_TESTS
+	src/core/MidiExportPlannerTest.cpp
+	src/core/MidiExportFixtureTest.cpp
+	src/core/MidiExportOutputTest.cpp
+	src/core/StandardMidiWriterTest.cpp
 	src/core/RecordingOutputQueueTest.cpp
 	src/core/RecordingSessionStateTest.cpp
 	src/core/RecordingLibraryTest.cpp
@@ -19,6 +23,7 @@ set(LMMS_TESTS
 	src/plugins/AiBridgeSampleTrackAutomationTest.cpp
 	src/plugins/AiBridgeVocalTrackActionsTest.cpp
 	src/plugins/AiBridgeVocalJobsTest.cpp
+	src/plugins/AiBridgeMidiExportJobsTest.cpp
 	src/plugins/AiBridgeVocalAnalysisTest.cpp
 	src/plugins/AiBridgeVocalSourceTest.cpp
 	src/core/PcmWaveStreamingTest.cpp
@@ -148,6 +153,14 @@ foreach(LMMS_TEST_SRC IN LISTS LMMS_TESTS)
 	if(LMMS_TEST_NAME STREQUAL "AiBridgeVocalAnalysisTest")
 		target_include_directories(${LMMS_TEST_NAME} PRIVATE ${CMAKE_SOURCE_DIR}/plugins/AiBridge)
 		target_sources(${LMMS_TEST_NAME} PRIVATE ${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeVocalAnalysis.cpp)
+	endif()
+	if(LMMS_TEST_NAME STREQUAL "AiBridgeMidiExportJobsTest")
+		target_include_directories(${LMMS_TEST_NAME} PRIVATE ${CMAKE_SOURCE_DIR}/plugins/AiBridge)
+		target_sources(${LMMS_TEST_NAME} PRIVATE
+			${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeProjectContext.cpp
+			${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeMutationTypes.cpp
+			${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeMidiExportCapture.cpp
+			${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeMidiExportJobs.cpp)
 	endif()
 	if(LMMS_TEST_NAME STREQUAL "AiBridgeVocalJobsTest" OR LMMS_TEST_NAME STREQUAL "AiBridgeVocalJobSafetyTest" OR LMMS_TEST_NAME STREQUAL "AiBridgeVocalJobViewTest" OR LMMS_TEST_NAME STREQUAL "AiBridgeVocalSourceTest")
 		target_include_directories(${LMMS_TEST_NAME} PRIVATE ${CMAKE_SOURCE_DIR}/plugins/AiBridge)
@@ -623,6 +636,10 @@ foreach(LMMS_TEST_SRC IN LISTS LMMS_TESTS)
 			${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeMutationTypes.cpp)
 	endif()
 	if(LMMS_TEST_NAME STREQUAL "AiBridgeIpcServerTest" OR LMMS_TEST_NAME STREQUAL "AiBridgeAudioRangeProtocolTest" OR LMMS_TEST_NAME STREQUAL "AiBridgeViewTest")
+		target_sources(${LMMS_TEST_NAME} PRIVATE
+			${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeMidiExportCapture.cpp
+			${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeMidiExportJobs.cpp
+			${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeMidiExportWire.cpp)
 		target_sources(${LMMS_TEST_NAME} PRIVATE
 			${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeVocalWire.cpp
 			${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeVocalTypes.cpp

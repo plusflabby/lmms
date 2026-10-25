@@ -11,11 +11,12 @@
 namespace lmms
 {
 class AiBridgeVocalJobs;
+class AiBridgeMidiExportJobs;
 
 class AiBridgeIpcServer : public QObject
 {
 public:
-	explicit AiBridgeIpcServer(QObject *parent = nullptr, QString endpoint = QStringLiteral("lmms-aibridge-v2"), AiBridgeVocalJobs* jobs = nullptr);
+	explicit AiBridgeIpcServer(QObject *parent = nullptr, QString endpoint = QStringLiteral("lmms-aibridge-v2"), AiBridgeVocalJobs* jobs = nullptr, AiBridgeMidiExportJobs* midiExportJobs = nullptr);
 	~AiBridgeIpcServer() override;
 
 	bool start();
@@ -36,6 +37,7 @@ private:
 	bool m_busy = false;
 	QString m_endpoint;
 	QPointer<AiBridgeVocalJobs> m_vocalJobs;
+	QPointer<AiBridgeMidiExportJobs> m_midiExportJobs;
 	quint64 m_connectionRevision = 0;
 };
 
