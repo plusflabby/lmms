@@ -1,6 +1,7 @@
 #ifndef LMMS_RECORDING_INPUT_CONTROLLER_H
 #define LMMS_RECORDING_INPUT_CONTROLLER_H
 #include "RecordingInputRuntime.h"
+#include "RecordingInputDiagnostic.h"
 #include <QString>
 #include <memory>
 #include <vector>
@@ -22,11 +23,13 @@ struct RecordingInputDevicePage
  std::vector<RecordingInputDevice> devices;
  std::uint32_t nextOffset=0;
  bool hasMore=false;
+ RecordingInputDiagnostic diagnostic;
 };
 struct RecordingDriverResult
 {
  QString code;
  bool callbackQuiescent=false;
+ RecordingInputDiagnostic diagnostic;
  bool ok() const noexcept{return code==QStringLiteral("ok");}
 };
 using RecordingInputCallback=InputDecision(*)(void*,const InputBlock&) noexcept;
@@ -87,6 +90,7 @@ struct RecordingControllerSnapshot
  InputSnapshot input;
  std::uint32_t callbacksInFlight=0;
  bool firstCallbackSeen=false,driverInitialized=false;
+ RecordingInputDiagnostic diagnostic;
 };
 struct RecordingControllerResult
 {

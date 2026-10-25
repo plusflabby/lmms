@@ -8,6 +8,7 @@
 #include <QLineEdit>
 #include <QMdiSubWindow>
 #include <QPushButton>
+#include <QPlainTextEdit>
 #include <QTimer>
 #include <QUuid>
 #include <limits>
@@ -43,6 +44,9 @@ RecordingQualificationView::RecordingQualificationView(RecordingServiceHost& hos
 {
  setWindowTitle(tr("Vocal Recorder Qualification"));
  auto* form=new QFormLayout(this);
+ m_diagnostics=new QPlainTextEdit(this);m_diagnostics->setObjectName("recordingInputDiagnostics");
+ m_diagnostics->setReadOnly(true);m_diagnostics->setMaximumHeight(150);
+ m_diagnostics->setPlaceholderText(tr("No input operation has run."));
  m_rootLabel=new QLabel(tr("No recording folder selected"),this);m_rootLabel->setObjectName("recordingRootStatus");
  m_rootButton=new QPushButton(tr("Choose recording folder…"),this);m_rootButton->setObjectName("chooseRecordingRoot");
  m_inputDevices=new QComboBox(this);m_inputDevices->setObjectName("recordingInputDevice");m_inputDevices->setCurrentIndex(-1);
@@ -60,6 +64,7 @@ RecordingQualificationView::RecordingQualificationView(RecordingServiceHost& hos
  form->addRow(tr("Recording library"),m_rootLabel);form->addRow(m_rootButton);form->addRow(m_enumerateButton,m_inputDevices);
  form->addRow(tr("Input channel"),m_channels);form->addRow(tr("Capture rate"),m_sampleRates);form->addRow(tr("Take label"),m_takeLabel);
  form->addRow(m_armButton,m_startButton);form->addRow(m_stopButton,m_disarmButton);form->addRow(tr("Status"),m_statusLabel);form->addRow(tr("Capture"),m_meterLabel);
+ form->addRow(tr("Input diagnostics"),m_diagnostics);
  connect(m_rootButton,&QPushButton::clicked,this,&RecordingQualificationView::chooseRecordingRoot);
  connect(m_enumerateButton,&QPushButton::clicked,this,&RecordingQualificationView::refreshInputs);
  connect(m_inputDevices,qOverload<int>(&QComboBox::currentIndexChanged),this,[this](int index){
@@ -89,6 +94,7 @@ void RecordingQualificationView::refreshInputs()
 {
  m_inputDevices->clear();m_inputDevices->setCurrentIndex(-1);m_channels->clear();m_channels->setCurrentIndex(-1);m_devices.clear();
  const auto page=m_host.enumerateInputs(0,64);
+ m_diagnostics->setPlainText(page.diagnostic.localSummary());
  if(page.code!="ok"){m_statusLabel->setText(page.code);updateControls();return;}
  for(const auto& device:page.devices)
  {
@@ -122,7 +128,7 @@ void RecordingQualificationView::armLocally()
   RecordingRing::MaximumCallback,std::uint64_t(sampleRate)*120};
  const auto result=m_host.arm(selected,m_epoch,m_host.rootRevision());
  if(!result.ok){m_statusLabel->setText(result.code);m_localArm=false;updateControls();return;}
- m_localArm=true;m_statusLabel->setText(tr("Locally armed. Input remains closed until Start."));updateControls();
+ m_localArm=true;m_diagnostics->clear();m_statusLabel->setText(tr("Locally armed. Input remains closed until Start."));updateControls();
 }
 void RecordingQualificationView::startTake()
 {
@@ -150,6 +156,8 @@ void RecordingQualificationView::disarmLocally()
 void RecordingQualificationView::pollHost()
 {
  const auto status=m_host.poll(std::uint64_t(m_clock.elapsed()));
+ const auto diagnosticText=status.input.diagnostic.localSummary();
+ if(m_diagnostics->toPlainText()!=diagnosticText)m_diagnostics->setPlainText(diagnosticText);
  const auto quality=timestampQualityName(status.input.input.timestampQuality);
  auto error=status.errorCode;if(error.isEmpty())error=status.input.errorCode;
  if(error.isEmpty() && status.writer.fault!=WriterFault::None)error=writerFaultName(status.writer.fault);

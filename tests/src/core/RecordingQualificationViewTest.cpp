@@ -1,5 +1,6 @@
 #include "RecordingQualificationView.h"
 #include <QComboBox>
+#include <QPlainTextEdit>
 #include <QMdiArea>
 #include <QMdiSubWindow>
 #include <QElapsedTimer>
@@ -11,7 +12,7 @@ namespace {
 class FakeDriver final : public RecordingInputDriver
 {
 public:
- RecordingDriverResult initialize() noexcept override{++initializes;return {"ok",true};}
+ RecordingDriverResult initialize() noexcept override{++initializes;return initializeResult;}
  RecordingInputDevicePage enumerateInputs(std::uint32_t,std::uint32_t) override
  {++enumerations;return {"ok",{{"mic-1","Local microphone","WASAPI",2}},1,false};}
  RecordingDriverResult openInputOnly(const SelectedInputProfile&,RecordingInputCallback,void*) noexcept override{++opens;return {"ok",true};}
@@ -20,6 +21,7 @@ public:
  RecordingDriverResult close() noexcept override{++closes;return {"ok",true};}
  RecordingDriverResult terminate() noexcept override{++terminates;return {"ok",true};}
  int initializes=0,enumerations=0,opens=0,starts=0,stops=0,closes=0,terminates=0;
+ RecordingDriverResult initializeResult{"ok",true};
 };
 SelectedInputProfile profile(){SelectedInputProfile p;p.deviceId="mic-1";p.hostApiName="WASAPI";p.wasapiShared=true;p.input={48000,2,0,4096,5760000};return p;}
 class MemorySink final : public RecordingWriterSink
@@ -40,6 +42,20 @@ class RecordingQualificationViewTest : public QObject
 {
  Q_OBJECT
 private slots:
+ void initializationFailureDisplaysStageDetailsWithoutOpeningInput()
+ {
+  auto driver=std::make_unique<FakeDriver>();auto* observed=driver.get();
+  auto& r=observed->initializeResult;r.code="portaudio_initialize_error_-9999";
+  r.diagnostic.failedStage=InputDiagnosticStage::Initialize;r.diagnostic.hasPortAudioError=true;r.diagnostic.portAudioError=-9999;
+  r.diagnostic.description="Host initialization failed";
+  r.diagnostic.outcomes[std::size_t(InputDiagnosticStage::Initialize)]=InputDiagnosticOutcome::Failed;
+  RecordingServiceHost host(std::move(driver));RecordingProjectIdentity project(nullptr);RecordingQualificationView view(host,project);
+  QTest::mouseClick(view.findChild<QPushButton*>("enumerateRecordingInputs"),Qt::LeftButton);
+  auto* detail=view.findChild<QPlainTextEdit*>("recordingInputDiagnostics");QVERIFY(detail);
+  QVERIFY(detail->isReadOnly());QVERIFY(detail->toPlainText().contains("initialize"));QVERIFY(detail->toPlainText().contains("-9999"));
+  QVERIFY(detail->toPlainText().contains("Host initialization failed"));QCOMPARE(observed->opens,0);QCOMPARE(observed->starts,0);
+  QVERIFY(host.requestShutdown(0).ok);
+ }
  void constructionAndPanelCloseDoNotEnumerateOpenOrRearm()
  {
   auto driver=std::make_unique<FakeDriver>();auto* observed=driver.get();RecordingServiceHost host(std::move(driver));

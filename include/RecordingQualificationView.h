@@ -7,6 +7,7 @@ class QComboBox;
 class QLabel;
 class QLineEdit;
 class QPushButton;
+class QPlainTextEdit;
 class QTimer;
 namespace lmms::recording {
 class RecordingQualificationView final : public QWidget
@@ -37,6 +38,7 @@ private:
  QLabel* m_rootLabel=nullptr;
  QLabel* m_statusLabel=nullptr;
  QLabel* m_meterLabel=nullptr;
+ QPlainTextEdit* m_diagnostics=nullptr;
  QPushButton* m_enumerateButton=nullptr;
  QPushButton* m_rootButton=nullptr;
  QPushButton* m_armButton=nullptr;
