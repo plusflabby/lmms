@@ -1,4 +1,5 @@
 #include "RecordingLibrary.h"
+#include "RecordingTakeJournal.h"
 #include <QCryptographicHash>
 #include <QJsonDocument>
 #include <QJsonObject>
@@ -182,6 +183,146 @@ bool OwnedNewFile::flush()
  return false;
 #endif
 }
+namespace {
+class OwnedLibraryTakeSink final : public RecordingWriterSink
+{
+public:
+#ifdef Q_OS_WIN
+ OwnedLibraryTakeSink(std::shared_ptr<RecordingLibrary::RootState> root,std::shared_ptr<ProjectPin> project,
+  HANDLE audio,HANDLE journal,QString projectId,QString takeId,std::uint32_t rate,std::uint64_t maximum)
+  :m_root(std::move(root)),m_project(std::move(project)),m_audio(audio),m_journal(journal),m_projectId(std::move(projectId)),
+   m_takeId(std::move(takeId)),m_audioPath(rootPath()+"/take-"+m_takeId+".partial"),m_journalPath(rootPath()+"/take-"+m_takeId+".journal"),m_rate(rate),m_maximum(maximum){}
+ ~OwnedLibraryTakeSink() override{if(m_audio!=INVALID_HANDLE_VALUE)CloseHandle(m_audio);if(m_journal!=INVALID_HANDLE_VALUE)CloseHandle(m_journal);}
+#else
+ OwnedLibraryTakeSink()=default;
+#endif
+ WriterIoCode beginTake(const TakeDescriptor& descriptor) noexcept override
+ {
+#ifdef Q_OS_WIN
+  if(m_started || descriptor.projectId!=m_projectId || descriptor.takeId!=m_takeId || descriptor.sampleRate!=m_rate
+   || descriptor.maxRawFrames!=m_maximum || !authorized(m_root) || !ordinary(m_audio,false,m_root->volume)
+   || !ordinary(m_journal,false,m_root->volume) || finalName(m_audio)!=m_audioPath || finalName(m_journal)!=m_journalPath)return WriterIoCode::IdentityChanged;
+  const auto header=RecordingWavHeader::encodePcm16(m_rate,0);const auto manifest=RecordingTakeJournalCodec::encodeHeader(descriptor);
+  if(!header.valid || manifest.isEmpty() || manifest.size()>int(TakeJournalRecordMaximum))return WriterIoCode::WriteFailed;
+  DWORD wrote=0;if(!WriteFile(m_audio,header.bytes.data(),DWORD(header.bytes.size()),&wrote,nullptr) || wrote!=DWORD(header.bytes.size()) || !FlushFileBuffers(m_audio))return WriterIoCode::FlushFailed;
+  m_audioWritten=header.bytes.size();
+  if(!writeJournal(manifest))return WriterIoCode::FlushFailed;
+  m_journalWritten=std::uint64_t(manifest.size());m_descriptor=descriptor;m_started=true;return WriterIoCode::Ok;
+#else
+  Q_UNUSED(descriptor);return WriterIoCode::IdentityChanged;
+#endif
+ }
+ WriterIoResult appendPayload(std::span<const std::uint8_t> bytes) noexcept override
+ {
+#ifdef Q_OS_WIN
+  if(!m_started || m_audioSealed || !authorized(m_root) || finalName(m_audio)!=m_audioPath
+   || bytes.size()>std::uint64_t(44)+m_maximum*2-m_audioWritten)return {WriterIoCode::IdentityChanged,0};
+  DWORD wrote=0;const bool ok=WriteFile(m_audio,bytes.data(),DWORD(bytes.size()),&wrote,nullptr);m_audioWritten+=wrote;
+  return {ok?WriterIoCode::Ok:WriterIoCode::WriteFailed,wrote};
+#else
+  Q_UNUSED(bytes);return {WriterIoCode::IdentityChanged,0};
+#endif
+ }
+ WriterIoCode appendCheckpoint(const TakeProgress& progress) noexcept override
+ {
+#ifdef Q_OS_WIN
+  const auto record=RecordingTakeJournalCodec::encodeProgress(progress);
+  if(!record.valid || !m_started || m_audioSealed || !authorized(m_root) || finalName(m_audio)!=m_audioPath || finalName(m_journal)!=m_journalPath)return WriterIoCode::IdentityChanged;
+  if(m_journalWritten>std::uint64_t(65536-record.size))return WriterIoCode::WriteFailed;
+  if(!FlushFileBuffers(m_audio) || !writeJournal(QByteArray(reinterpret_cast<const char*>(record.bytes.data()),record.size)))return WriterIoCode::FlushFailed;
+  m_journalWritten+=record.size;return WriterIoCode::Ok;
+#else
+  Q_UNUSED(progress);return WriterIoCode::IdentityChanged;
+#endif
+ }
+ WriterIoCode appendSealIntent(const TakeProgress& progress) noexcept override
+ {
+#ifdef Q_OS_WIN
+  const auto record=RecordingTakeJournalCodec::encodeSealIntent(progress);
+  if(!record.valid || !m_started || m_audioSealed || !authorized(m_root) || finalName(m_audio)!=m_audioPath || finalName(m_journal)!=m_journalPath)return WriterIoCode::IdentityChanged;
+  if(m_journalWritten>std::uint64_t(65536-record.size))return WriterIoCode::WriteFailed;
+  if(!FlushFileBuffers(m_audio) || !writeJournal(QByteArray(reinterpret_cast<const char*>(record.bytes.data()),record.size)))return WriterIoCode::FlushFailed;
+  m_journalWritten+=record.size;return WriterIoCode::Ok;
+#else
+  Q_UNUSED(progress);return WriterIoCode::IdentityChanged;
+#endif
+ }
+ WriterIoCode sealPcm16(std::uint32_t rate,std::uint64_t frames) noexcept override
+ {
+#ifdef Q_OS_WIN
+  if(!m_started || m_audioSealed || rate!=m_rate || frames>m_maximum || m_audioWritten!=44+frames*2
+   || !authorized(m_root) || finalName(m_audio)!=m_audioPath)return WriterIoCode::SealFailed;
+  const auto header=RecordingWavHeader::encodePcm16(rate,frames);if(!header.valid)return WriterIoCode::SealFailed;
+  LARGE_INTEGER start{};DWORD wrote=0;
+  if(!SetFilePointerEx(m_audio,start,nullptr,FILE_BEGIN) || !WriteFile(m_audio,header.bytes.data(),DWORD(header.bytes.size()),&wrote,nullptr)
+   || wrote!=DWORD(header.bytes.size()) || !FlushFileBuffers(m_audio))return WriterIoCode::SealFailed;
+  BY_HANDLE_FILE_INFORMATION beforeRename{};if(!GetFileInformationByHandle(m_audio,&beforeRename))return WriterIoCode::IdentityChanged;
+  const auto target=QStringLiteral("take-")+m_takeId+QStringLiteral(".wav");
+  const auto bytes=offsetof(FILE_RENAME_INFORMATION,FileName)+std::size_t(target.size())*sizeof(wchar_t);
+  std::vector<std::uint64_t> storage((bytes+7)/8,0);auto* rename=reinterpret_cast<FILE_RENAME_INFORMATION*>(storage.data());
+  rename->ReplaceIfExists=FALSE;rename->RootDirectory=m_project->directory;rename->FileNameLength=ULONG(target.size()*sizeof(wchar_t));
+  std::memcpy(rename->FileName,target.utf16(),std::size_t(target.size())*sizeof(wchar_t));
+  const auto set=reinterpret_cast<decltype(&NtSetInformationFile)>(GetProcAddress(GetModuleHandleW(L"ntdll.dll"),"NtSetInformationFile"));
+  IO_STATUS_BLOCK io{};const auto status=set?set(m_audio,&io,rename,ULONG(bytes),FileRenameInformation):NTSTATUS(0xc0000002u);
+  if(status<0)return quint32(status)==0xc0000035u?WriterIoCode::Collision:WriterIoCode::SealFailed;
+  m_audioPath=rootPath()+"/"+target;
+  if(!ordinary(m_audio,false,m_root->volume) || finalName(m_audio)!=m_audioPath || !FlushFileBuffers(m_audio))return WriterIoCode::IdentityChanged;
+  CloseHandle(m_audio);m_audio=INVALID_HANDLE_VALUE;NTSTATUS readStatus=0;
+  const auto readonly=relative(m_project->directory,target,GENERIC_READ,FILE_OPEN,false,readStatus);
+  if(readonly==INVALID_HANDLE_VALUE)return WriterIoCode::IdentityChanged;
+  BY_HANDLE_FILE_INFORMATION afterRename{};
+  if(!ordinary(readonly,false,m_root->volume) || finalName(readonly)!=m_audioPath || !GetFileInformationByHandle(readonly,&afterRename)
+   || beforeRename.dwVolumeSerialNumber!=afterRename.dwVolumeSerialNumber || beforeRename.nFileIndexHigh!=afterRename.nFileIndexHigh
+   || beforeRename.nFileIndexLow!=afterRename.nFileIndexLow){CloseHandle(readonly);return WriterIoCode::IdentityChanged;}
+  m_audio=readonly;
+  LARGE_INTEGER fileSize{};if(!GetFileSizeEx(m_audio,&fileSize) || fileSize.QuadPart!=LONGLONG(44+frames*2))return WriterIoCode::IdentityChanged;
+  QCryptographicHash hash(QCryptographicHash::Sha256);std::array<char,65536> buffer{};std::uint64_t total=0;LARGE_INTEGER zero{};
+  if(!SetFilePointerEx(m_audio,zero,nullptr,FILE_BEGIN))return WriterIoCode::IdentityChanged;
+  for(;;){DWORD count=0;if(!ReadFile(m_audio,buffer.data(),DWORD(buffer.size()),&count,nullptr))return WriterIoCode::IdentityChanged;
+   if(!count)break;hash.addData(buffer.data(),int(count));total+=count;}
+  if(total!=std::uint64_t(fileSize.QuadPart) || !SetFilePointerEx(m_audio,zero,nullptr,FILE_BEGIN))return WriterIoCode::IdentityChanged;
+  m_audioSha256=hash.result();if(m_audioSha256.size()!=32)return WriterIoCode::IdentityChanged;
+  m_audioSealed=true;return WriterIoCode::Ok;
+#else
+  Q_UNUSED(rate);Q_UNUSED(frames);return WriterIoCode::SealFailed;
+#endif
+ }
+ QByteArray sealedAudioSha256() const noexcept override{return m_audioSealed?m_audioSha256:QByteArray{};}
+ WriterIoCode appendTerminal(TakeTerminal terminal,const TakeProgress& progress) noexcept override
+ {
+#ifdef Q_OS_WIN
+  if(!m_started || !m_audioSealed || !authorized(m_root) || finalName(m_audio)!=m_audioPath || finalName(m_journal)!=m_journalPath)return WriterIoCode::IdentityChanged;
+  if(terminal==TakeTerminal::Complete && (!progress.sourceDigestKnown || QByteArray(reinterpret_cast<const char*>(progress.sourceDigest.data()),int(progress.sourceDigest.size()))!=m_audioSha256))return WriterIoCode::IdentityChanged;
+  const auto record=RecordingTakeJournalCodec::encodeTerminal(terminal,progress);if(!record.valid || m_journalWritten>std::uint64_t(65536-record.size))return WriterIoCode::WriteFailed;
+  if(!writeJournal(QByteArray(reinterpret_cast<const char*>(record.bytes.data()),record.size)))return WriterIoCode::FlushFailed;
+  m_journalWritten+=record.size;return WriterIoCode::Ok;
+#else
+  Q_UNUSED(terminal);Q_UNUSED(progress);return WriterIoCode::IdentityChanged;
+#endif
+ }
+ void preservePartial() noexcept override
+ {
+#ifdef Q_OS_WIN
+  if(authorized(m_root)){if(m_audio!=INVALID_HANDLE_VALUE)FlushFileBuffers(m_audio);if(m_journal!=INVALID_HANDLE_VALUE)FlushFileBuffers(m_journal);}
+#endif
+ }
+private:
+#ifdef Q_OS_WIN
+ QString rootPath() const{return m_root->finalPath+'/'+m_projectId;}
+ bool writeJournal(const QByteArray& bytes) noexcept
+ {
+  if(m_journalPoisoned || bytes.isEmpty() || bytes.size()>int(TakeJournalRecordMaximum) || m_journal==INVALID_HANDLE_VALUE)return false;
+  DWORD offset=0,total=DWORD(bytes.size());
+  while(offset<total)
+  {DWORD wrote=0;if(!WriteFile(m_journal,bytes.constData()+offset,total-offset,&wrote,nullptr) || !wrote){m_journalPoisoned=true;return false;}offset+=wrote;}
+  if(!FlushFileBuffers(m_journal)){m_journalPoisoned=true;return false;}return true;
+ }
+ std::shared_ptr<RecordingLibrary::RootState> m_root;std::shared_ptr<ProjectPin> m_project;
+ HANDLE m_audio=INVALID_HANDLE_VALUE,m_journal=INVALID_HANDLE_VALUE;QString m_projectId,m_takeId,m_audioPath,m_journalPath;
+ std::uint32_t m_rate=0;std::uint64_t m_maximum=0,m_audioWritten=0,m_journalWritten=0;TakeDescriptor m_descriptor;QByteArray m_audioSha256;bool m_started=false,m_audioSealed=false,m_journalPoisoned=false;
+#endif
+};
+}
 RecordingLibrary::RecordingLibrary(std::shared_ptr<RootState> root):m_root(std::move(root)){}
 RecordingLibrary::~RecordingLibrary(){revoke();}
 RecordingLibrary::Approval RecordingLibrary::authorizeLocalRoot(const QString& selected)
@@ -250,6 +391,27 @@ RecordingLibrary::NewFileResult RecordingLibrary::createUniquePartial(const Proj
  return {"ok",std::make_unique<OwnedNewFile>(std::move(state))};
 #else
  return {"unsupported_backend",{}};
+#endif
+}
+RecordingLibrary::NewTakeResult RecordingLibrary::createUniqueTake(const ProjectIdentity& project,const TakeIdentity& take,std::uint32_t rate,std::uint64_t maximum)
+{
+ if(const auto error=identityError(project);!error.isEmpty())return {error,{}};
+ if(!validId(take.id) || take.label.toUtf8().size()>96 || (rate!=44100 && rate!=48000)
+  || !maximum || maximum>std::uint64_t(rate)*120)return {"invalid_take",{}};
+#ifdef Q_OS_WIN
+ auto [code,pin]=projectPin(m_root,project);if(!pin)return {code,{}};
+ const auto stem=QStringLiteral("take-")+take.id;
+ NTSTATUS status=0;const auto audio=relative(pin->directory,stem+QStringLiteral(".partial"),GENERIC_READ|GENERIC_WRITE|DELETE,FILE_CREATE,false,status);
+ if(audio==INVALID_HANDLE_VALUE)return {quint32(status)==0xc0000035u?QStringLiteral("take_exists"):QStringLiteral("write_failed"),{}};
+ if(!ordinary(audio,false,m_root->volume) || finalName(audio)!=m_root->finalPath+'/'+project.id+'/'+stem+".partial")
+ {CloseHandle(audio);return {"source_identity_changed",{}};}
+ const auto journal=relative(pin->directory,stem+QStringLiteral(".journal"),GENERIC_READ|GENERIC_WRITE,FILE_CREATE,false,status);
+ if(journal==INVALID_HANDLE_VALUE){CloseHandle(audio);return {quint32(status)==0xc0000035u?QStringLiteral("take_exists"):QStringLiteral("write_failed"),{}};}
+ if(!ordinary(journal,false,m_root->volume) || finalName(journal)!=m_root->finalPath+'/'+project.id+'/'+stem+".journal")
+ {CloseHandle(audio);CloseHandle(journal);return {"source_identity_changed",{}};}
+ return {"ok",std::make_unique<OwnedLibraryTakeSink>(m_root,std::move(pin),audio,journal,project.id,take.id,rate,maximum)};
+#else
+ Q_UNUSED(take);Q_UNUSED(rate);Q_UNUSED(maximum);return {"unsupported_backend",{}};
 #endif
 }
 RecordingLibrary::CheckedFile RecordingLibrary::openRecoveryCandidate(const ProjectIdentity& project,const QString& take)

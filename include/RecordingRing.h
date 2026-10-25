@@ -24,6 +24,8 @@ public:
  ~RecordingRing();
  bool isReady() const noexcept{return bool(m_frames);}
  std::uint32_t capacityFrames() const noexcept{return m_capacity;}
+ std::uint32_t sampleRate() const noexcept{return m_sampleRate;}
+ std::uint64_t maximumTakeFrames() const noexcept{return m_maxTakeFrames;}
  PushResult push(const float* interleaved,std::size_t frames,std::uint32_t channels,std::uint32_t channelIndex) noexcept;
  std::size_t pop(float* preallocatedDestination,std::size_t capacity) noexcept;
  bool resetAfterQuiescence() noexcept;

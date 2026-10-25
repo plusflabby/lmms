@@ -5,6 +5,7 @@
 #include <QString>
 #include <QJsonObject>
 #include <memory>
+#include "RecordingWriter.h"
 #include "lmms_export.h"
 namespace lmms::recording {
 struct ProjectIdentity {QString id;unsigned schema=1;};
@@ -26,11 +27,13 @@ public:
  struct RootState;
  struct Approval {QString code;std::unique_ptr<RecordingLibrary> library;};
  struct NewFileResult {QString code;std::unique_ptr<OwnedNewFile> file;};
+ struct NewTakeResult {QString code;std::unique_ptr<RecordingWriterSink> sink;};
  struct CheckedFile {QString code;std::unique_ptr<QIODevice> source;};
  static Approval authorizeLocalRoot(const QString&);
  ~RecordingLibrary() override;
  QString prepareProjectFolder(const ProjectIdentity&);
  NewFileResult createUniquePartial(const ProjectIdentity&,const TakeIdentity&);
+ NewTakeResult createUniqueTake(const ProjectIdentity&,const TakeIdentity&,std::uint32_t sampleRate,std::uint64_t maxRawFrames);
  CheckedFile openRecoveryCandidate(const ProjectIdentity&,const QString& takeId);
  void revoke();
 private:

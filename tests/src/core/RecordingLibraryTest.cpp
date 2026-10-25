@@ -1,10 +1,13 @@
 #include "RecordingLibrary.h"
+#include "RecordingWriter.h"
+#include "RecordingTakeJournal.h"
 #include <QtTest>
 #include <QTemporaryDir>
 #include <QFile>
 #include <QDir>
 #include <QUuid>
 #include <QCryptographicHash>
+#include <vector>
 #include <QSaveFile>
 #include <cstring>
 #ifdef Q_OS_WIN
@@ -60,12 +63,64 @@ struct RestoreAcl
 #endif
 }
 using namespace lmms::recording;
+namespace {
+bool waitForWriter(RecordingWriter& writer,WriterState state)
+{QElapsedTimer timer;timer.start();while(timer.elapsed()<3000){if(writer.poll().state==state)return true;QTest::qWait(1);}return writer.poll().state==state;}
+TakeDescriptor takeDescriptor(const ProjectIdentity& project,const TakeIdentity& take,std::uint64_t maximum)
+{TakeDescriptor d;d.projectId=project.id;d.takeId=take.id;d.label=take.label;d.epoch={1,1};d.projectGeneration=1;d.maxRawFrames=maximum;d.targetTick=0;d.sampleRate=48000;return d;}
+}
 class RecordingLibraryTest : public QObject
 {
  Q_OBJECT
  static QString id(){return QUuid::createUuid().toString(QUuid::WithoutBraces);}
  static QByteArray bytes(const QString& path){QFile f(path);if(!f.open(QIODevice::ReadOnly))return {};return f.readAll();}
 private slots:
+ void independentlyOwnedWriterSealsOnlyItsCreateNewTake()
+ {
+  QTemporaryDir temp;QVERIFY(temp.isValid());auto approved=RecordingLibrary::authorizeLocalRoot(temp.path());QVERIFY(approved.library);
+  const ProjectIdentity project{id(),1};const TakeIdentity take{id(),"Count-in and phrase"};QVERIFY(approved.library->prepareProjectFolder(project)=="ok");
+  auto created=approved.library->createUniqueTake(project,take,48000,5760000);QCOMPARE(created.code,QString("ok"));QVERIFY(created.sink);
+  const auto folder=temp.path()+"/"+project.id;const auto partial=folder+"/take-"+take.id+".partial";const auto journal=folder+"/take-"+take.id+".journal";
+  QVERIFY(QFileInfo::exists(partial));QVERIFY(QFileInfo::exists(journal));QCOMPARE(QFileInfo(partial).size(),qint64(0));
+  RecordingRing ring{48000,131072,5760000};RecordingWriter writer;QVERIFY(writer.begin(takeDescriptor(project,take,5760000),std::move(created.sink),ring).ok);
+  QVERIFY(waitForWriter(writer,WriterState::Ready));QCOMPARE(QFileInfo(partial).size(),qint64(44));QVERIFY(QFileInfo(journal).size()>0 && QFileInfo(journal).size()<=256);
+  const float samples[]{-.5f,0.f,.5f};QCOMPARE(ring.push(samples,3,1,0).acceptedFrames,3u);
+  InputSnapshot end;end.epoch={1,1};end.receivedFrames=3;end.acceptedFrames=3;writer.requestInputClosed({1,1},end);
+  QVERIFY(waitForWriter(writer,WriterState::Sealed));QVERIFY(writer.joinAfterExit().ok);
+  const auto final=folder+"/take-"+take.id+".wav";QVERIFY(QFileInfo::exists(final));QVERIFY(!QFileInfo::exists(partial));QVERIFY(QFileInfo(journal).size()>44);
+  QFile sealed(final);QVERIFY2(sealed.open(QIODevice::ReadOnly),qPrintable(sealed.errorString()));const auto audio=sealed.readAll();
+  QCOMPARE(audio.size(),qint64(50));QCOMPARE(audio.left(4),QByteArray("RIFF"));QCOMPARE(audio.mid(36,4),QByteArray("data"));
+  QCOMPARE(std::uint8_t(audio[44]),std::uint8_t(0));QCOMPARE(std::uint8_t(audio[45]),std::uint8_t(0xc0));
+  const auto digest=QCryptographicHash::hash(audio,QCryptographicHash::Sha256);QCOMPARE(writer.poll().sourceSha256,digest);
+  QCOMPARE(QCryptographicHash::hash(bytes(final),QCryptographicHash::Sha256),digest);
+  QFile journalFile(journal);QVERIFY(journalFile.open(QIODevice::ReadOnly));const auto journalBytes=journalFile.readAll();
+  const auto le16=[](const char* p){return std::uint16_t(std::uint8_t(p[0]))|std::uint16_t(std::uint8_t(p[1]))<<8;};
+  QVERIFY(journalBytes.size()<=65536);const auto headerSize=le16(journalBytes.constData()+2);TakeDescriptor saved;
+  QVERIFY(headerSize<=TakeJournalRecordMaximum && headerSize<=journalBytes.size());QVERIFY(RecordingTakeJournalCodec::validateHeader(journalBytes.left(headerSize),saved));
+  QCOMPARE(saved.takeId,take.id);TakeJournalCursor cursor;std::vector<std::uint8_t> types;std::size_t offset=headerSize;
+  while(offset<std::size_t(journalBytes.size()))
+  {
+   QVERIFY(offset+4<=std::size_t(journalBytes.size()));const auto length=le16(journalBytes.constData()+offset+2);
+   QVERIFY(length<=TakeJournalRecordMaximum && offset+length<=std::size_t(journalBytes.size()));
+   const auto* record=reinterpret_cast<const std::uint8_t*>(journalBytes.constData()+offset);
+   QVERIFY(RecordingTakeJournalCodec::validateRecord(record,length,cursor));types.push_back(record[0]);offset+=length;
+  }
+  QCOMPARE(types.size(),std::size_t(3));QCOMPARE(types[0],std::uint8_t(2));QCOMPARE(types[1],std::uint8_t(3));QCOMPARE(types[2],std::uint8_t(3));QVERIFY(cursor.lastProgress.sourceDigestKnown);
+  QCOMPARE(QByteArray(reinterpret_cast<const char*>(cursor.lastProgress.sourceDigest.data()),32),digest);
+ }
+ void existingFinalIsNeverReplacedByWriterSeal()
+ {
+  QTemporaryDir temp;QVERIFY(temp.isValid());auto approved=RecordingLibrary::authorizeLocalRoot(temp.path());QVERIFY(approved.library);
+  const ProjectIdentity project{id(),1};const TakeIdentity take{id(),"collision"};QVERIFY(approved.library->prepareProjectFolder(project)=="ok");
+  const auto folder=temp.path()+"/"+project.id;const auto final=folder+"/take-"+take.id+".wav";const QByteArray sentinel("protected prior audio");
+  {QFile f(final);QVERIFY(f.open(QIODevice::WriteOnly|QIODevice::NewOnly));QCOMPARE(f.write(sentinel),qint64(sentinel.size()));}
+  auto created=approved.library->createUniqueTake(project,take,48000,5760000);QVERIFY(created.sink);
+  RecordingRing ring{48000,131072,5760000};RecordingWriter writer;QVERIFY(writer.begin(takeDescriptor(project,take,5760000),std::move(created.sink),ring).ok);
+  QVERIFY(waitForWriter(writer,WriterState::Ready));const float sample[]{.25f};QCOMPARE(ring.push(sample,1,1,0).acceptedFrames,1u);
+  InputSnapshot end;end.epoch={1,1};end.receivedFrames=1;end.acceptedFrames=1;writer.requestInputClosed({1,1},end);
+  QVERIFY(waitForWriter(writer,WriterState::Incomplete));QVERIFY(writer.joinAfterExit().ok);
+  QCOMPARE(bytes(final),sentinel);QVERIFY(QFileInfo::exists(folder+"/take-"+take.id+".partial"));QVERIFY(!writer.poll().audioSealed);
+ }
  void locallyAuthorizedRootCreatesOnlyNewOpaquePartial()
  {
   QTemporaryDir temp;QVERIFY(temp.isValid());auto approved=RecordingLibrary::authorizeLocalRoot(temp.path());QCOMPARE(approved.code,QString("ok"));QVERIFY(approved.library);
