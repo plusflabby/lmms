@@ -60,6 +60,7 @@
 #include "ProjectJournal.h"
 #include "ProjectNotes.h"
 #include "ProjectRenderer.h"
+#include "RecordingQualificationView.h"
 #include "RecentProjectsMenu.h"
 #include "RemotePluginBase.h"
 #include "SetupDialog.h"
@@ -358,6 +359,16 @@ void MainWindow::finalize()
 		m_tools.push_back( ToolPlugin::instantiate( desc->name, /*this*/nullptr )
 						   ->createView(this) );
 	}
+#ifdef LMMS_ENABLE_RECORDING_QUALIFICATION
+	auto* recordingQualificationAction=m_toolsMenu->addAction(tr("Vocal Recorder Qualification"));
+	connect(recordingQualificationAction,&QAction::triggered,this,[this]{
+		if(auto* host=Engine::recordingServiceHost())
+		{
+			auto* view=new recording::RecordingQualificationView(*host,Engine::getSong()->recordingProjectIdentity(),this);
+			addWindowedWidget(view);
+		}
+	});
+#endif
 	if( !m_toolsMenu->isEmpty() )
 	{
 		menuBar()->addMenu( m_toolsMenu )->setText( tr( "&Tools" ) );
@@ -597,6 +608,11 @@ void MainWindow::resetWindowTitle()
 
 bool MainWindow::mayChangeProject(bool stopPlayback)
 {
+	if(auto* host=Engine::recordingServiceHost();host && !host->quiescent())
+	{
+		const auto closed=host->requestBackendChange();
+		if(!closed.ok)return false;
+	}
 	if( stopPlayback )
 	{
 		Engine::getSong()->stop();
@@ -1236,6 +1252,17 @@ void MainWindow::redo()
 
 void MainWindow::closeEvent( QCloseEvent * _ce )
 {
+	if(auto* host=Engine::recordingServiceHost())
+	{
+		const auto closing=host->requestShutdown();
+		if(!closing.ok)
+		{
+			QMessageBox::warning(this,tr("Vocal recording still active"),
+				tr("The input stream or take writer has not reached a safe shutdown point. Keep LMMS open and try closing again after finalization."));
+			_ce->ignore();
+			return;
+		}
+	}
 	if( mayChangeProject(true) )
 	{
 		// delete recovery file
@@ -1373,7 +1400,9 @@ void MainWindow::timerEvent( QTimerEvent * _te)
 
 void MainWindow::showTool( QAction * _idx )
 {
-	PluginView * p = m_tools[m_toolsMenu->actions().indexOf( _idx )];
+	const auto index=m_toolsMenu->actions().indexOf(_idx);
+	if(index<0 || index>=m_tools.size())return;
+	PluginView * p = m_tools[index];
 	p->show();
 	p->parentWidget()->show();
 	p->setFocus();

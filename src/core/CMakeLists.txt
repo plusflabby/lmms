@@ -13,6 +13,9 @@ set(LMMS_SRCS
 	core/recording/RecordingInputRuntime.cpp
 	core/recording/RecordingTakeJournal.cpp
 	core/recording/RecordingWriter.cpp
+	core/recording/RecordingInputController.cpp
+	core/recording/RecordingPortAudioInput.cpp
+	core/recording/RecordingServiceHost.cpp
 	core/AudioFileAuthorization.cpp
 	core/AudioImportPolicy.cpp
 	core/AudioSourceWindow.cpp

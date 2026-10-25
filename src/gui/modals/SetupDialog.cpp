@@ -31,6 +31,7 @@
 #include <QLayout>
 #include <QLineEdit>
 #include <QScrollArea>
+#include <QMessageBox>
 
 #include "AudioEngine.h"
 #include "embed.h"
@@ -39,6 +40,7 @@
 #include "MainWindow.h"
 #include "MidiSetupWidget.h"
 #include "ProjectJournal.h"
+#include "RecordingServiceHost.h"
 #include "SetupDialog.h"
 #include "TabBar.h"
 #include "TabButton.h"
@@ -974,6 +976,16 @@ SetupDialog::~SetupDialog()
 
 void SetupDialog::accept()
 {
+	if(auto* host=Engine::recordingServiceHost())
+	{
+		const auto closed=host->requestBackendChange();
+		if(!closed.ok)
+		{
+			QMessageBox::warning(this,tr("Vocal recording still active"),
+				tr("The input stream has not closed safely. LMMS settings were not applied."));
+			return;
+		}
+	}
 	/* Hide dialog before setting values. This prevents an obscure bug
 	where non-embedded VST windows would steal focus and prevent LMMS
 	from taking mouse input, rendering the application unusable. */

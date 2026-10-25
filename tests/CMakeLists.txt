@@ -14,6 +14,9 @@ set(LMMS_TESTS
 	src/core/RecordingInputRuntimeTest.cpp
 	src/core/RecordingTakeJournalTest.cpp
 	src/core/RecordingWriterTest.cpp
+	src/core/RecordingInputControllerTest.cpp
+	src/core/RecordingServiceHostTest.cpp
+	src/core/RecordingQualificationViewTest.cpp
 	src/plugins/AiBridgeVocalJobSafetyTest.cpp
 	src/plugins/AiBridgeVocalJobViewTest.cpp
 	src/plugins/AiBridgeVocalOperationSafetyAuditTest.cpp

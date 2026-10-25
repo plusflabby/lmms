@@ -36,6 +36,8 @@
 #include "Song.h"
 #include "BandLimitedWave.h"
 #include "Oscillator.h"
+#include "RecordingPortAudioInput.h"
+#include "RecordingServiceHost.h"
 
 namespace lmms
 {
@@ -51,6 +53,7 @@ Lv2Manager * Engine::s_lv2Manager = nullptr;
 #endif
 Ladspa2LMMS * Engine::s_ladspaManager = nullptr;
 void* Engine::s_dndPluginKey = nullptr;
+recording::RecordingServiceHost* s_recordingServiceHost = nullptr;
 
 
 
@@ -69,6 +72,10 @@ void Engine::init( bool renderOnly )
 	s_projectJournal = new ProjectJournal;
 	s_audioEngine = new AudioEngine( renderOnly );
 	s_song = new Song;
+	if(s_recordingServiceHost == nullptr)
+	{
+		s_recordingServiceHost = new recording::RecordingServiceHost(recording::createPlatformRecordingInputDriver());
+	}
 	s_mixer = new Mixer;
 	s_patternStore = new PatternStore;
 
@@ -94,6 +101,12 @@ void Engine::init( bool renderOnly )
 
 void Engine::destroy()
 {
+	if(s_recordingServiceHost)
+	{
+		if(!s_recordingServiceHost->requestShutdown().ok) { return; }
+		delete s_recordingServiceHost;
+		s_recordingServiceHost = nullptr;
+	}
 	s_projectJournal->stopAllJournalling();
 	s_audioEngine->stopProcessing();
 
@@ -121,6 +134,12 @@ void Engine::destroy()
 	// The oscillator FFT plans remain throughout the application lifecycle
 	// due to being expensive to create, and being used whenever a userwave form is changed
 	Oscillator::destroyFFTPlans();
+}
+
+
+recording::RecordingServiceHost* Engine::recordingServiceHost()
+{
+	return s_recordingServiceHost;
 }
 
 
