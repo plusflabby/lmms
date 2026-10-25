@@ -39,6 +39,27 @@ private slots:
 		}
 	}
 
+	void validatesMidiExportRequestsWithoutAcceptingPaths()
+	{
+		auto parse=[](const QString& action,const QJsonObject& parameters){
+			return lmms::AiBridgeProtocol::parseRequest(QJsonDocument(QJsonObject{{"version",2},{"request_id","midi-export"},{"action",action},{"parameters",parameters}}).toJson(QJsonDocument::Compact)+'\n');
+		};
+		const QString id="93ad2d63-8335-4af8-b9df-ab7728132619";
+		QVERIFY(parse("inspect_midi_export",{{"operation_id",id}}).success);
+		QVERIFY(parse("export_midi",{{"operation_id",id},{"filename","arrangement.mid"}}).success);
+		QVERIFY(parse("get_midi_export_job",{{"mode","status"},{"operation_id",id}}).success);
+		QVERIFY(parse("get_midi_export_job",{{"mode","list"}}).success);
+		QVERIFY(parse("get_midi_export_job",{{"mode","release"},{"operation_id",id}}).success);
+		QVERIFY(parse("cancel_midi_export_job",{{"operation_id",id}}).success);
+		QVERIFY(!parse("export_midi",{{"operation_id",id},{"filename","../private.mid"}}).success);
+		QVERIFY(!parse("export_midi",{{"operation_id",id},{"filename","song.mid"},{"path","G:/private.mid"}}).success);
+		const QJsonObject duplicateSelection{{"mode","tracks"},{"track_ids",QJsonArray{"track","track"}}};
+		const QJsonObject reversedRange{{"start_tick",192},{"end_tick",96}};
+		QVERIFY(!parse("inspect_midi_export",{{"operation_id",id},{"selection",duplicateSelection}}).success);
+		QVERIFY(!parse("inspect_midi_export",{{"operation_id",id},{"range",reversedRange}}).success);
+		QVERIFY(!parse("get_midi_export_job",{{"mode","list"},{"operation_id",id}}).success);
+	}
+
 	void acceptsPhase3CMutationActions()
 	{
 		const auto requests = {
