@@ -6,6 +6,7 @@
 #include <QFormLayout>
 #include <QLabel>
 #include <QLineEdit>
+#include <QMdiSubWindow>
 #include <QPushButton>
 #include <QTimer>
 #include <QUuid>
@@ -79,6 +80,11 @@ RecordingQualificationView::RecordingQualificationView(RecordingServiceHost& hos
  m_clock.start();updateControls();
 }
 RecordingQualificationView::~RecordingQualificationView(){if(m_pollTimer)m_pollTimer->stop();}
+void RecordingQualificationView::showInQualificationWindow()
+{
+ if(auto* window=qobject_cast<QMdiSubWindow*>(parentWidget()))
+ {window->show();show();raise();setFocus(Qt::OtherFocusReason);}
+}
 void RecordingQualificationView::refreshInputs()
 {
  m_inputDevices->clear();m_inputDevices->setCurrentIndex(-1);m_channels->clear();m_channels->setCurrentIndex(-1);m_devices.clear();

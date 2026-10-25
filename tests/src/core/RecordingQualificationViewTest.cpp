@@ -1,5 +1,7 @@
 #include "RecordingQualificationView.h"
 #include <QComboBox>
+#include <QMdiArea>
+#include <QMdiSubWindow>
 #include <QElapsedTimer>
 #include <QPushButton>
 #include <QtTest>
@@ -81,6 +83,15 @@ private slots:
   std::ignore=host.requestShutdown(std::uint64_t(elapsed.elapsed()));elapsed.restart();
   while(elapsed.elapsed()<3000 && !host.quiescent()){std::ignore=host.poll(std::uint64_t(elapsed.elapsed()));QTest::qWait(1);}
   QVERIFY(host.quiescent());QCOMPARE(observed->closes,1);
+ }
+ void qualificationActionPresentationShowsTheCreatedWindow()
+ {
+  auto driver=std::make_unique<FakeDriver>();RecordingServiceHost host(std::move(driver));
+  RecordingProjectIdentity project(nullptr);QMdiArea workspace;
+  auto* view=new RecordingQualificationView(host,project);auto* subWindow=new QMdiSubWindow;
+  subWindow->setWidget(view);workspace.addSubWindow(subWindow);subWindow->hide();QVERIFY(subWindow->isHidden());
+  view->showInQualificationWindow();
+  QVERIFY(!subWindow->isHidden());QVERIFY(!view->isHidden());
  }
 };
 QTEST_MAIN(RecordingQualificationViewTest)

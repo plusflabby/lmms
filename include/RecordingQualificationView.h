@@ -15,6 +15,7 @@ class RecordingQualificationView final : public QWidget
 public:
  RecordingQualificationView(RecordingServiceHost&,RecordingProjectIdentity&,QWidget* parent=nullptr);
  ~RecordingQualificationView() override;
+ void showInQualificationWindow();
  void refreshInputs();
  int selectedInputIndex() const;
  int selectedChannelIndex() const;

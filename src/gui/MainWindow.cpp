@@ -366,6 +366,7 @@ void MainWindow::finalize()
 		{
 			auto* view=new recording::RecordingQualificationView(*host,Engine::getSong()->recordingProjectIdentity(),this);
 			addWindowedWidget(view);
+			view->showInQualificationWindow();
 		}
 	});
 #endif
