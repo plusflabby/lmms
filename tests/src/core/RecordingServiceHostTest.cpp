@@ -1,6 +1,11 @@
 #include "RecordingServiceHost.h"
 #include "RecordingServiceClock.h"
 #include <QtTest>
+#include <QJsonDocument>
+#include <QJsonObject>
+#include <QTemporaryDir>
+#include <QFile>
+#include <QCryptographicHash>
 #include <mutex>
 #include <tuple>
 using namespace lmms::recording;
@@ -16,11 +21,22 @@ public:
  RecordingDriverResult start() noexcept override
  {++starts;if(callback && deliverOnStart){const float sample[]{.2f};InputBlock block{sample,1,1,0,1.,1.};std::ignore=callback(callbackContext,block);}return {"ok",false};}
  RecordingDriverResult stop() noexcept override{++stops;return stopResult;}
- RecordingDriverResult close() noexcept override{++closes;return {"ok",true};}
- RecordingDriverResult terminate() noexcept override{++terminates;return {"ok",true};}
+ RecordingDriverResult close() noexcept override{++closes;return closeResult;}
+ RecordingDriverResult terminate() noexcept override{++terminates;return terminateResult;}
  int initializes=0,enumerations=0,opens=0,starts=0,stops=0,closes=0,terminates=0;
  bool deliverOnStart=true;
  RecordingDriverResult stopResult{"ok",true};RecordingInputCallback callback=nullptr;void* callbackContext=nullptr;
+ RecordingDriverResult closeResult{"ok",true};
+ RecordingDriverResult terminateResult{"ok",true};
+};
+struct ReceiptStorage {QByteArray bytes;bool fail=false;int calls=0;};
+class ReceiptSink final : public RecordingReceiptSink
+{
+public:
+ explicit ReceiptSink(ReceiptStorage& value):storage(value){}
+ bool appendAndFlush(const QByteArray& bytes) noexcept override
+ {++storage.calls;if(storage.fail)return false;storage.bytes+=bytes;return true;}
+ ReceiptStorage& storage;
 };
 class MemorySink final : public RecordingWriterSink
 {
@@ -43,6 +59,97 @@ class RecordingServiceHostTest : public QObject
 {
  Q_OBJECT
 private slots:
+ void rearmingResetsLiveCountersWithoutChangingPriorReceipt()
+ {
+  ReceiptStorage receipt;auto driver=std::make_unique<FakeDriver>();auto* observed=driver.get();RecordingServiceHost host(std::move(driver));
+  host.enumerateInputs(0,64);QVERIFY(host.arm(profile(),{1,1},3).ok);
+  QVERIFY(host.startTake(descriptor(),std::make_unique<MemorySink>(),0,std::make_unique<ReceiptSink>(receipt)).ok);
+  QElapsedTimer timer;timer.start();while(timer.elapsed()<3000 && observed->starts==0){std::ignore=host.poll(std::uint64_t(timer.elapsed()));QTest::qWait(1);}
+  QVERIFY(host.requestStop({1,1}).ok);timer.restart();
+  while(timer.elapsed()<3000 && !host.quiescent()){std::ignore=host.poll(std::uint64_t(timer.elapsed()));QTest::qWait(1);}
+  QVERIFY(host.quiescent());const auto prior=receipt.bytes;QVERIFY(!prior.isEmpty());
+  host.enumerateInputs(0,64);QVERIFY(host.arm(profile(),{1,2},3).ok);const auto armed=host.poll(400);QVERIFY(host.disarm().ok);
+  QCOMPARE(armed.writer.writtenFrames,quint64(0));QCOMPARE(armed.input.input.receivedFrames,quint64(0));
+  QCOMPARE(armed.receiptRecords,0);QCOMPARE(receipt.bytes,prior);QCOMPARE(observed->starts,1);QCOMPARE(observed->terminates,2);
+ }
+ void realLibraryReceiptMatchesImmutableWavAndTerminalCounts()
+ {
+  QTemporaryDir temp;QVERIFY(temp.isValid());auto library=RecordingLibrary::authorizeLocalRoot(temp.path());QVERIFY(library.library);
+  const auto d=descriptor();const ProjectIdentity project{d.projectId,1};const TakeIdentity take{d.takeId,"receipt integration"};
+  auto files=library.library->createUniqueTake(project,take,48000,5760000);QVERIFY(files.sink);QVERIFY(files.receipt);
+  auto driver=std::make_unique<FakeDriver>();auto* observed=driver.get();RecordingServiceHost host(std::move(driver));
+  host.enumerateInputs(0,64);QVERIFY(host.arm(profile(),{1,1},3).ok);
+  QVERIFY(host.startTake(d,std::move(files.sink),0,std::move(files.receipt)).ok);
+  QElapsedTimer timer;timer.start();while(timer.elapsed()<3000 && observed->starts==0){std::ignore=host.poll(std::uint64_t(timer.elapsed()));QTest::qWait(1);}
+  QVERIFY(host.requestStop({1,1}).ok);timer.restart();
+  while(timer.elapsed()<3000 && !host.quiescent()){std::ignore=host.poll(std::uint64_t(timer.elapsed()));QTest::qWait(1);}
+  QVERIFY(host.quiescent());const auto stem=temp.path()+"/"+d.projectId+"/take-"+d.takeId;
+  QFile audio(stem+".wav");QVERIFY(audio.open(QIODevice::ReadOnly));const auto pcm=audio.readAll();QCOMPARE(pcm.size(),46);
+  QFile receipt(stem+".diagnostics.jsonl");QVERIFY(receipt.open(QIODevice::ReadOnly));const auto document=QJsonDocument::fromJson(receipt.readAll()).object();
+  QCOMPARE(document["wav_sha256"].toString(),QString::fromLatin1(QCryptographicHash::hash(pcm,QCryptographicHash::Sha256).toHex()));
+  QCOMPARE(document["counts"].toObject()["written"].toString(),QString("1"));QVERIFY(document["audio_complete"].toBool());
+  QVERIFY(document["lifecycle_closed"].toBool());QCOMPARE(host.poll(100).receiptCode,QString("receipt_saved"));
+ }
+ void completedHostRetainsWriterCountsAndPersistsAfterCloseAndTerminate()
+ {
+  ReceiptStorage receipt;auto driver=std::make_unique<FakeDriver>();auto* observed=driver.get();RecordingServiceHost host(std::move(driver));
+  host.enumerateInputs(0,64);QVERIFY(host.arm(profile(),{1,1},3).ok);
+  QVERIFY(host.startTake(descriptor(),std::make_unique<MemorySink>(),0,std::make_unique<ReceiptSink>(receipt)).ok);
+  QElapsedTimer timer;timer.start();while(timer.elapsed()<3000 && observed->starts==0){std::ignore=host.poll(std::uint64_t(timer.elapsed()));QTest::qWait(1);}
+  QVERIFY(host.requestStop({1,1}).ok);timer.restart();
+  while(timer.elapsed()<3000 && !host.quiescent()){std::ignore=host.poll(std::uint64_t(timer.elapsed()));QTest::qWait(1);}
+  const auto final=host.poll(100);QVERIFY(host.quiescent());QCOMPARE(final.writer.writtenFrames,quint64(1));
+  QCOMPARE(final.receiptCode,QString("receipt_saved"));QCOMPARE(receipt.calls,1);
+  const auto obj=QJsonDocument::fromJson(receipt.bytes).object();QCOMPARE(obj["event"].toString(),QString("closed"));
+  QVERIFY(obj["lifecycle_closed"].toBool());QCOMPARE(obj["counts"].toObject()["written"].toString(),QString("1"));
+  QCOMPARE(observed->closes,1);QCOMPARE(observed->terminates,1);
+ }
+ void closeFailureIsRetainedOnceAndSuccessfulRetryAppendsAClosure_data()
+ {QTest::addColumn<bool>("terminateFailure");QTest::newRow("close")<<false;QTest::newRow("terminate")<<true;}
+ void closeFailureIsRetainedOnceAndSuccessfulRetryAppendsAClosure()
+ {
+  QFETCH(bool,terminateFailure);ReceiptStorage receipt;auto driver=std::make_unique<FakeDriver>();auto* observed=driver.get();
+  if(terminateFailure)observed->terminateResult={"terminate_failed",true};else observed->closeResult={"close_failed",true};
+  RecordingServiceHost host(std::move(driver));host.enumerateInputs(0,64);QVERIFY(host.arm(profile(),{1,1},3).ok);
+  QVERIFY(host.startTake(descriptor(),std::make_unique<MemorySink>(),0,std::make_unique<ReceiptSink>(receipt)).ok);
+  QElapsedTimer timer;timer.start();while(timer.elapsed()<3000 && observed->starts==0){std::ignore=host.poll(std::uint64_t(timer.elapsed()));QTest::qWait(1);}
+  QVERIFY(host.requestStop({1,1}).ok);timer.restart();
+  while(timer.elapsed()<3000 && observed->closes==0){std::ignore=host.poll(std::uint64_t(timer.elapsed()));QTest::qWait(1);}
+  for(int i=0;i<4;++i)std::ignore=host.poll(100+i);
+  const auto failedBytes=receipt.bytes;const bool retained=!host.quiescent();
+  const auto initialTerminates=observed->terminates;observed->closeResult={"ok",true};observed->terminateResult={"ok",true};timer.restart();
+  while(timer.elapsed()<3000 && !host.quiescent()){std::ignore=host.poll(200+std::uint64_t(timer.elapsed()));QTest::qWait(1);}
+  QVERIFY(host.quiescent());QVERIFY(retained);QVERIFY(!failedBytes.isEmpty());
+  QCOMPARE(failedBytes.count('\n'),1);QCOMPARE(receipt.bytes.count('\n'),2);
+  QCOMPARE(QJsonDocument::fromJson(failedBytes).object()["event"].toString(),QString("retained"));
+  QCOMPARE(observed->terminates,initialTerminates+1);
+ }
+ void activeProjectOrBackendChangeStopsAndRetainsItsTakeEvidence_data()
+ {QTest::addColumn<int>("action");QTest::newRow("backend")<<0;QTest::newRow("project-authorization")<<1;QTest::newRow("local-disarm")<<2;}
+ void activeProjectOrBackendChangeStopsAndRetainsItsTakeEvidence()
+ {
+  QFETCH(int,action);ReceiptStorage receipt;auto driver=std::make_unique<FakeDriver>();auto* observed=driver.get();RecordingServiceHost host(std::move(driver));
+  host.enumerateInputs(0,64);QVERIFY(host.arm(profile(),{1,1},3).ok);
+  QVERIFY(host.startTake(descriptor(),std::make_unique<MemorySink>(),0,std::make_unique<ReceiptSink>(receipt)).ok);
+  QElapsedTimer timer;timer.start();while(timer.elapsed()<3000 && observed->starts==0){std::ignore=host.poll(std::uint64_t(timer.elapsed()));QTest::qWait(1);}
+  const auto result=action==0?host.requestBackendChange():action==1?host.notifyAuthorizationChanged(4):host.disarm();QVERIFY(result.ok);timer.restart();
+  while(timer.elapsed()<3000 && !host.quiescent()){std::ignore=host.poll(std::uint64_t(timer.elapsed()));QTest::qWait(1);}
+  QVERIFY(host.quiescent());QCOMPARE(host.poll(200).writer.writtenFrames,quint64(1));QCOMPARE(receipt.calls,1);
+  QCOMPARE(observed->stops,1);QCOMPARE(observed->closes,1);QCOMPARE(observed->terminates,1);
+  const auto record=QJsonDocument::fromJson(receipt.bytes).object();
+  QCOMPARE(record["stop_action"].toString(),action==0?QString("backend_change"):action==1?QString("project_change"):QString("disarm"));
+ }
+ void diagnosticWriteFailureDoesNotRetainMicrophoneOrEraseSuccessfulAudioCounts()
+ {
+  ReceiptStorage receipt;receipt.fail=true;auto driver=std::make_unique<FakeDriver>();auto* observed=driver.get();RecordingServiceHost host(std::move(driver));
+  host.enumerateInputs(0,64);QVERIFY(host.arm(profile(),{1,1},3).ok);
+  QVERIFY(host.startTake(descriptor(),std::make_unique<MemorySink>(),0,std::make_unique<ReceiptSink>(receipt)).ok);
+  QElapsedTimer timer;timer.start();while(timer.elapsed()<3000 && observed->starts==0){std::ignore=host.poll(std::uint64_t(timer.elapsed()));QTest::qWait(1);}
+  QVERIFY(host.requestStop({1,1}).ok);timer.restart();
+  while(timer.elapsed()<3000 && !host.quiescent()){std::ignore=host.poll(std::uint64_t(timer.elapsed()));QTest::qWait(1);}
+  QVERIFY(host.quiescent());const auto final=host.poll(100);QCOMPARE(final.receiptCode,QString("receipt_write_failed"));
+  QCOMPARE(final.writer.writtenFrames,quint64(1));QCOMPARE(observed->closes,1);QCOMPARE(observed->terminates,1);
+ }
  void laterPanelClockCannotCauseImmediateApplicationWatchdogTimeout()
  {
   QElapsedTimer applicationClock;applicationClock.start();QTest::qWait(2100);

@@ -75,6 +75,23 @@ class RecordingLibraryTest : public QObject
  static QString id(){return QUuid::createUuid().toString(QUuid::WithoutBraces);}
  static QByteArray bytes(const QString& path){QFile f(path);if(!f.open(QIODevice::ReadOnly))return {};return f.readAll();}
 private slots:
+ void receiptCapabilityIsCreateNewAndSeparatelyBounded()
+ {
+  QTemporaryDir temp;QVERIFY(temp.isValid());auto approved=RecordingLibrary::authorizeLocalRoot(temp.path());QVERIFY(approved.library);
+  const ProjectIdentity project{id(),1};const TakeIdentity take{id(),"diagnostic"};
+  auto created=approved.library->createUniqueTake(project,take,48000,5760000);QVERIFY(created.sink);QVERIFY(created.receipt);
+  const auto file=temp.path()+"/"+project.id+"/take-"+take.id+".diagnostics.jsonl";
+  QVERIFY(QFileInfo::exists(file));QVERIFY(!created.receipt->appendAndFlush(QByteArray(RecordingTakeReceipt::MaximumFileBytes+1,'x')));
+  created.receipt.reset();QCOMPARE(bytes(file),QByteArray{});
+ }
+ void receiptCollisionNeverOverwritesExistingEvidence()
+ {
+  QTemporaryDir temp;QVERIFY(temp.isValid());auto approved=RecordingLibrary::authorizeLocalRoot(temp.path());QVERIFY(approved.library);
+  const ProjectIdentity project{id(),1};const TakeIdentity take{id(),"collision"};QCOMPARE(approved.library->prepareProjectFolder(project),QString("ok"));
+  const auto file=temp.path()+"/"+project.id+"/take-"+take.id+".diagnostics.jsonl";
+  {QFile f(file);QVERIFY(f.open(QIODevice::WriteOnly|QIODevice::NewOnly));QCOMPARE(f.write("preserve",8),qint64(8));}
+  auto result=approved.library->createUniqueTake(project,take,48000,5760000);QVERIFY(!result.sink);QCOMPARE(bytes(file),QByteArray("preserve"));
+ }
  void independentlyOwnedWriterSealsOnlyItsCreateNewTake()
  {
   QTemporaryDir temp;QVERIFY(temp.isValid());auto approved=RecordingLibrary::authorizeLocalRoot(temp.path());QVERIFY(approved.library);

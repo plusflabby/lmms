@@ -13,10 +13,15 @@ struct RecordingInputDiagnostic
 {
  InputDiagnosticStage failedStage=InputDiagnosticStage::None;
  std::array<InputDiagnosticOutcome,std::size_t(InputDiagnosticStage::Count)> outcomes{};
+ std::array<int,std::size_t(InputDiagnosticStage::Count)> portAudioResults{};
+ std::array<bool,std::size_t(InputDiagnosticStage::Count)> portAudioResultsKnown{};
  bool hasPortAudioError=false,hasHostError=false,wasapiShared=false;
  int portAudioError=0,hostApiType=0;
  long hostErrorCode=0;
  QString description,hostApiName,deviceDescription,hostErrorDescription;
+ QString libraryVersion;
+ bool streamInfoAvailable=false;
+ double actualSampleRate=0,actualInputLatency=0;
  std::uint32_t requestedRate=0,inputChannels=0,selectedChannel=0,maxInputChannels=0,maxCallbackFrames=0;
  double defaultSampleRate=0,defaultLowInputLatency=0;
  std::uint64_t receivedFrames=0,acceptedFrames=0;

@@ -10,9 +10,11 @@ struct FakeApi
  static inline FakeApi* current=nullptr;
  QByteArray name="EarPods",message="Invalid sample rate",hostMessage="original host failure";
  PaDeviceInfo device{};PaHostApiInfo host{};PaHostErrorInfo hostError{paWASAPI,1234,nullptr};
+ PaStreamInfo info{1,.02,0.,48000.};
  PaError initError=paNoError,formatError=paNoError,openError=paNoError,startError=paNoError,stopError=paNoError;
  int initializeCalls=0,formatCalls=0,openCalls=0,startCalls=0,hostErrorReads=0;
  bool initialized=false,deliver=false;double requestedRate=0;int requestedChannels=0;unsigned long wasapiFlags=0;
+ bool outputParametersPassed=false;
  PaStreamCallback* callback=nullptr;void* context=nullptr;
  FakeApi()
  {current=this;device.structVersion=2;device.name=name.constData();device.hostApi=0;device.maxInputChannels=2;
@@ -26,6 +28,8 @@ struct FakeApi
   a.deviceInfo=[](PaDeviceIndex i)->const PaDeviceInfo*{return i==0?&current->device:nullptr;};
   a.hostApiInfo=[](PaHostApiIndex)->const PaHostApiInfo*{return &current->host;};
   a.errorText=[](PaError)->const char*{current->hostError.errorCode=9999;return current->message.constData();};
+  a.versionText=[]()->const char*{return "PortAudio synthetic v19";};
+  a.streamInfo=[](PaStream*)->const PaStreamInfo*{return &current->info;};
   a.lastHostError=[]()->const PaHostErrorInfo*{++current->hostErrorReads;current->hostError.errorText=current->hostMessage.constData();return &current->hostError;};
   a.formatSupported=[](const PaStreamParameters* in,const PaStreamParameters* out,double rate)->PaError
   {++current->formatCalls;current->record(in,out,rate);return current->formatError;};
@@ -34,13 +38,13 @@ struct FakeApi
   {++current->openCalls;current->record(in,out,rate);if(current->openError)return current->openError;
    *stream=reinterpret_cast<PaStream*>(quintptr(1));current->callback=cb;current->context=context;return paNoError;};
   a.start=[](PaStream*)->PaError
-  {++current->startCalls;if(current->deliver){const float samples[]{.1f,.2f,.3f,.4f};PaStreamCallbackTimeInfo times{1.,1.,0.};
-    current->callback(samples,nullptr,2,&times,0,current->context);}return current->startError;};
+  {++current->startCalls;if(current->deliver){const float samples[]{.1f,.2f,.3f,.4f};float unrelatedBacking[]{.99f,-.99f,.99f,-.99f};PaStreamCallbackTimeInfo times{1.,1.,0.};
+    current->callback(samples,unrelatedBacking,2,&times,0,current->context);}return current->startError;};
   a.isStopped=[](PaStream*)->PaError{current->hostError.errorCode=8888;current->hostMessage="overwritten by later call";return 1;};
   a.stop=[](PaStream*)->PaError{return current->stopError;};a.close=[](PaStream*)->PaError{return paNoError;};return a;
  }
  void record(const PaStreamParameters* in,const PaStreamParameters* out,double rate)
- {Q_ASSERT(in && !out);requestedRate=rate;requestedChannels=in->channelCount;
+ {Q_ASSERT(in);outputParametersPassed=out!=nullptr;requestedRate=rate;requestedChannels=in->channelCount;
   wasapiFlags=static_cast<const PaWasapiStreamInfo*>(in->hostApiSpecificStreamInfo)->flags;}
  SelectedInputProfile profile() const
  {SelectedInputProfile p;p.deviceId="0|"+QString::fromUtf8(device.name);p.hostApiName="WASAPI";p.wasapiShared=true;
@@ -52,6 +56,11 @@ class RecordingPortAudioDiagnosticTest : public QObject
 {
  Q_OBJECT
 private slots:
+ void openedProfileIncludesActualStreamInfoAndLibraryVersion()
+ {FakeApi f;RecordingPortAudioInputDriver driver(f.api());QVERIFY(driver.initialize().ok());
+  const auto r=driver.openInputOnly(f.profile(),ignoreInput,nullptr);QVERIFY(r.ok());
+  QVERIFY(r.diagnostic.streamInfoAvailable);QCOMPARE(r.diagnostic.actualSampleRate,48000.);QCOMPARE(r.diagnostic.actualInputLatency,.02);
+  QCOMPARE(r.diagnostic.libraryVersion,QString("PortAudio synthetic v19"));QVERIFY(driver.close().ok());QVERIFY(driver.terminate().ok());}
  void constructionDoesNotTouchPortAudio()
  {FakeApi f;RecordingPortAudioInputDriver driver(f.api());QCOMPARE(f.initializeCalls,0);QCOMPARE(f.openCalls,0);}
  void initializationFailureHasItsOwnStage()
@@ -79,6 +88,7 @@ private slots:
   QCOMPARE(r.diagnostic.outcome(InputDiagnosticStage::FirstCallback),InputDiagnosticOutcome::NotAttempted);
   QVERIFY(!r.diagnostic.hasHostError);QCOMPARE(f.hostErrorReads,0);
   QCOMPARE(f.requestedRate,48000.);QCOMPARE(f.requestedChannels,2);QCOMPARE(f.wasapiFlags,0ul);
+  QVERIFY(!f.outputParametersPassed);
   QCOMPARE(f.openCalls,expected==InputDiagnosticStage::FormatSupport?0:1);
   QCOMPARE(f.startCalls,expected==InputDiagnosticStage::StartStream?1:0);
   if(expected==InputDiagnosticStage::StartStream)QVERIFY(driver.close().ok());
@@ -134,12 +144,15 @@ private slots:
   auto ticket=c.arm(f.profile(),{4,5},1);QVERIFY(c.open(std::move(ticket.ticket),c.createRuntimeLease(f.profile())).ok);
   QVERIFY(c.beginCapture({4,5},0).ok);QVERIFY(c.requestStop({4,5}).ok);QVERIFY(c.closeAfterQuiescence().ok);
   const auto s=c.snapshot();QCOMPARE(s.diagnostic.outcome(InputDiagnosticStage::FirstCallback),InputDiagnosticOutcome::Succeeded);
-  QCOMPARE(s.diagnostic.receivedFrames,quint64(2));QCOMPARE(s.diagnostic.acceptedFrames,quint64(2));}
+  QCOMPARE(s.diagnostic.receivedFrames,quint64(2));QCOMPARE(s.diagnostic.acceptedFrames,quint64(2));
+  QCOMPARE(s.input.inputPeak,.4f);QVERIFY(!f.outputParametersPassed);}
  void alreadyStoppedIsNotReportedAsAnInputFailure()
  {FakeApi f;RecordingPortAudioInputDriver driver(f.api());QVERIFY(driver.initialize().ok());
   QVERIFY(driver.openInputOnly(f.profile(),ignoreInput,nullptr).ok());QVERIFY(driver.start().ok());f.stopError=paStreamIsStopped;
   const auto result=driver.stop();QVERIFY(result.ok());QCOMPARE(result.diagnostic.failedStage,InputDiagnosticStage::None);
   QCOMPARE(result.diagnostic.outcome(InputDiagnosticStage::StopStream),InputDiagnosticOutcome::Succeeded);
+  QVERIFY(result.diagnostic.portAudioResultsKnown[std::size_t(InputDiagnosticStage::StopStream)]);
+  QCOMPARE(result.diagnostic.portAudioResults[std::size_t(InputDiagnosticStage::StopStream)],int(paStreamIsStopped));
   QVERIFY(driver.close().ok());QVERIFY(driver.terminate().ok());}
 };
 QTEST_GUILESS_MAIN(RecordingPortAudioDiagnosticTest)

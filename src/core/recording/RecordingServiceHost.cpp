@@ -23,6 +23,12 @@ struct RecordingServiceHost::Impl
  InputRuntimeLease runtimeLease;
  std::shared_ptr<void> retainedRuntime;
  std::unique_ptr<RecordingWriter> writer;
+ std::unique_ptr<RecordingTakeReceipt> receipt;
+ WriterSnapshot lastWriter;
+ QString receiptCode;
+ int receiptRecords=0;
+ RecordingStopAction stopAction=RecordingStopAction::None;
+ void markStop(RecordingStopAction action){if(stopAction==RecordingStopAction::None)stopAction=action;}
  RecordingHostState state=RecordingHostState::Closed;
  QString errorCode;
  bool startRequested=false,inputClosed=false,shutdownRequested=false;
@@ -41,7 +47,10 @@ struct RecordingServiceHost::Impl
  RecordingHostSnapshot snapshot() const noexcept
  {
   RecordingHostSnapshot result;result.state=state;result.errorCode=errorCode;result.input=controller.snapshot();
-  result.armed=ticket.has_value();if(writer)result.writer=writer->poll();
+  result.armed=ticket.has_value();result.writer=writer?writer->poll():lastWriter;
+  result.receiptCode=receiptCode;result.receiptRecords=receiptRecords;
+  if(result.errorCode.isEmpty() && !receiptCode.isEmpty() && receiptCode!="receipt_saved" && receiptCode!="receipt_pending")
+   result.errorCode=receiptCode;
   result.quiescent=state==RecordingHostState::Closed && !writer && !retainedRuntime && !ticket
    && result.input.state==RecordingControllerState::Closed && !result.input.driverInitialized;return result;
  }
@@ -98,9 +107,11 @@ RecordingHostResult RecordingServiceHost::arm(const SelectedInputProfile& profil
  m_impl->assertOwner();if(m_impl->state!=RecordingHostState::Closed || m_impl->ticket)return {false,"input_busy",m_impl->state};
  auto result=m_impl->controller.arm(profile,epoch,revision);if(!result.ok)return {false,result.code,m_impl->state};
  m_impl->ticket.emplace(std::move(result.ticket));m_impl->selected=profile;m_impl->epoch=epoch;m_impl->rootRevision=revision;
+ m_impl->lastWriter={};m_impl->receiptCode.clear();m_impl->receiptRecords=0;
  m_impl->state=RecordingHostState::Armed;return {true,"armed",m_impl->state};
 }
-RecordingHostResult RecordingServiceHost::startTake(TakeDescriptor descriptor,std::unique_ptr<RecordingWriterSink> sink,std::uint64_t now)
+RecordingHostResult RecordingServiceHost::startTake(TakeDescriptor descriptor,std::unique_ptr<RecordingWriterSink> sink,std::uint64_t now,
+ std::unique_ptr<RecordingReceiptSink> receipt)
 {
  m_impl->assertOwner();if(!m_impl->ticket)return {false,"local_arm_required",m_impl->state};
  if(m_impl->state!=RecordingHostState::Armed || !sink || descriptor.epoch!=m_impl->epoch
@@ -111,6 +122,9 @@ RecordingHostResult RecordingServiceHost::startTake(TakeDescriptor descriptor,st
  m_impl->retainedRuntime=m_impl->runtimeLease.retainOwner();m_impl->writer=std::make_unique<RecordingWriter>();
  const auto begun=m_impl->writer->begin(descriptor,std::move(sink),m_impl->runtimeLease.ring());
  if(!begun.ok){m_impl->writer.reset();m_impl->retainedRuntime.reset();m_impl->runtimeLease=InputRuntimeLease{};return {false,begun.code,m_impl->state};}
+ m_impl->lastWriter={};m_impl->receiptRecords=0;m_impl->receiptCode.clear();m_impl->stopAction=RecordingStopAction::None;
+ if(receipt)
+ {m_impl->receipt=std::make_unique<RecordingTakeReceipt>(descriptor,std::move(receipt));m_impl->receiptCode="receipt_pending";}
  m_impl->startRequested=true;m_impl->inputClosed=false;m_impl->shutdownRequested=false;m_impl->errorCode.clear();
  m_impl->lastNowMilliseconds=now;m_impl->state=RecordingHostState::WriterStarting;return {true,"writer_starting",m_impl->state};
 }
@@ -118,6 +132,7 @@ RecordingHostResult RecordingServiceHost::requestStop(InputEpoch epoch)
 {
  m_impl->assertOwner();if(epoch!=m_impl->epoch || !epoch)return {false,"stale_epoch",m_impl->state};
  if(!m_impl->writer)return {false,"no_take",m_impl->state};
+ m_impl->markStop(RecordingStopAction::Stop);
  m_impl->startRequested=false;
  const auto input=m_impl->controller.snapshot();
  if(input.state==RecordingControllerState::Capturing || input.state==RecordingControllerState::Stopping
@@ -133,6 +148,7 @@ RecordingHostResult RecordingServiceHost::disarm()
  m_impl->assertOwner();m_impl->ticket.reset();m_impl->startRequested=false;
  if(m_impl->writer)
  {
+  m_impl->markStop(RecordingStopAction::Disarm);
   const auto state=m_impl->controller.snapshot().state;
   if(state==RecordingControllerState::Capturing || state==RecordingControllerState::Stopping || state==RecordingControllerState::FailedRetained)
    return requestStop(m_impl->epoch);
@@ -146,13 +162,13 @@ RecordingHostResult RecordingServiceHost::notifyAuthorizationChanged(std::uint64
 {
  m_impl->assertOwner();if(revision==m_impl->rootRevision)return {true,"unchanged",m_impl->state};
  m_impl->rootRevision=revision;m_impl->ticket.reset();
- if(m_impl->writer)return requestStop(m_impl->epoch);
+ if(m_impl->writer){m_impl->markStop(RecordingStopAction::ProjectChange);return requestStop(m_impl->epoch);}
  return disarm();
 }
 RecordingHostResult RecordingServiceHost::requestBackendChange()
 {
  m_impl->assertOwner();m_impl->ticket.reset();
- if(m_impl->writer)return requestStop(m_impl->epoch);
+ if(m_impl->writer){m_impl->markStop(RecordingStopAction::BackendChange);return requestStop(m_impl->epoch);}
  return disarm();
 }
 RecordingHostSnapshot RecordingServiceHost::poll(std::uint64_t now) noexcept
@@ -184,8 +200,14 @@ RecordingHostSnapshot RecordingServiceHost::poll(std::uint64_t now) noexcept
    if(joined.ok)
    {
     const auto closed=m_impl->controller.closeAfterQuiescence();
+    m_impl->lastWriter=written;
+    if(m_impl->receipt)
+    {
+     std::ignore=m_impl->receipt->append(m_impl->controller.snapshot(),written,closed.ok,m_impl->stopAction);
+     m_impl->receiptCode=m_impl->receipt->code();m_impl->receiptRecords=m_impl->receipt->recordCount();
+    }
     if(closed.ok)
-    {m_impl->writer.reset();m_impl->retainedRuntime.reset();m_impl->runtimeLease=InputRuntimeLease{};m_impl->ticket.reset();m_impl->state=RecordingHostState::Closed;m_impl->startRequested=false;m_impl->inputClosed=false;m_impl->errorCode.clear();}
+    {m_impl->receipt.reset();m_impl->writer.reset();m_impl->retainedRuntime.reset();m_impl->runtimeLease=InputRuntimeLease{};m_impl->ticket.reset();m_impl->state=RecordingHostState::Closed;m_impl->startRequested=false;m_impl->inputClosed=false;m_impl->errorCode.clear();}
     else{m_impl->state=RecordingHostState::FailedRetained;m_impl->errorCode=closed.code;}
    }
   }
@@ -200,6 +222,7 @@ RecordingHostResult RecordingServiceHost::requestShutdown(std::uint64_t now)
  m_impl->assertOwner();m_impl->shutdownRequested=true;
  if(m_impl->writer)
  {
+  m_impl->markStop(RecordingStopAction::Shutdown);
   const auto input=m_impl->controller.snapshot();
   if(input.state==RecordingControllerState::Capturing || input.state==RecordingControllerState::Ready
    || input.state==RecordingControllerState::Stopping || input.state==RecordingControllerState::FailedRetained)

@@ -16,6 +16,8 @@ struct RecordingPortAudioApi
  decltype(&Pa_GetDeviceInfo) deviceInfo=&Pa_GetDeviceInfo;
  decltype(&Pa_GetHostApiInfo) hostApiInfo=&Pa_GetHostApiInfo;
  decltype(&Pa_GetErrorText) errorText=&Pa_GetErrorText;
+ decltype(&Pa_GetVersionText) versionText=&Pa_GetVersionText;
+ decltype(&Pa_GetStreamInfo) streamInfo=&Pa_GetStreamInfo;
  decltype(&Pa_GetLastHostErrorInfo) lastHostError=&Pa_GetLastHostErrorInfo;
  decltype(&Pa_IsFormatSupported) formatSupported=&Pa_IsFormatSupported;
  decltype(&Pa_OpenStream) open=&Pa_OpenStream;

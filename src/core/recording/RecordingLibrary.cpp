@@ -92,7 +92,7 @@ struct OwnedNewFile::State
  HANDLE file=INVALID_HANDLE_VALUE;
  ~State(){if(file!=INVALID_HANDLE_VALUE)CloseHandle(file);}
 #endif
- quint64 written=0;
+ quint64 written=0,maximumBytes=57600044;
 };
 namespace {
 bool authorized(const std::shared_ptr<RecordingLibrary::RootState>& root)
@@ -168,7 +168,8 @@ OwnedNewFile::~OwnedNewFile()=default;
 qint64 OwnedNewFile::append(const QByteArray& bytes)
 {
 #ifdef Q_OS_WIN
- if(!m_state || !authorized(m_state->root) || quint64(bytes.size())>57600044-m_state->written)return -1;
+ if(!m_state || !authorized(m_state->root) || m_state->written>m_state->maximumBytes
+  || quint64(bytes.size())>m_state->maximumBytes-m_state->written)return -1;
  DWORD count=0;if(!WriteFile(m_state->file,bytes.constData(),DWORD(bytes.size()),&count,nullptr))return -1;
  m_state->written+=count;return count;
 #else
@@ -184,6 +185,23 @@ bool OwnedNewFile::flush()
 #endif
 }
 namespace {
+class OwnedReceiptSink final : public RecordingReceiptSink
+{
+public:
+ explicit OwnedReceiptSink(std::unique_ptr<OwnedNewFile> file):m_file(std::move(file)){}
+ bool appendAndFlush(const QByteArray& bytes) noexcept override
+ {
+  if(m_failed || bytes.isEmpty() || bytes.size()>RecordingTakeReceipt::MaximumRecordBytes
+   || m_records>=RecordingTakeReceipt::MaximumRecords || bytes.size()>RecordingTakeReceipt::MaximumFileBytes-m_bytes)return false;
+  const auto count=m_file->append(bytes);
+  if(count!=bytes.size() || !m_file->flush()){m_failed=true;return false;}
+  ++m_records;m_bytes+=bytes.size();return true;
+ }
+private:
+ std::unique_ptr<OwnedNewFile> m_file;
+ int m_records=0,m_bytes=0;
+ bool m_failed=false;
+};
 class OwnedLibraryTakeSink final : public RecordingWriterSink
 {
 public:
@@ -409,7 +427,15 @@ RecordingLibrary::NewTakeResult RecordingLibrary::createUniqueTake(const Project
  if(journal==INVALID_HANDLE_VALUE){CloseHandle(audio);return {quint32(status)==0xc0000035u?QStringLiteral("take_exists"):QStringLiteral("write_failed"),{}};}
  if(!ordinary(journal,false,m_root->volume) || finalName(journal)!=m_root->finalPath+'/'+project.id+'/'+stem+".journal")
  {CloseHandle(audio);CloseHandle(journal);return {"source_identity_changed",{}};}
- return {"ok",std::make_unique<OwnedLibraryTakeSink>(m_root,std::move(pin),audio,journal,project.id,take.id,rate,maximum)};
+ auto receipt=std::make_unique<OwnedNewFile::State>();receipt->root=m_root;receipt->project=pin;
+ receipt->maximumBytes=RecordingTakeReceipt::MaximumFileBytes;const auto receiptName=stem+QStringLiteral(".diagnostics.jsonl");
+ receipt->file=relative(pin->directory,receiptName,GENERIC_READ|GENERIC_WRITE,FILE_CREATE,false,status);
+ if(receipt->file==INVALID_HANDLE_VALUE)
+ {CloseHandle(audio);CloseHandle(journal);return {quint32(status)==0xc0000035u?QStringLiteral("take_exists"):QStringLiteral("write_failed"),{}};}
+ if(!ordinary(receipt->file,false,m_root->volume) || finalName(receipt->file)!=m_root->finalPath+'/'+project.id+'/'+receiptName)
+ {CloseHandle(audio);CloseHandle(journal);return {"source_identity_changed",{}};}
+ return {"ok",std::make_unique<OwnedLibraryTakeSink>(m_root,std::move(pin),audio,journal,project.id,take.id,rate,maximum),
+  std::make_unique<OwnedReceiptSink>(std::make_unique<OwnedNewFile>(std::move(receipt)))};
 #else
  Q_UNUSED(take);Q_UNUSED(rate);Q_UNUSED(maximum);return {"unsupported_backend",{}};
 #endif

@@ -35,6 +35,9 @@ QString RecordingInputDiagnostic::localSummary() const
  text << QStringLiteral("Requested %1 Hz; stream channels %2; selected channel %3 (index %4)")
   .arg(requestedRate).arg(inputChannels).arg(qulonglong(selectedChannel)+1).arg(selectedChannel);
  text << QStringLiteral("float32 interleaved input; callback limit %1 frames; WAV mono PCM16").arg(maxCallbackFrames);
+ text << QStringLiteral("Stream information %1; actual rate %2 Hz; input latency %3 s; %4")
+  .arg(streamInfoAvailable?QStringLiteral("reported"):QStringLiteral("unavailable"))
+  .arg(actualSampleRate).arg(actualInputLatency).arg(libraryVersion.left(96));
  text << QStringLiteral("Reported max input channels %1; default %2 Hz; low input latency %3 s (not a supported-rate list)")
   .arg(maxInputChannels).arg(defaultSampleRate).arg(defaultLowInputLatency);
  for(std::size_t i=0;i<outcomes.size();++i)
@@ -98,7 +101,11 @@ struct RecordingInputController::Impl
   if(diagnostic.failedStage==InputDiagnosticStage::None && result.diagnostic.failedStage!=InputDiagnosticStage::None)
    diagnostic=result.diagnostic;
   for(std::size_t i=0;i<diagnostic.outcomes.size();++i)
+  {
    if(result.diagnostic.outcomes[i]!=InputDiagnosticOutcome::NotAttempted)diagnostic.outcomes[i]=result.diagnostic.outcomes[i];
+   if(result.diagnostic.portAudioResultsKnown[i])
+   {diagnostic.portAudioResultsKnown[i]=true;diagnostic.portAudioResults[i]=result.diagnostic.portAudioResults[i];}
+  }
  }
  static InputDecision callback(void* context,const InputBlock& block) noexcept
  {

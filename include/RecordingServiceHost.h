@@ -16,6 +16,8 @@ struct RecordingHostSnapshot
  RecordingControllerSnapshot input;
  WriterSnapshot writer;
  bool armed=false,quiescent=true;
+ QString receiptCode;
+ int receiptRecords=0;
 };
 struct RecordingLibrarySelectionResult
 {
@@ -37,7 +39,8 @@ public:
  ProjectIdentity projectIdentity() const noexcept;
  std::uint64_t rootRevision() const noexcept;
  RecordingHostResult arm(const SelectedInputProfile&,InputEpoch,std::uint64_t rootRevision);
- RecordingHostResult startTake(TakeDescriptor,std::unique_ptr<RecordingWriterSink>,std::uint64_t nowMilliseconds);
+ RecordingHostResult startTake(TakeDescriptor,std::unique_ptr<RecordingWriterSink>,std::uint64_t nowMilliseconds,
+  std::unique_ptr<RecordingReceiptSink> receipt={});
  RecordingHostResult requestStop(InputEpoch);
  RecordingHostResult disarm();
  RecordingHostResult notifyAuthorizationChanged(std::uint64_t newRootRevision);

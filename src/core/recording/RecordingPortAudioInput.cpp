@@ -38,6 +38,7 @@ struct RecordingPortAudioInputDriver::Impl
  }
  RecordingDriverResult result(InputDiagnosticStage stage,PaError error,bool quiescent=true)
  {
+  diagnostic.portAudioResultsKnown[std::size_t(stage)]=true;diagnostic.portAudioResults[std::size_t(stage)]=int(error);
   if(error==paNoError){succeeded(stage);return {"ok",quiescent,diagnostic};}
   diagnostic.outcomes[std::size_t(stage)]=InputDiagnosticOutcome::Failed;
   if(diagnostic.failedStage==InputDiagnosticStage::None)
@@ -82,7 +83,8 @@ RecordingDriverResult RecordingPortAudioInputDriver::initialize() noexcept
  if(m_impl->initialized)return {"ok",true,m_impl->diagnostic};
  m_impl->diagnostic={};const auto error=m_impl->api.initialize();
  const auto result=m_impl->result(InputDiagnosticStage::Initialize,error);
- if(error==paNoError)m_impl->initialized=true;
+ if(error==paNoError)
+ {m_impl->initialized=true;m_impl->diagnostic.libraryVersion=boundedText(m_impl->api.versionText(),96);return {"ok",true,m_impl->diagnostic};}
  return result;
 }
 RecordingInputDevicePage RecordingPortAudioInputDriver::enumerateInputs(std::uint32_t offset,std::uint32_t limit)
@@ -108,7 +110,12 @@ RecordingInputDevicePage RecordingPortAudioInputDriver::enumerateInputs(std::uin
 RecordingDriverResult RecordingPortAudioInputDriver::openInputOnly(const SelectedInputProfile& profile,RecordingInputCallback callback,void* context) noexcept
 {
  if(m_impl->stream)return m_impl->localFailure(InputDiagnosticStage::OpenStream,"stream_already_open",false);
- m_impl->diagnostic={};auto& diagnostic=m_impl->diagnostic;
+ const auto version=m_impl->diagnostic.libraryVersion;
+ const auto initializeKnown=m_impl->diagnostic.portAudioResultsKnown[std::size_t(InputDiagnosticStage::Initialize)];
+ const auto initializeResult=m_impl->diagnostic.portAudioResults[std::size_t(InputDiagnosticStage::Initialize)];
+ m_impl->diagnostic={};auto& diagnostic=m_impl->diagnostic;diagnostic.libraryVersion=version;
+ diagnostic.portAudioResultsKnown[std::size_t(InputDiagnosticStage::Initialize)]=initializeKnown;
+ diagnostic.portAudioResults[std::size_t(InputDiagnosticStage::Initialize)]=initializeResult;
  diagnostic.requestedRate=profile.input.sampleRate;diagnostic.inputChannels=profile.input.inputChannels;
  diagnostic.selectedChannel=profile.input.selectedChannel;diagnostic.wasapiShared=profile.wasapiShared;
  diagnostic.maxCallbackFrames=profile.input.maxCallback;
@@ -152,8 +159,13 @@ RecordingDriverResult RecordingPortAudioInputDriver::openInputOnly(const Selecte
  m_impl->callback=callback;m_impl->context=context;m_impl->channels=int(profile.input.inputChannels);m_impl->selected=index;
  const auto opened=m_impl->api.open(&m_impl->stream,&inputParameters,nullptr,double(profile.input.sampleRate),
   profile.input.maxCallback,paNoFlag,&Impl::streamCallback,m_impl.get());
- const auto openResult=m_impl->result(InputDiagnosticStage::OpenStream,opened);
+ auto openResult=m_impl->result(InputDiagnosticStage::OpenStream,opened);
  if(opened!=paNoError){m_impl->stream=nullptr;m_impl->callback=nullptr;m_impl->context=nullptr;}
+ else if(const auto* info=m_impl->api.streamInfo(m_impl->stream))
+ {
+  diagnostic.streamInfoAvailable=true;diagnostic.actualSampleRate=info->sampleRate;diagnostic.actualInputLatency=info->inputLatency;
+  openResult.diagnostic=diagnostic;
+ }
  return openResult;
 }
 RecordingDriverResult RecordingPortAudioInputDriver::start() noexcept
@@ -170,7 +182,12 @@ RecordingDriverResult RecordingPortAudioInputDriver::stop() noexcept
  const auto error=m_impl->api.stop(m_impl->stream);
  if(error==paStreamIsStopped)
  {
-  if(m_impl->api.isStopped(m_impl->stream)==1)return m_impl->result(InputDiagnosticStage::StopStream,paNoError);
+  if(m_impl->api.isStopped(m_impl->stream)==1)
+  {
+   auto result=m_impl->result(InputDiagnosticStage::StopStream,paNoError);
+   m_impl->diagnostic.portAudioResults[std::size_t(InputDiagnosticStage::StopStream)]=int(error);
+   result.diagnostic=m_impl->diagnostic;return result;
+  }
   return m_impl->result(InputDiagnosticStage::StopStream,error,false);
  }
  auto result=m_impl->result(InputDiagnosticStage::StopStream,error,false);

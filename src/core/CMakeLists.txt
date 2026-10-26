@@ -12,6 +12,7 @@ set(LMMS_SRCS
 	core/recording/RecordingPcm16.cpp
 	core/recording/RecordingInputRuntime.cpp
 	core/recording/RecordingTakeJournal.cpp
+	core/recording/RecordingTakeReceipt.cpp
 	core/recording/RecordingWriter.cpp
 	core/recording/RecordingInputController.cpp
 	core/recording/RecordingPortAudioInput.cpp
