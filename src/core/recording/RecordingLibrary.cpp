@@ -71,9 +71,16 @@ QByteArray readBounded(HANDLE h,qint64 bound)
 }
 #endif
 }
+struct SealedTakeToken::State {RawTakeFacts facts;std::unique_ptr<QIODevice> source;};
+SealedTakeToken::SealedTakeToken(std::unique_ptr<State> state):m_state(std::move(state)){}
+SealedTakeToken::~SealedTakeToken()=default;
+SealedTakeToken::SealedTakeToken(SealedTakeToken&&) noexcept=default;
+SealedTakeToken& SealedTakeToken::operator=(SealedTakeToken&&) noexcept=default;
+const RawTakeFacts& SealedTakeToken::facts() const noexcept{return m_state->facts;}
 struct RecordingLibrary::RootState
 {
  std::atomic_bool revoked{false};
+ std::atomic<std::uint32_t> activeTakeSinks{0};
 #ifdef Q_OS_WIN
  std::vector<HANDLE> ancestors;
  QString finalPath;
@@ -209,8 +216,8 @@ public:
  OwnedLibraryTakeSink(std::shared_ptr<RecordingLibrary::RootState> root,std::shared_ptr<ProjectPin> project,
   HANDLE audio,HANDLE journal,QString projectId,QString takeId,std::uint32_t rate,std::uint64_t maximum)
   :m_root(std::move(root)),m_project(std::move(project)),m_audio(audio),m_journal(journal),m_projectId(std::move(projectId)),
-   m_takeId(std::move(takeId)),m_audioPath(rootPath()+"/take-"+m_takeId+".partial"),m_journalPath(rootPath()+"/take-"+m_takeId+".journal"),m_rate(rate),m_maximum(maximum){}
- ~OwnedLibraryTakeSink() override{if(m_audio!=INVALID_HANDLE_VALUE)CloseHandle(m_audio);if(m_journal!=INVALID_HANDLE_VALUE)CloseHandle(m_journal);}
+   m_takeId(std::move(takeId)),m_audioPath(rootPath()+"/take-"+m_takeId+".partial"),m_journalPath(rootPath()+"/take-"+m_takeId+".journal"),m_rate(rate),m_maximum(maximum){m_root->activeTakeSinks.fetch_add(1,std::memory_order_acq_rel);}
+ ~OwnedLibraryTakeSink() override{if(m_audio!=INVALID_HANDLE_VALUE)CloseHandle(m_audio);if(m_journal!=INVALID_HANDLE_VALUE)CloseHandle(m_journal);m_root->activeTakeSinks.fetch_sub(1,std::memory_order_release);}
 #else
  OwnedLibraryTakeSink()=default;
 #endif
@@ -418,6 +425,7 @@ RecordingLibrary::NewTakeResult RecordingLibrary::createUniqueTake(const Project
   || !maximum || maximum>std::uint64_t(rate)*120)return {"invalid_take",{}};
 #ifdef Q_OS_WIN
  auto [code,pin]=projectPin(m_root,project);if(!pin)return {code,{}};
+ if(m_root->activeTakeSinks.load(std::memory_order_acquire)==std::numeric_limits<std::uint32_t>::max())return {"resource_limit",{}};
  const auto stem=QStringLiteral("take-")+take.id;
  NTSTATUS status=0;const auto audio=relative(pin->directory,stem+QStringLiteral(".partial"),GENERIC_READ|GENERIC_WRITE|DELETE,FILE_CREATE,false,status);
  if(audio==INVALID_HANDLE_VALUE)return {quint32(status)==0xc0000035u?QStringLiteral("take_exists"):QStringLiteral("write_failed"),{}};
@@ -455,6 +463,172 @@ RecordingLibrary::CheckedFile RecordingLibrary::openRecoveryCandidate(const Proj
 #endif
 }
 void RecordingLibrary::revoke(){if(m_root)m_root->revoked.store(true,std::memory_order_release);}
+
+struct RecordingLibrary::RecoveryScan::State
+{
+ std::shared_ptr<RootState> root;
+#ifdef Q_OS_WIN
+ HANDLE rootDirectory=INVALID_HANDLE_VALUE,projectDirectory=INVALID_HANDLE_VALUE;
+ std::shared_ptr<ProjectPin> project;
+ QString projectId;
+ bool rootRestart=true,projectRestart=true;
+ ~State(){if(projectDirectory!=INVALID_HANDLE_VALUE)CloseHandle(projectDirectory);if(rootDirectory!=INVALID_HANDLE_VALUE)CloseHandle(rootDirectory);}
+#endif
+ bool ended=false;
+};
+RecordingLibrary::RecoveryScan::RecoveryScan(std::unique_ptr<State> state):m_state(std::move(state)){}
+RecordingLibrary::RecoveryScan::~RecoveryScan()=default;
+#ifdef Q_OS_WIN
+namespace {
+struct DirectoryName {QString code,name;};
+DirectoryName nextRecoveryName(HANDLE directory,bool& restart)
+{
+ using Query=NTSTATUS(NTAPI*)(HANDLE,HANDLE,PIO_APC_ROUTINE,PVOID,PIO_STATUS_BLOCK,PVOID,ULONG,FILE_INFORMATION_CLASS,BOOLEAN,PUNICODE_STRING,BOOLEAN);
+ const auto query=reinterpret_cast<Query>(GetProcAddress(GetModuleHandleW(L"ntdll.dll"),"NtQueryDirectoryFile"));
+ if(!query)return {"unsupported_backend",{}};
+ alignas(FILE_NAMES_INFORMATION) std::array<std::uint8_t,2048> buffer{};IO_STATUS_BLOCK io{};
+ const auto status=query(directory,nullptr,nullptr,nullptr,&io,buffer.data(),ULONG(buffer.size()),FileNamesInformation,TRUE,nullptr,restart?TRUE:FALSE);
+ restart=false;
+ if(quint32(status)==0x80000006u)return {"end",{}};
+ if(status<0)return {"directory_unavailable",{}};
+ const auto* name=reinterpret_cast<const FILE_NAMES_INFORMATION*>(buffer.data());
+ if(io.Information<offsetof(FILE_NAMES_INFORMATION,FileName) || name->FileNameLength%sizeof(wchar_t)
+  || name->FileNameLength>io.Information- offsetof(FILE_NAMES_INFORMATION,FileName) || name->FileNameLength>1024)return {"invalid_directory_entry",{}};
+ return {"ok",QString::fromWCharArray(name->FileName,int(name->FileNameLength/sizeof(wchar_t)))};
+}
+bool recoveryNamePresent(HANDLE project,const QString& name)
+{
+ NTSTATUS status=0;const auto file=relative(project,name,FILE_READ_ATTRIBUTES,FILE_OPEN,false,status,FILE_SHARE_READ|FILE_SHARE_WRITE|FILE_SHARE_DELETE);
+ if(file!=INVALID_HANDLE_VALUE){CloseHandle(file);return true;}
+ return quint32(status)!=0xc0000034u && quint32(status)!=0xc000003au;
+}
+RecordingFileIdentity recoveryIdentity(HANDLE file)
+{
+ BY_HANDLE_FILE_INFORMATION info{};if(!GetFileInformationByHandle(file,&info))return {};
+ return {info.dwVolumeSerialNumber,(std::uint64_t(info.nFileIndexHigh)<<32)|info.nFileIndexLow};
+}
+}
+#endif
+RecordingLibrary::RecoveryName RecordingLibrary::RecoveryScan::next()
+{
+ if(!m_state || !authorized(m_state->root))return {"unauthorized_library",{},{},false,true};
+ if(m_state->ended)return {"ok",{},{},false,true};
+#ifdef Q_OS_WIN
+ auto& s=*m_state;
+ if(s.projectDirectory!=INVALID_HANDLE_VALUE)
+ {
+  if(!ordinary(s.projectDirectory,true,s.root->volume) || finalName(s.projectDirectory)!=s.root->finalPath+'/'+s.projectId)
+   return {"source_identity_changed",{},{},false,true};
+  const auto found=nextRecoveryName(s.projectDirectory,s.projectRestart);
+  if(found.code=="end"){CloseHandle(s.projectDirectory);s.projectDirectory=INVALID_HANDLE_VALUE;s.project.reset();return {"ok"};}
+  if(found.code!="ok")return {found.code,{},{},false,true};
+  const auto& name=found.name;
+  const bool partial=name.endsWith(".partial"),sealed=name.endsWith(".wav"),journal=name.endsWith(".journal");
+  if(!name.startsWith("take-") || (!partial && !sealed && !journal))return {"ok"};
+  const int suffix=sealed?4:8;const auto take=name.mid(5,name.size()-5-suffix);
+  if(!validId(take))return {"ok"};
+  if(sealed && recoveryNamePresent(s.projectDirectory,"take-"+take+".partial"))return {"ok"};
+  if(journal && (recoveryNamePresent(s.projectDirectory,"take-"+take+".partial") || recoveryNamePresent(s.projectDirectory,"take-"+take+".wav")))return {"ok"};
+  return {"ok",s.projectId,take,true,false};
+ }
+ const auto found=nextRecoveryName(s.rootDirectory,s.rootRestart);
+ if(found.code=="end"){s.ended=true;return {"ok",{},{},false,true};}
+ if(found.code!="ok")return {found.code,{},{},false,true};
+ if(!validId(found.name))return {"ok"};
+ auto [code,pin]=projectPin(s.root,{found.name,1},false);if(!pin)return {"ok"}; // Never traverse a junction or an unregistered directory.
+ NTSTATUS status=0;const auto directory=relative(pin->directory,QString{},FILE_READ_ATTRIBUTES|FILE_TRAVERSE|FILE_LIST_DIRECTORY,FILE_OPEN,true,status);
+ if(directory==INVALID_HANDLE_VALUE)return {"directory_unavailable",{},{},false,true};
+ if(!ordinary(directory,true,s.root->volume) || finalName(directory)!=s.root->finalPath+'/'+found.name)
+ {CloseHandle(directory);return {"source_identity_changed",{},{},false,true};}
+ s.projectDirectory=directory;s.project=std::move(pin);s.projectId=found.name;s.projectRestart=true;return {"ok"};
+#else
+ return {"unsupported_backend",{},{},false,true};
+#endif
+}
+QString RecordingLibrary::recoveryAdmissionCode() const
+{
+ if(!authorized(m_root))return "unauthorized_library";
+ return m_root->activeTakeSinks.load(std::memory_order_acquire)?QString("recording_busy"):QString("ok");
+}
+RecordingLibrary::RecoveryScanResult RecordingLibrary::beginRecoveryScan()
+{
+ if(!authorized(m_root))return {"unauthorized_library",{}};
+#ifdef Q_OS_WIN
+ NTSTATUS status=0;const auto directory=relative(m_root->ancestors.back(),QString{},FILE_READ_ATTRIBUTES|FILE_TRAVERSE|FILE_LIST_DIRECTORY,FILE_OPEN,true,status);
+ if(directory==INVALID_HANDLE_VALUE)return {"directory_unavailable",{}};
+ if(!ordinary(directory,true,m_root->volume) || finalName(directory)!=m_root->finalPath){CloseHandle(directory);return {"source_identity_changed",{}};}
+ auto state=std::make_unique<RecoveryScan::State>();state->root=m_root;state->rootDirectory=directory;
+ return {"ok",std::unique_ptr<RecoveryScan>(new RecoveryScan(std::move(state)))};
+#else
+ return {"unsupported_backend",{}};
+#endif
+}
+RecordingLibrary::RecoveryFiles RecordingLibrary::readRecoveryFiles(const ProjectIdentity& project,const QString& take)
+{
+ RecoveryFiles result;
+ if(!validId(take)){result.code="invalid_identity";return result;}
+#ifdef Q_OS_WIN
+ auto [code,pin]=projectPin(m_root,project,false);if(!pin){result.code=code;return result;}
+ if(!ordinary(pin->directory,true,m_root->volume) || finalName(pin->directory)!=m_root->finalPath+'/'+project.id){result.code="source_identity_changed";return result;}
+ auto open=[&](const QString& suffix,qint64 maximum,RecordingFileIdentity* identity=nullptr)->CheckedFile{
+  auto state=std::make_unique<OwnedNewFile::State>();state->root=m_root;state->project=pin;NTSTATUS status=0;const auto name="take-"+take+suffix;
+  state->file=relative(pin->directory,name,GENERIC_READ,FILE_OPEN,false,status);
+  if(state->file==INVALID_HANDLE_VALUE)
+  {
+   const auto error=quint32(status);return {error==0xc0000034u?QString("not_found"):error==0xc0000043u?QString("take_busy"):QString("source_identity_changed"),{}};
+  }
+  if(!ordinary(state->file,false,m_root->volume) || finalName(state->file)!=m_root->finalPath+'/'+project.id+'/'+name)return {"source_identity_changed",{}};
+  LARGE_INTEGER size{};if(!GetFileSizeEx(state->file,&size) || size.QuadPart<0 || size.QuadPart>maximum)return {"resource_limit",{}};
+  const auto id=recoveryIdentity(state->file);if(!id.index)return {"source_identity_changed",{}};
+  if(identity)*identity=id;
+  return {"ok",std::make_unique<RecoveryDevice>(std::move(state))};
+ };
+ auto partial=open(".partial",11520044,&result.audioIdentity);RecordingFileIdentity sealedIdentity;
+ auto sealed=open(".wav",11520044,&sealedIdentity);
+ if(partial.source && sealed.source){result.code="ambiguous_audio";return result;}
+ if(!partial.source && partial.code!="not_found"){result.code=partial.code;return result;}
+ if(!sealed.source && sealed.code!="not_found"){result.code=sealed.code;return result;}
+ if(sealed.source){result.sealed=true;result.audioIdentity=sealedIdentity;result.audio=std::move(sealed.source);}
+ else result.audio=std::move(partial.source);
+ if(!result.audio){result.code="missing_audio";return result;}
+ auto journal=open(".journal",65536,&result.journalIdentity);
+ auto dismissal=open(".dismissed.json",1024);
+ if(!dismissal.source && dismissal.code!="not_found"){result.code=dismissal.code;return result;}
+ result.dismissal=std::move(dismissal.source);
+ if(!journal.source){result.code=journal.code=="not_found"?"missing_manifest":journal.code;return result;}
+ result.journal=std::move(journal.source);
+ auto receipt=open(".diagnostics.jsonl",32768);auto provenance=open(".recovery.json",65536);
+ for(const auto* optional:{&receipt,&provenance})if(!optional->source && optional->code!="not_found"){result.code=optional->code;return result;}
+ result.receipt=std::move(receipt.source);result.provenance=std::move(provenance.source);result.code="ok";return result;
+#else
+ Q_UNUSED(project);result.code="unsupported_backend";return result;
+#endif
+}
+QString RecordingLibrary::writeRecoveryMetadata(const ProjectIdentity& project,const QString& take,RecoveryMetadata kind,const QByteArray& bytes)
+{
+ if(!validId(take) || bytes.isEmpty() || bytes.size()>(kind==RecoveryMetadata::Dismissal?1024:65536))return "invalid_metadata";
+#ifdef Q_OS_WIN
+ auto [code,pin]=projectPin(m_root,project,false);if(!pin)return code;
+ if(!ordinary(pin->directory,true,m_root->volume) || finalName(pin->directory)!=m_root->finalPath+'/'+project.id)return "source_identity_changed";
+ const auto name="take-"+take+(kind==RecoveryMetadata::Dismissal?".dismissed.json":".recovery.json");NTSTATUS status=0;
+ const auto file=relative(pin->directory,name,GENERIC_READ|GENERIC_WRITE,FILE_CREATE,false,status);
+ if(file==INVALID_HANDLE_VALUE)return quint32(status)==0xc0000035u?"take_exists":"write_failed";
+ const bool ok=ordinary(file,false,m_root->volume) && finalName(file)==m_root->finalPath+'/'+project.id+'/'+name && writeAll(file,bytes);
+ CloseHandle(file);return ok?QString("ok"):QString("write_failed");
+#else
+ Q_UNUSED(project);return "unsupported_backend";
+#endif
+}
+std::unique_ptr<SealedTakeToken> RecordingLibrary::mintRecoveryToken(const RawTakeFacts& facts)
+{
+ auto files=readRecoveryFiles({facts.projectId,1},facts.takeId);
+ if(files.code!="ok" || !files.sealed || files.audioIdentity!=facts.sourceIdentity || files.audio->size()!=qint64(44+facts.rawFrames*2))return {};
+ QCryptographicHash hash(QCryptographicHash::Sha256);std::array<char,65536> buffer{};
+ for(;;){const auto count=files.audio->read(buffer.data(),qint64(buffer.size()));if(count<0)return {};if(!count)break;hash.addData(buffer.data(),int(count));}
+ if(hash.result()!=facts.sourceDigest || !files.audio->seek(0))return {};
+ auto state=std::make_unique<SealedTakeToken::State>();state->facts=facts;state->source=std::move(files.audio);
+ return std::unique_ptr<SealedTakeToken>(new SealedTakeToken(std::move(state)));
+}
 QJsonObject RecordingLibrary::identityRecord(const ProjectIdentity& project,QString& code)
 {
 #ifdef Q_OS_WIN

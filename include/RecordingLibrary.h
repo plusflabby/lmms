@@ -22,6 +22,7 @@ public:
 private:
  std::unique_ptr<State> m_state;
 };
+class RecordingRecovery;
 class LMMS_EXPORT RecordingLibrary : public QObject
 {
 public:
@@ -30,6 +31,26 @@ public:
  struct NewFileResult {QString code;std::unique_ptr<OwnedNewFile> file;};
  struct NewTakeResult {QString code;std::unique_ptr<RecordingWriterSink> sink;std::unique_ptr<RecordingReceiptSink> receipt;};
  struct CheckedFile {QString code;std::unique_ptr<QIODevice> source;};
+ struct RecoveryName {QString code,projectId,takeId;bool candidate=false,end=false;};
+ class RecoveryScan
+ {
+ public:
+  ~RecoveryScan();
+  RecoveryName next();
+ private:
+  friend class RecordingLibrary;
+  struct State;
+  explicit RecoveryScan(std::unique_ptr<State>);
+  std::unique_ptr<State> m_state;
+ };
+ struct RecoveryScanResult {QString code;std::unique_ptr<RecoveryScan> scan;};
+ struct RecoveryFiles
+ {
+  QString code;
+  std::unique_ptr<QIODevice> audio,journal,receipt,provenance,dismissal;
+  RecordingFileIdentity audioIdentity,journalIdentity;
+  bool sealed=false;
+ };
  static Approval authorizeLocalRoot(const QString&);
  ~RecordingLibrary() override;
  QString prepareProjectFolder(const ProjectIdentity&);
@@ -39,6 +60,13 @@ public:
  void revoke();
 private:
  friend class RecordingProjectIdentity;
+ friend class RecordingRecovery;
+ enum class RecoveryMetadata {Provenance,Dismissal};
+ QString recoveryAdmissionCode() const;
+ RecoveryScanResult beginRecoveryScan();
+ RecoveryFiles readRecoveryFiles(const ProjectIdentity&,const QString& takeId);
+ QString writeRecoveryMetadata(const ProjectIdentity&,const QString& takeId,RecoveryMetadata,const QByteArray&);
+ std::unique_ptr<SealedTakeToken> mintRecoveryToken(const RawTakeFacts&);
  explicit RecordingLibrary(std::shared_ptr<RootState>);
  QJsonObject identityRecord(const ProjectIdentity&,QString& code);
  QString storeIdentityRecord(const ProjectIdentity&,const QJsonObject&);

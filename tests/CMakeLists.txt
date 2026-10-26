@@ -8,6 +8,7 @@ set(LMMS_TESTS
 	src/core/RecordingOutputQueueTest.cpp
 	src/core/RecordingSessionStateTest.cpp
 	src/core/RecordingLibraryTest.cpp
+	src/core/RecordingRecoveryTest.cpp
 	src/core/RecordingProjectIdentityTest.cpp
 	src/core/RecordingRingTest.cpp
 	src/core/RecordingPcm16Test.cpp

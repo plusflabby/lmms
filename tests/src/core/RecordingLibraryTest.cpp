@@ -1,4 +1,5 @@
 #include "RecordingLibrary.h"
+#include "RecordingRecovery.h"
 #include "RecordingWriter.h"
 #include "RecordingTakeJournal.h"
 #include <QtTest>
@@ -75,6 +76,20 @@ class RecordingLibraryTest : public QObject
  static QString id(){return QUuid::createUuid().toString(QUuid::WithoutBraces);}
  static QByteArray bytes(const QString& path){QFile f(path);if(!f.open(QIODevice::ReadOnly))return {};return f.readAll();}
 private slots:
+ void recoveredTokenPinsOnlyReadOnlyNewSourceAndRevocationKeepsOriginals()
+ {
+  QTemporaryDir temp;QVERIFY(temp.isValid());auto approval=RecordingLibrary::authorizeLocalRoot(temp.path());QVERIFY(approval.library);
+  const ProjectIdentity project{id(),1};const TakeIdentity take{id(),"recovery pin"};const auto descriptor=takeDescriptor(project,take,5760000);
+  auto files=approval.library->createUniqueTake(project,take,48000,5760000);QVERIFY(files.sink);
+  QCOMPARE(files.sink->beginTake(descriptor),WriterIoCode::Ok);const std::array<std::uint8_t,8> pcm{1,0,2,0,3,0,4,0};
+  QCOMPARE(files.sink->appendPayload(pcm).bytesWritten,8u);TakeProgress progress;progress.sequence=1;progress.receivedFrames=progress.acceptedFrames=progress.writtenFrames=4;
+  QCOMPARE(files.sink->appendCheckpoint(progress),WriterIoCode::Ok);files.sink.reset();files.receipt.reset();
+  const auto original=temp.path()+"/"+project.id+"/take-"+take.id+".partial";const auto before=bytes(original);
+  RecordingRecovery recovery;QVERIFY(recovery.scan(*approval.library).code=="ok");auto result=recovery.recover(take.id);QVERIFY(result.ok());QVERIFY(result.token);
+  const auto recovered=temp.path()+"/"+project.id+"/take-"+result.token->facts().takeId+".wav";const auto sealed=bytes(recovered);
+  {QFile writable(recovered);QVERIFY(!writable.open(QIODevice::ReadWrite));}QVERIFY(!QFile::rename(recovered,recovered+".renamed"));
+  approval.library->revoke();QVERIFY(!recovery.recover(take.id).ok());QCOMPARE(bytes(original),before);QCOMPARE(bytes(recovered),sealed);
+ }
  void receiptCapabilityIsCreateNewAndSeparatelyBounded()
  {
   QTemporaryDir temp;QVERIFY(temp.isValid());auto approved=RecordingLibrary::authorizeLocalRoot(temp.path());QVERIFY(approved.library);
