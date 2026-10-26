@@ -1,6 +1,8 @@
 #include "RecordingInputController.h"
 #include <QRandomGenerator>
 #include <QStringList>
+#include <QThread>
+#include <cmath>
 #include <algorithm>
 #include <atomic>
 #include <limits>
@@ -89,6 +91,42 @@ struct RecordingInputController::Impl
  QString errorCode;
  RecordingInputDiagnostic diagnostic;
  InputSnapshot lastInput;
+ RecordingObservationSummary observations;
+ QThread* const ownerThread=QThread::currentThread();
+ void drainObservations() noexcept
+ {
+  // Exactly one non-RT consumer: the controller/service owner. Never run on the callback or writer.
+  Q_ASSERT(QThread::currentThread()==ownerThread);
+  if(!storage)return;
+  InputObservation next;
+  // Bound work even when the producer runs concurrently. Starvation remains a visible runtime fault.
+  for(std::size_t n=0;n<RecordingInputRuntime::ObservationCapacity && storage->runtime.popObservation(next);++n)
+  {
+   auto& s=observations;
+   const bool finite=std::isfinite(next.adcFirstSeconds) && std::isfinite(next.currentFirstSeconds);
+   if(!s.observations){s.first=next;s.quality=next.timestampQuality;}
+   else
+   {
+    if(next.receivedFirstFrame!=s.last.receivedFirstFrame+s.last.frames)++s.frameDiscontinuities;
+    const bool previousFinite=std::isfinite(s.last.adcFirstSeconds) && std::isfinite(s.last.currentFirstSeconds);
+    if(finite && previousFinite)
+    {
+     if(next.adcFirstSeconds<=s.last.adcFirstSeconds || next.currentFirstSeconds<s.last.currentFirstSeconds)++s.clockRegressions;
+     const double expected=double(s.last.frames)/storage->profile.input.sampleRate;
+     if(std::abs(next.adcFirstSeconds-s.last.adcFirstSeconds-expected)>1.000001/storage->profile.input.sampleRate)
+      ++s.adcIntervalDiscontinuities;
+    }
+   }
+   if(!finite)++s.unavailableTimestamps;
+   if(next.hostFlags)++s.hostStatusBlocks;
+   s.hostFlags|=next.hostFlags;
+   if(next.timestampQuality==InputTimestampQuality::Discontinuous || s.clockRegressions || s.adcIntervalDiscontinuities)
+    s.quality=InputTimestampQuality::Discontinuous;
+   else if(s.quality!=InputTimestampQuality::Discontinuous && (next.timestampQuality==InputTimestampQuality::Unavailable || !finite))
+    s.quality=InputTimestampQuality::Unavailable;
+   ++s.observations;s.receivedFrames+=next.frames;s.last=next;
+  }
+ }
  std::vector<RecordingInputDevice> knownDevices;
  std::shared_ptr<RecordingInputRuntimeStorage> storage;
  std::atomic<RecordingInputRuntimeStorage*> activeStorage{nullptr};
@@ -126,6 +164,7 @@ struct RecordingInputController::Impl
   result.callbacksInFlight=callbacksInFlight.load(std::memory_order_acquire);
   result.firstCallbackSeen=firstCallbackSeen.load(std::memory_order_acquire);
   result.input=storage?storage->runtime.snapshot():lastInput;
+  result.observations=observations;
   result.diagnostic=diagnostic;
   result.diagnostic.receivedFrames=result.input.receivedFrames;
   result.diagnostic.acceptedFrames=result.input.acceptedFrames;
@@ -172,7 +211,7 @@ RecordingTicketResult RecordingInputController::arm(const SelectedInputProfile& 
  m_impl->diagnostic.requestedRate=selection.input.sampleRate;m_impl->diagnostic.inputChannels=selection.input.inputChannels;
  m_impl->diagnostic.selectedChannel=selection.input.selectedChannel;m_impl->diagnostic.wasapiShared=selection.wasapiShared;
  m_impl->diagnostic.hostApiName=selection.hostApiName.left(64);m_impl->diagnostic.deviceDescription=device->name.left(96);
- m_impl->diagnostic.maxInputChannels=device->maxInputChannels;m_impl->lastInput={};m_impl->firstCallbackSeen.store(false,std::memory_order_release);
+ m_impl->diagnostic.maxInputChannels=device->maxInputChannels;m_impl->lastInput={};m_impl->observations={};m_impl->observations.epoch=epoch;m_impl->firstCallbackSeen.store(false,std::memory_order_release);
  return {"ok",LocalInputTicket(selection,epoch,m_impl->processCookie,rootRevision),true};
 }
 InputRuntimeLease RecordingInputController::createRuntimeLease(const SelectedInputProfile& selection)
@@ -190,6 +229,7 @@ RecordingControllerResult RecordingInputController::open(LocalInputTicket&& tick
  if(ticket.m_processCookie!=m_impl->processCookie || !ticket.m_epoch || !ticket.m_rootRevision
   || !lease.m_storage || !sameProfile(ticket.m_selection,lease.m_storage->profile))return {"ticket_or_runtime_mismatch",m_impl->state,false};
  m_impl->state=RecordingControllerState::Opening;m_impl->errorCode.clear();m_impl->epoch=ticket.m_epoch;
+ m_impl->observations={};m_impl->observations.epoch=ticket.m_epoch;
  m_impl->storage=std::move(lease.m_storage);m_impl->firstCallbackSeen.store(false,std::memory_order_release);
  m_impl->activeStorage.store(m_impl->storage.get(),std::memory_order_release);
  m_impl->acceptingCallbacks.store(false,std::memory_order_release);
@@ -238,10 +278,11 @@ RecordingControllerResult RecordingInputController::requestStop(InputEpoch epoch
  {m_impl->quiescenceProven=false;m_impl->errorCode=stopped.code.isEmpty()?QStringLiteral("stop_failed"):stopped.code;m_impl->state=RecordingControllerState::FailedRetained;return {m_impl->errorCode,m_impl->state,false};}
  if(!stopped.callbackQuiescent || m_impl->callbacksInFlight.load(std::memory_order_acquire)!=0)
  {m_impl->quiescenceProven=false;m_impl->errorCode=QStringLiteral("callback_not_quiescent");m_impl->state=RecordingControllerState::FailedRetained;return {m_impl->errorCode,m_impl->state,false};}
- m_impl->started=false;m_impl->quiescenceProven=true;m_impl->state=RecordingControllerState::Quiescent;return {"ok",m_impl->state,true};
+ m_impl->started=false;m_impl->quiescenceProven=true;m_impl->state=RecordingControllerState::Quiescent;m_impl->drainObservations();return {"ok",m_impl->state,true};
 }
 RecordingControllerSnapshot RecordingInputController::poll(std::uint64_t now) noexcept
 {
+ m_impl->drainObservations();
  if(m_impl->state==RecordingControllerState::Capturing && !m_impl->firstCallbackSeen.load(std::memory_order_acquire)
   && now>=m_impl->startedAtMilliseconds && now-m_impl->startedAtMilliseconds>=2000)
  {
@@ -269,6 +310,7 @@ RecordingControllerResult RecordingInputController::closeAfterQuiescence()
  if((m_impl->state!=RecordingControllerState::Quiescent && !(m_impl->state==RecordingControllerState::FailedRetained && m_impl->quiescenceProven))
   || m_impl->callbacksInFlight.load(std::memory_order_acquire)!=0)
   return {"not_quiescent",m_impl->state,false};
+ m_impl->drainObservations(); // Callback quiescence proven above; no final evidence may outlive its runtime.
  if(m_impl->streamOpen)
  {
   const auto closed=m_impl->driver.close();

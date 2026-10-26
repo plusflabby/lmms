@@ -1,5 +1,7 @@
 #include "RecordingQualificationView.h"
 #include <QComboBox>
+#include <QLabel>
+#include <QTimer>
 #include <QPlainTextEdit>
 #include <QMdiArea>
 #include <QMdiSubWindow>
@@ -15,7 +17,8 @@ public:
  RecordingDriverResult initialize() noexcept override{++initializes;return initializeResult;}
  RecordingInputDevicePage enumerateInputs(std::uint32_t,std::uint32_t) override
  {++enumerations;return {"ok",{{"mic-1","Local microphone","WASAPI",2}},1,false};}
- RecordingDriverResult openInputOnly(const SelectedInputProfile&,RecordingInputCallback,void*) noexcept override{++opens;return {"ok",true};}
+ RecordingDriverResult openInputOnly(const SelectedInputProfile&,RecordingInputCallback cb,void* value) noexcept override{++opens;callback=cb;context=value;return {"ok",true};}
+ RecordingInputCallback callback=nullptr;void* context=nullptr;
  RecordingDriverResult start() noexcept override{++starts;return {"ok",false};}
  RecordingDriverResult stop() noexcept override{++stops;return {"ok",true};}
  RecordingDriverResult close() noexcept override{++closes;return {"ok",true};}
@@ -42,6 +45,23 @@ class RecordingQualificationViewTest : public QObject
 {
  Q_OBJECT
 private slots:
+ void observationOverflowIsVisibleAsATimingFaultWithItsLossCount()
+ {
+  auto driver=std::make_unique<FakeDriver>();auto* observed=driver.get();RecordingServiceHost host(std::move(driver));
+  host.enumerateInputs(0,64);QVERIFY(host.arm(profile(),{4,1},7).ok);
+  TakeDescriptor take;take.projectId="00000000-0000-4000-8000-000000000001";take.takeId="00000000-0000-4000-8000-000000000002";
+  take.label="synthetic";take.epoch={4,1};take.projectGeneration=4;take.maxRawFrames=5760000;take.sampleRate=48000;
+  QVERIFY(host.startTake(take,std::make_unique<MemorySink>(),0).ok);QElapsedTimer deadline;deadline.start();
+  while(deadline.elapsed()<3000 && !observed->starts){std::ignore=host.poll(0);QTest::qWait(1);}
+  const float samples[]{.1f,.2f};
+  if(observed->callback)for(unsigned i=0;i<1025;++i)std::ignore=observed->callback(observed->context,{samples,1,2,0,1.+i/48000.,1.01+i/48000.});
+  std::ignore=host.requestStop({4,1});deadline.restart();
+  while(deadline.elapsed()<3000 && !host.quiescent()){std::ignore=host.poll(100);QTest::qWait(1);}
+  QVERIFY(host.quiescent());RecordingProjectIdentity project(nullptr);RecordingQualificationView view(host,project);
+  view.findChild<QTimer*>()->start(1);QTest::qWait(20);
+  QVERIFY(view.findChild<QLabel*>("recordingInputStatus")->text().contains("timestamp observation queue overflow"));
+  QVERIFY(view.findChild<QPlainTextEdit*>("recordingInputDiagnostics")->toPlainText().contains("observations dropped 1"));
+ }
  void initializationFailureDisplaysStageDetailsWithoutOpeningInput()
  {
   auto driver=std::make_unique<FakeDriver>();auto* observed=driver.get();

@@ -83,11 +83,23 @@ private:
  std::shared_ptr<void> retainOwner() const noexcept;
 };
 enum class RecordingControllerState : std::uint32_t {Closed,Opening,Ready,Capturing,Stopping,Quiescent,FailedRetained};
+// Fixed-size, owner-thread evidence for one runtime/epoch. No PCM or endpoint identity.
+struct RecordingObservationSummary
+{
+ InputEpoch epoch;
+ std::uint64_t observations=0,receivedFrames=0,frameDiscontinuities=0;
+ std::uint64_t unavailableTimestamps=0,clockRegressions=0,adcIntervalDiscontinuities=0,hostStatusBlocks=0;
+ std::uint32_t hostFlags=0;
+ InputObservation first,last;
+ InputTimestampQuality quality=InputTimestampQuality::Unavailable;
+};
+static_assert(std::is_trivially_copyable_v<RecordingObservationSummary> && sizeof(RecordingObservationSummary)<=512);
 struct RecordingControllerSnapshot
 {
  RecordingControllerState state=RecordingControllerState::Closed;
  QString errorCode;
  InputSnapshot input;
+ RecordingObservationSummary observations;
  std::uint32_t callbacksInFlight=0;
  bool firstCallbackSeen=false,driverInitialized=false;
  RecordingInputDiagnostic diagnostic;

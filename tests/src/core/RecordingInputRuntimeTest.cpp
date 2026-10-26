@@ -194,6 +194,20 @@ private slots:
   const float input[]{.1f,.2f,.3f};QCOMPARE(runtime.process(block(input,3)),InputDecision::Stop);
   QCOMPARE(runtime.snapshot().fault,InputFault::RingContractMismatch);QCOMPARE(runtime.snapshot().applicationDroppedFrames,std::uint64_t(1));
  }
+ void full120SecondCallbackWorkloadDoesNotAllocateOrFree()
+ {
+  RecordingRing ring{48000};RecordingInputRuntime runtime(profile(),ring);QVERIFY(runtime.enableCapture(epoch));
+  std::array<float,4096> input{},output{};InputDecision decision=InputDecision::Continue;unsigned allocated=0,freed=0;
+  for(unsigned i=0;i<1407;++i)
+  {
+   const auto time=1.+double(i)*4096/48000.;allocations=frees=0;countAllocations=true;
+   decision=runtime.process(block(input.data(),4096,1,0,time,time+.01));countAllocations=false;
+   allocated+=allocations;freed+=frees;ring.pop(output.data(),output.size());InputObservation observation;runtime.popObservation(observation);
+   if(decision==InputDecision::Stop)break;
+  }
+  QCOMPARE(decision,InputDecision::Stop);QCOMPARE(allocated,0u);QCOMPARE(freed,0u);
+  QCOMPARE(runtime.snapshot().acceptedFrames,quint64(5760000));QCOMPARE(runtime.snapshot().fault,InputFault::None);
+ }
  void callbackSuccessAndFailureDoNotAllocateOrFree()
  {
   RecordingRing ring{48000};RecordingInputRuntime runtime(profile(),ring);QVERIFY(runtime.enableCapture(epoch));float sample=.25f;

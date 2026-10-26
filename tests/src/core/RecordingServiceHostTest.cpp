@@ -7,6 +7,7 @@
 #include <QFile>
 #include <QCryptographicHash>
 #include <mutex>
+#include <array>
 #include <tuple>
 using namespace lmms::recording;
 namespace {
@@ -59,6 +60,80 @@ class RecordingServiceHostTest : public QObject
 {
  Q_OBJECT
 private slots:
+ // Removing the controller's observation drain must stop this workload at block 1025.
+ void full120SecondWorkloadFinalizesWithoutObservationOverflow_data()
+ {QTest::addColumn<unsigned>("blockFrames");QTest::newRow("4096")<<4096u;QTest::newRow("256")<<256u;}
+ void full120SecondWorkloadFinalizesWithoutObservationOverflow()
+ {
+  QFETCH(unsigned,blockFrames);QTemporaryDir temp;QVERIFY(temp.isValid());
+  auto library=RecordingLibrary::authorizeLocalRoot(temp.path());QVERIFY(library.library);
+  auto d=descriptor();auto files=library.library->createUniqueTake({d.projectId,1},{d.takeId,"synthetic120"},48000,5760000);
+  QVERIFY(files.sink);QVERIFY(files.receipt);
+  auto driver=std::make_unique<FakeDriver>();auto* observed=driver.get();observed->deliverOnStart=false;
+  RecordingServiceHost host(std::move(driver));host.enumerateInputs(0,64);QVERIFY(host.arm(profile(),{1,1},3).ok);
+  QVERIFY(host.startTake(d,std::move(files.sink),0,std::move(files.receipt)).ok);
+  QElapsedTimer deadline;deadline.start();
+  while(deadline.elapsed()<3000 && observed->starts==0){std::ignore=host.poll(0);QTest::qWait(1);}
+  std::array<float,4096> samples{};samples.fill(.125f);std::uint64_t received=0;InputDecision decision=InputDecision::Continue;
+  while(observed->starts && received<5760000 && decision==InputDecision::Continue)
+  {
+   for(unsigned burst=0;burst<8 && received<5760000 && decision==InputDecision::Continue;++burst)
+   {
+    const double time=1.+double(received)/48000.;InputBlock block{samples.data(),blockFrames,1,0,time,time+.01};
+    decision=observed->callback(observed->callbackContext,block);received+=blockFrames;
+   }
+   deadline.restart();
+   while(deadline.elapsed()<3000 && host.poll(100).writer.writtenFrames<std::min<std::uint64_t>(received,5760000))QThread::usleep(100);
+   if(deadline.elapsed()>=3000)break;
+  }
+  std::ignore=host.requestStop({1,1});deadline.restart();
+  while(deadline.elapsed()<3000 && !host.quiescent()){std::ignore=host.poll(100);QTest::qWait(1);}
+  const auto final=host.poll(100);QVERIFY(host.quiescent());
+  qInfo("workload: received=%llu accepted=%llu fault=%u observationsDropped=%llu",final.input.input.receivedFrames,final.input.input.acceptedFrames,unsigned(final.input.input.fault),final.input.input.observationsDropped);
+  QCOMPARE(final.input.input.fault,InputFault::None);QCOMPARE(final.input.input.acceptedFrames,quint64(5760000));
+  QCOMPARE(final.writer.writtenFrames,quint64(5760000));QCOMPARE(final.writer.durableFrames,quint64(5760000));
+  QCOMPARE(final.input.input.observationsDropped,quint64(0));QCOMPARE(final.writer.state,WriterState::Sealed);
+  QCOMPARE(final.input.input.stopReason,InputStopReason::DurationLimit);
+  QCOMPARE(final.input.input.receivedFrames,blockFrames==4096?quint64(5763072):quint64(5760000));
+  QCOMPARE(final.input.input.intentionallyUnrecordedFrames,blockFrames==4096?quint64(3072):quint64(0));
+  QFile audio(temp.path()+"/"+d.projectId+"/take-"+d.takeId+".wav");QVERIFY(audio.open(QIODevice::ReadOnly));
+  const auto wav=audio.readAll();QCOMPARE(wav.size(),11520044);QCOMPARE(wav.mid(0,4),QByteArray("RIFF"));
+  const auto le=[&](int at,int bytes){quint32 v=0;for(int i=0;i<bytes;++i)v|=quint32(quint8(wav[at+i]))<<(8*i);return v;};
+  QCOMPARE(le(20,2),1u);QCOMPARE(le(22,2),1u);QCOMPARE(le(24,4),48000u);QCOMPARE(le(34,2),16u);QCOMPARE(le(40,4),11520000u);
+  QFile receipt(temp.path()+"/"+d.projectId+"/take-"+d.takeId+".diagnostics.jsonl");QVERIFY(receipt.open(QIODevice::ReadOnly));
+  const auto record=QJsonDocument::fromJson(receipt.readAll()).object();QVERIFY(record["audio_complete"].toBool());
+  const auto timing=record["observations"].toObject();
+  QCOMPARE(timing["blocks"].toString(),blockFrames==4096?QString("1407"):QString("22500"));
+  QCOMPARE(timing["received_frames"].toString(),blockFrames==4096?QString("5763072"):QString("5760000"));
+  QCOMPARE(timing["frame_discontinuities"].toString(),QString("0"));
+  QCOMPARE(timing["first"].toObject()["first_frame"].toString(),QString("0"));
+  QCOMPARE(timing["first"].toObject()["adc_seconds"].toDouble(),1.);
+  QCOMPARE(timing["last"].toObject()["first_frame"].toString(),blockFrames==4096?QString("5758976"):QString("5759744"));
+  QCOMPARE(timing["session_revision"].toString(),QString("1"));QVERIFY(!timing["calibrated"].toBool(true));
+  QCOMPARE(timing["adc_interval_discontinuities"].toString(),QString("0"));
+  QCOMPARE(record["counts"].toObject()["observations_dropped"].toString(),QString("0"));
+  QCOMPARE(record["wav_sha256"].toString(),QString::fromLatin1(QCryptographicHash::hash(wav,QCryptographicHash::Sha256).toHex()));
+ }
+ void observationStarvationRetainsRealPartialInsteadOfSealingAFaultedTake()
+ {
+  QTemporaryDir temp;QVERIFY(temp.isValid());auto library=RecordingLibrary::authorizeLocalRoot(temp.path());QVERIFY(library.library);
+  const auto d=descriptor();auto files=library.library->createUniqueTake({d.projectId,1},{d.takeId,"starved"},48000,5760000);
+  QVERIFY(files.sink);QVERIFY(files.receipt);auto driver=std::make_unique<FakeDriver>();auto* observed=driver.get();observed->deliverOnStart=false;
+  RecordingServiceHost host(std::move(driver));host.enumerateInputs(0,64);QVERIFY(host.arm(profile(),{1,1},3).ok);
+  QVERIFY(host.startTake(d,std::move(files.sink),0,std::move(files.receipt)).ok);QElapsedTimer timer;timer.start();
+  while(timer.elapsed()<3000 && observed->starts==0){std::ignore=host.poll(0);QTest::qWait(1);}
+  const float sample=.25f;if(observed->callback)for(unsigned i=0;i<1025;++i)
+   std::ignore=observed->callback(observed->callbackContext,{&sample,1,1,0,1.+i/48000.,1.01+i/48000.});
+  std::ignore=host.requestStop({1,1});timer.restart();
+  while(timer.elapsed()<3000 && !host.quiescent()){std::ignore=host.poll(100);QTest::qWait(1);}
+  QVERIFY(host.quiescent());const auto final=host.poll(100);QCOMPARE(final.writer.state,WriterState::Incomplete);
+  QCOMPARE(final.input.input.fault,InputFault::ObservationOverflow);QCOMPARE(final.writer.writtenFrames,quint64(1025));
+  const auto stem=temp.path()+"/"+d.projectId+"/take-"+d.takeId;QVERIFY(!QFile::exists(stem+".wav"));
+  QFile partial(stem+".partial");QVERIFY(partial.open(QIODevice::ReadOnly));QCOMPARE(partial.size(),qint64(2094));
+  QFile receipt(stem+".diagnostics.jsonl");QVERIFY(receipt.open(QIODevice::ReadOnly));const auto record=QJsonDocument::fromJson(receipt.readAll()).object();
+  QVERIFY(!record["audio_complete"].toBool());QCOMPARE(record["counts"].toObject()["observations_dropped"].toString(),QString("1"));
+  QCOMPARE(record["observations"].toObject()["blocks"].toString(),QString("1024"));
+ }
  void rearmingResetsLiveCountersWithoutChangingPriorReceipt()
  {
   ReceiptStorage receipt;auto driver=std::make_unique<FakeDriver>();auto* observed=driver.get();RecordingServiceHost host(std::move(driver));

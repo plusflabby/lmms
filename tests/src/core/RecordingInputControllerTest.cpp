@@ -3,6 +3,9 @@
 #include <algorithm>
 #include <array>
 #include <tuple>
+#include <thread>
+#include <semaphore>
+#include <limits>
 #include <vector>
 using namespace lmms::recording;
 namespace {
@@ -31,6 +34,101 @@ class RecordingInputControllerTest : public QObject
 {
  Q_OBJECT
 private slots:
+ // Without a production consumer, the second delayed burst faults at observation 1025.
+ void concurrentProducerAndDelayedConsumerKeepOrderedSessionEvidence()
+ {
+  FakeInputDriver driver;RecordingInputController controller(driver);controller.enumerateInputs(0,64);
+  auto ticket=controller.arm(profile(),{30,1},1);auto lease=controller.createRuntimeLease(profile());
+  QVERIFY(controller.open(std::move(ticket.ticket),std::move(lease)).ok);QVERIFY(controller.beginCapture({30,1},0).ok);
+  std::binary_semaphore ready{0},resume{0};InputDecision decision=InputDecision::Continue;
+  std::thread producer([&]{
+   const float sample[]{.25f,.5f};
+   for(unsigned batch=0;batch<4;++batch)
+   {
+    for(unsigned i=0;i<1024;++i){const auto n=batch*1024+i;const auto time=1.+double(n)/48000.;
+     decision=driver.callback(driver.callbackContext,{sample,1,2,0,time,time+.01});if(decision==InputDecision::Stop)break;}
+    ready.release();resume.acquire();
+   }
+  });
+  for(unsigned batch=0;batch<4;++batch){ready.acquire();std::ignore=controller.poll(100);resume.release();}
+  producer.join();std::ignore=controller.requestStop({30,1});std::ignore=controller.closeAfterQuiescence();
+  const auto final=controller.snapshot();QCOMPARE(decision,InputDecision::Continue);QCOMPARE(final.input.fault,InputFault::None);
+  QCOMPARE(final.observations.observations,quint64(4096));QCOMPARE(final.observations.receivedFrames,quint64(4096));
+  QCOMPARE(final.observations.first.receivedFirstFrame,quint64(0));QCOMPARE(final.observations.last.receivedFirstFrame,quint64(4095));
+  QCOMPARE(final.observations.frameDiscontinuities,quint64(0));QCOMPARE(final.observations.adcIntervalDiscontinuities,quint64(0));
+  QCOMPARE(final.observations.epoch.projectGeneration,quint64(30));QCOMPARE(final.observations.quality,InputTimestampQuality::Observed);
+ }
+ void stoppedQueueIsDrainedBeforeRuntimeReleaseAndNextEpochStartsEmpty()
+ {
+  FakeInputDriver driver;RecordingInputController controller(driver);
+  for(unsigned session=1;session<=2;++session)
+  {
+   controller.enumerateInputs(0,64);auto ticket=controller.arm(profile(),{31,session},1);auto lease=controller.createRuntimeLease(profile());
+   QVERIFY(controller.open(std::move(ticket.ticket),std::move(lease)).ok);QVERIFY(controller.beginCapture({31,session},0).ok);
+   const float sample[]{.25f,.5f};for(unsigned i=0;i<3;++i)std::ignore=driver.callback(driver.callbackContext,{sample,1,2,0,1.+i/48000.,1.01+i/48000.});
+   std::ignore=controller.requestStop({31,session});std::ignore=controller.closeAfterQuiescence();
+   const auto summary=controller.snapshot().observations;
+   QCOMPARE(summary.observations,quint64(3));QCOMPARE(summary.epoch.sessionRevision,quint64(session));
+   QCOMPARE(summary.last.receivedFirstFrame,quint64(2));
+  }
+ }
+ void summaryRetainsClockAndHardwareDegradationWithoutClaimingCalibration()
+ {
+  FakeInputDriver driver;RecordingInputController controller(driver);controller.enumerateInputs(0,64);
+  auto ticket=controller.arm(profile(),{32,1},1);auto lease=controller.createRuntimeLease(profile());
+  QVERIFY(controller.open(std::move(ticket.ticket),std::move(lease)).ok);QVERIFY(controller.beginCapture({32,1},0).ok);
+  const float sample[]{.1f,.2f};
+  std::ignore=driver.callback(driver.callbackContext,{sample,1,2,0,10.,10.01});
+  std::ignore=driver.callback(driver.callbackContext,{sample,1,2,0,11.,11.01});
+  std::ignore=driver.callback(driver.callbackContext,{sample,1,2,0,9.,9.01});
+  std::ignore=driver.callback(driver.callbackContext,{sample,1,2,0,std::numeric_limits<double>::quiet_NaN(),12.});
+  std::ignore=driver.callback(driver.callbackContext,{sample,1,2,InputHostOverflow,13.,13.01});
+  std::ignore=controller.requestStop({32,1});std::ignore=controller.closeAfterQuiescence();const auto s=controller.snapshot();
+  QCOMPARE(s.observations.observations,quint64(5));QCOMPARE(s.observations.unavailableTimestamps,quint64(1));
+  QCOMPARE(s.observations.clockRegressions,quint64(1));QCOMPARE(s.observations.adcIntervalDiscontinuities,quint64(2));
+  QCOMPARE(s.observations.hostStatusBlocks,quint64(1));QCOMPARE(s.observations.hostFlags,InputHostOverflow);
+  QCOMPARE(s.observations.first.adcFirstSeconds,10.);QCOMPARE(s.observations.last.adcFirstSeconds,13.);
+  QCOMPARE(s.observations.quality,InputTimestampQuality::Discontinuous);QCOMPARE(s.input.fault,InputFault::HardwareDiscontinuity);
+ }
+ void consumerStarvationStillLatchesExplicitOverflowAndPreservesQueuedPrefix()
+ {
+  FakeInputDriver driver;RecordingInputController controller(driver);controller.enumerateInputs(0,64);
+  auto ticket=controller.arm(profile(),{33,1},1);auto lease=controller.createRuntimeLease(profile());
+  QVERIFY(controller.open(std::move(ticket.ticket),std::move(lease)).ok);QVERIFY(controller.beginCapture({33,1},0).ok);
+  const float sample[]{.1f,.2f};InputDecision decision=InputDecision::Continue;
+  for(unsigned i=0;i<1025;++i)decision=driver.callback(driver.callbackContext,{sample,1,2,0,1.+i/48000.,1.01+i/48000.});
+  const auto afterPoll=controller.poll(100);std::ignore=controller.requestStop({33,1});std::ignore=controller.closeAfterQuiescence();
+  QCOMPARE(decision,InputDecision::Stop);QCOMPARE(afterPoll.input.fault,InputFault::ObservationOverflow);
+  QCOMPARE(afterPoll.input.observationsDropped,quint64(1));QCOMPARE(afterPoll.input.applicationDroppedFrames,quint64(0));
+  QCOMPARE(afterPoll.observations.observations,quint64(1024));QCOMPARE(afterPoll.observations.last.receivedFirstFrame,quint64(1023));
+ }
+ void producerOverlapsOwnerPollWithoutRacingRuntimeTeardown()
+ {
+  FakeInputDriver driver;RecordingInputController controller(driver);controller.enumerateInputs(0,64);
+  auto ticket=controller.arm(profile(),{34,1},1);auto lease=controller.createRuntimeLease(profile());
+  QVERIFY(controller.open(std::move(ticket.ticket),std::move(lease)).ok);QVERIFY(controller.beginCapture({34,1},0).ok);
+  std::atomic<std::uint64_t> consumed{0};std::atomic_bool done{false},abort{false};std::atomic<unsigned> stopped{0};
+  std::thread producer([&]{const float samples[]{.1f,.2f};for(unsigned i=0;i<20000 && !abort.load();++i){
+   while(i>=consumed.load(std::memory_order_acquire)+512 && !abort.load())std::this_thread::yield();
+   if(abort.load())break;const auto time=1.+i/48000.;
+   if(driver.callback(driver.callbackContext,{samples,1,2,0,time,time+.01})==InputDecision::Stop){++stopped;break;}}
+   done.store(true,std::memory_order_release);});
+  QElapsedTimer deadline;deadline.start();while(!done.load(std::memory_order_acquire) && deadline.elapsed()<3000){
+   consumed.store(controller.poll(100).observations.observations,std::memory_order_release);std::this_thread::yield();}
+  abort.store(true);producer.join();std::ignore=controller.requestStop({34,1});std::ignore=controller.closeAfterQuiescence();
+  const auto final=controller.snapshot();QCOMPARE(stopped.load(),0u);QCOMPARE(final.input.fault,InputFault::None);
+  QCOMPARE(final.observations.observations,quint64(20000));QCOMPARE(final.observations.last.receivedFirstFrame,quint64(19999));
+  QCOMPARE(final.observations.frameDiscontinuities,quint64(0));QCOMPARE(final.input.observationsDropped,quint64(0));
+ }
+ void observationIdentityFollowsTheAdmittedTicketRatherThanLaterPreparation()
+ {
+  FakeInputDriver driver;RecordingInputController controller(driver);controller.enumerateInputs(0,64);
+  auto admitted=controller.arm(profile(),{35,1},1);auto later=controller.arm(profile(),{35,2},1);QVERIFY(later.ok);
+  auto lease=controller.createRuntimeLease(profile());QVERIFY(controller.open(std::move(admitted.ticket),std::move(lease)).ok);
+  driver.deliverOnStart=true;QVERIFY(controller.beginCapture({35,1},0).ok);
+  std::ignore=controller.requestStop({35,1});std::ignore=controller.closeAfterQuiescence();const auto s=controller.snapshot();
+  QCOMPARE(s.observations.epoch.sessionRevision,s.input.epoch.sessionRevision);QCOMPARE(s.observations.epoch.sessionRevision,quint64(1));
+ }
  void constructionDoesNotInitializeOrEnumerateDevices()
  {
   FakeInputDriver driver;RecordingInputController controller(driver);

@@ -58,12 +58,25 @@ bool RecordingTakeReceipt::append(const RecordingControllerSnapshot& input,const
   {"intentionally_unrecorded",QString::number(capture.intentionallyUnrecordedFrames)},
   {"clipped",QString::number(written.clippedSamples)},{"invalid",QString::number(capture.invalidSamples)},
   {"hardware_lost",QString::number(capture.hardwareLostFrames)},{"hardware_loss_known",capture.hardwareLossCountKnown},
-  {"input_fault",int(capture.fault)},{"writer_fault",int(written.fault)},{"timestamp_quality",int(capture.timestampQuality)},
+  {"observations_dropped",QString::number(capture.observationsDropped)},{"input_fault",int(capture.fault)},{"writer_fault",int(written.fault)},{"timestamp_quality",int(capture.timestampQuality)},
   {"stop_reason",int(capture.stopReason)}};
+ const auto& s=input.observations;
+ const auto observation=[](const InputObservation& o,bool present){
+  return QJsonObject{{"first_frame",QString::number(o.receivedFirstFrame)},{"frames",int(o.frames)},
+   {"adc_seconds",present && std::isfinite(o.adcFirstSeconds)?QJsonValue(o.adcFirstSeconds):QJsonValue{}},
+   {"current_seconds",present && std::isfinite(o.currentFirstSeconds)?QJsonValue(o.currentFirstSeconds):QJsonValue{}}};
+ };
+ QJsonObject timing{{"project_generation",QString::number(s.epoch.projectGeneration)},
+  {"session_revision",QString::number(s.epoch.sessionRevision)},{"blocks",QString::number(s.observations)},
+  {"received_frames",QString::number(s.receivedFrames)},{"frame_discontinuities",QString::number(s.frameDiscontinuities)},
+  {"unavailable_timestamps",QString::number(s.unavailableTimestamps)},{"clock_regressions",QString::number(s.clockRegressions)},
+  {"adc_interval_discontinuities",QString::number(s.adcIntervalDiscontinuities)},{"host_status_blocks",QString::number(s.hostStatusBlocks)},
+  {"host_flags",int(s.hostFlags)},{"quality",int(s.quality)},{"first",observation(s.first,s.observations!=0)},
+  {"last",observation(s.last,s.observations!=0)},{"calibrated",false},{"drift_measured",false}};
  QJsonObject record{{"schema",1},{"project_id",m_take.projectId},{"take_id",m_take.takeId},
   {"event",released?"closed":"retained"},{"lifecycle_closed",released},{"lifecycle_verified",verified},
   {"audio_complete",complete},{"wav_sha256",QString::fromLatin1(written.sourceSha256.toHex())},
-  {"profile",profile},{"counts",counts},{"lifecycle",stages},{"api_results",apiResults},{"first_callback_seen",input.firstCallbackSeen},
+  {"profile",profile},{"counts",counts},{"observations",timing},{"lifecycle",stages},{"api_results",apiResults},{"first_callback_seen",input.firstCallbackSeen},
   {"driver_initialized",input.driverInitialized},{"callbacks_in_flight",int(input.callbacksInFlight)},
   {"failed_stage",QString::fromLatin1(recordingInputStageName(d.failedStage))},
   {"error_code",bounded(input.errorCode,96)},{"error_text",bounded(d.description,160)}};

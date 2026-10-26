@@ -53,6 +53,7 @@ struct InputSnapshot
 class RecordingInputRuntime
 {
 public:
+ static constexpr std::size_t ObservationCapacity=1024;
  RecordingInputRuntime(const InputProfile&,RecordingRing&) noexcept;
  bool enableCapture(InputEpoch) noexcept;
  InputDecision process(const InputBlock&) noexcept;
@@ -64,7 +65,7 @@ private:
  RecordingRing& m_ring;
  const bool m_profileReady;
  std::array<float,RecordingRing::MaximumCallback> m_monoScratch{};
- std::array<InputObservation,1024> m_observations{};
+ std::array<InputObservation,ObservationCapacity> m_observations{};
  alignas(64) std::atomic<std::uint64_t> m_observationRead{0},m_observationWrite{0};
  std::atomic<std::uint64_t> m_receivedFrames{0},m_acceptedFrames{0},m_applicationDroppedFrames{0};
  std::atomic<std::uint64_t> m_intentionallyUnrecordedFrames{0},m_invalidSamples{0},m_observationsDropped{0},m_hardwareLostFrames{0};

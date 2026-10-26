@@ -13,6 +13,7 @@
 #include <QTimer>
 #include <QUuid>
 #include <limits>
+#include <algorithm>
 namespace lmms::recording {
 namespace {
 QString stateName(RecordingHostState state)
@@ -160,10 +161,16 @@ void RecordingQualificationView::pollHost()
  const auto status=m_host.poll(recordingServiceMilliseconds(m_clock));
  const auto receiptText=status.receiptCode.isEmpty()?QString{}:
   tr("Lifecycle receipt: %1 (%2 records)\n").arg(status.receiptCode).arg(status.receiptRecords);
- const auto diagnosticText=(receiptText+status.input.diagnostic.localSummary()).left(2048);
+ const auto& observations=status.input.observations;
+ const auto timingText=tr("Timing observations %1; observations dropped %2; frame gaps %3; ADC interval discontinuities %4; clock regressions %5; unavailable timestamps %6; host-status blocks %7\n")
+  .arg(qulonglong(observations.observations)).arg(qulonglong(status.input.input.observationsDropped))
+  .arg(qulonglong(observations.frameDiscontinuities)).arg(qulonglong(observations.adcIntervalDiscontinuities))
+  .arg(qulonglong(observations.clockRegressions)).arg(qulonglong(observations.unavailableTimestamps)).arg(qulonglong(observations.hostStatusBlocks));
+ const auto diagnosticText=(receiptText+timingText+status.input.diagnostic.localSummary()).left(2048);
  if(m_diagnostics->toPlainText()!=diagnosticText)m_diagnostics->setPlainText(diagnosticText);
- const auto quality=timestampQualityName(status.input.input.timestampQuality);
+ const auto quality=timestampQualityName(observations.observations?std::max(status.input.input.timestampQuality,observations.quality):status.input.input.timestampQuality);
  auto error=status.errorCode;if(error.isEmpty())error=status.input.errorCode;
+ if(error.isEmpty() && status.input.input.fault==InputFault::ObservationOverflow)error=tr("timestamp observation queue overflow; take incomplete");
  if(error.isEmpty() && status.writer.fault!=WriterFault::None)error=writerFaultName(status.writer.fault);
  m_statusLabel->setText((error.isEmpty()?stateName(status.state):error)
   +tr(" · input monitoring off · timeline placement manual and uncalibrated · timestamp quality %1 · drift unmeasured").arg(quality));
