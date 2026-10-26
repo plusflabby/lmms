@@ -214,6 +214,13 @@ RecordingTicketResult RecordingInputController::arm(const SelectedInputProfile& 
  m_impl->diagnostic.maxInputChannels=device->maxInputChannels;m_impl->lastInput={};m_impl->observations={};m_impl->observations.epoch=epoch;m_impl->firstCallbackSeen.store(false,std::memory_order_release);
  return {"ok",LocalInputTicket(selection,epoch,m_impl->processCookie,rootRevision),true};
 }
+bool RecordingInputController::ownsLocalTicket(const LocalInputTicket& ticket) const noexcept
+{
+ if(!ticket.m_valid || !m_impl->initialized || m_impl->state!=RecordingControllerState::Closed || ticket.m_processCookie!=m_impl->processCookie
+  || !ticket.m_epoch || !ticket.m_rootRevision || !validProfile(ticket.m_selection))return false;
+ const auto found=std::find_if(m_impl->knownDevices.begin(),m_impl->knownDevices.end(),[&](const auto& d){return d.id==ticket.m_selection.deviceId;});
+ return found!=m_impl->knownDevices.end() && found->hostApiName==ticket.m_selection.hostApiName && ticket.m_selection.input.inputChannels<=found->maxInputChannels;
+}
 InputRuntimeLease RecordingInputController::createRuntimeLease(const SelectedInputProfile& selection)
 {
  InputRuntimeLease lease;if(!validProfile(selection))return lease;

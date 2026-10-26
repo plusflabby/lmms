@@ -2,6 +2,7 @@
 #include <QDir>
 #include <QFileInfo>
 #include <QThread>
+#include <QUuid>
 #include <limits>
 #include <utility>
 namespace lmms::recording {
@@ -18,7 +19,9 @@ struct RecordingServiceHost::Impl
  std::optional<LocalInputTicket> ticket;
  SelectedInputProfile selected;
  InputEpoch epoch;
- std::uint64_t rootRevision=0;
+ std::uint64_t rootRevision=0,localTicketRevision=0;
+ InputEpoch latestLocalTicket;
+ QString authorizationId;
  std::uint64_t lastNowMilliseconds=0;
  InputRuntimeLease runtimeLease;
  std::shared_ptr<void> retainedRuntime;
@@ -110,6 +113,29 @@ RecordingHostResult RecordingServiceHost::arm(const SelectedInputProfile& profil
  m_impl->lastWriter={};m_impl->receiptCode.clear();m_impl->receiptRecords=0;
  m_impl->state=RecordingHostState::Armed;return {true,"armed",m_impl->state};
 }
+RecordingTicketResult RecordingServiceHost::localArmTicket(const SelectedInputProfile& profile,std::uint64_t generation)
+{
+ m_impl->assertOwner();if(!m_impl->library || m_impl->project.id.isEmpty())return {"library_required",{},false};
+ if(m_impl->state!=RecordingHostState::Closed || m_impl->ticket || m_impl->writer)return {"input_busy",{},false};
+ if(!generation || m_impl->localTicketRevision==std::numeric_limits<std::uint64_t>::max())return {"resource_limit",{},false};
+ m_impl->latestLocalTicket={generation,++m_impl->localTicketRevision};
+ return m_impl->controller.arm(profile,m_impl->latestLocalTicket,m_impl->rootRevision);
+}
+RecordingHostResult RecordingServiceHost::adoptLocalArm(LocalInputTicket&& ticket)
+{
+ m_impl->assertOwner();if(m_impl->state!=RecordingHostState::Closed || m_impl->ticket || m_impl->writer)return {false,"input_busy",m_impl->state};
+ if(!m_impl->library || ticket.m_rootRevision!=m_impl->rootRevision || ticket.m_epoch!=m_impl->latestLocalTicket
+  || !m_impl->controller.ownsLocalTicket(ticket))return {false,"invalid_local_ticket",m_impl->state};
+ m_impl->selected=ticket.m_selection;m_impl->epoch=ticket.m_epoch;m_impl->ticket.emplace(std::move(ticket));ticket.m_valid=false;
+ m_impl->authorizationId=QUuid::createUuid().toString(QUuid::WithoutBraces);m_impl->lastWriter={};m_impl->receiptCode.clear();m_impl->receiptRecords=0;
+ m_impl->state=RecordingHostState::Armed;return {true,"armed",m_impl->state};
+}
+RecordingLocalArmSnapshot RecordingServiceHost::localArmSnapshot() const noexcept
+{
+ return {m_impl->epoch,m_impl->authorizationId,m_impl->rootRevision,m_impl->selected.input.maxTakeFrames,m_impl->selected.input.sampleRate,
+  m_impl->state==RecordingHostState::Armed && m_impl->ticket.has_value()};
+}
+RecordingHostSnapshot RecordingServiceHost::snapshot() const noexcept{return m_impl->snapshot();}
 RecordingHostResult RecordingServiceHost::startTake(TakeDescriptor descriptor,std::unique_ptr<RecordingWriterSink> sink,std::uint64_t now,
  std::unique_ptr<RecordingReceiptSink> receipt)
 {
@@ -128,6 +154,11 @@ RecordingHostResult RecordingServiceHost::startTake(TakeDescriptor descriptor,st
  m_impl->startRequested=true;m_impl->inputClosed=false;m_impl->shutdownRequested=false;m_impl->errorCode.clear();
  m_impl->lastNowMilliseconds=now;m_impl->state=RecordingHostState::WriterStarting;return {true,"writer_starting",m_impl->state};
 }
+bool RecordingServiceHost::noteSessionFacts(InputEpoch epoch,const TakeSessionFacts& facts) noexcept
+{
+ m_impl->assertOwner();if(epoch!=m_impl->epoch || !m_impl->receipt)return false;
+ m_impl->receipt->noteSessionFacts(facts);return true;
+}
 RecordingHostResult RecordingServiceHost::requestStop(InputEpoch epoch)
 {
  m_impl->assertOwner();if(epoch!=m_impl->epoch || !epoch)return {false,"stale_epoch",m_impl->state};
@@ -145,7 +176,7 @@ RecordingHostResult RecordingServiceHost::requestStop(InputEpoch epoch)
 }
 RecordingHostResult RecordingServiceHost::disarm()
 {
- m_impl->assertOwner();m_impl->ticket.reset();m_impl->startRequested=false;
+ m_impl->assertOwner();m_impl->ticket.reset();m_impl->authorizationId.clear();m_impl->startRequested=false;
  if(m_impl->writer)
  {
   m_impl->markStop(RecordingStopAction::Disarm);
@@ -161,13 +192,13 @@ RecordingHostResult RecordingServiceHost::disarm()
 RecordingHostResult RecordingServiceHost::notifyAuthorizationChanged(std::uint64_t revision)
 {
  m_impl->assertOwner();if(revision==m_impl->rootRevision)return {true,"unchanged",m_impl->state};
- m_impl->rootRevision=revision;m_impl->ticket.reset();
+ m_impl->rootRevision=revision;m_impl->ticket.reset();m_impl->authorizationId.clear();
  if(m_impl->writer){m_impl->markStop(RecordingStopAction::ProjectChange);return requestStop(m_impl->epoch);}
  return disarm();
 }
 RecordingHostResult RecordingServiceHost::requestBackendChange()
 {
- m_impl->assertOwner();m_impl->ticket.reset();
+ m_impl->assertOwner();m_impl->ticket.reset();m_impl->authorizationId.clear();
  if(m_impl->writer){m_impl->markStop(RecordingStopAction::BackendChange);return requestStop(m_impl->epoch);}
  return disarm();
 }

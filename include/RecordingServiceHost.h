@@ -19,6 +19,14 @@ struct RecordingHostSnapshot
  QString receiptCode;
  int receiptRecords=0;
 };
+struct RecordingLocalArmSnapshot
+{
+ InputEpoch epoch;
+ QString authorizationId;
+ std::uint64_t rootRevision=0,maxRawFrames=0;
+ std::uint32_t sampleRate=0;
+ bool armed=false;
+};
 struct RecordingLibrarySelectionResult
 {
  QString code;
@@ -39,8 +47,13 @@ public:
  ProjectIdentity projectIdentity() const noexcept;
  std::uint64_t rootRevision() const noexcept;
  RecordingHostResult arm(const SelectedInputProfile&,InputEpoch,std::uint64_t rootRevision);
+ RecordingTicketResult localArmTicket(const SelectedInputProfile&,std::uint64_t projectGeneration);
+ RecordingHostResult adoptLocalArm(LocalInputTicket&&);
+ RecordingLocalArmSnapshot localArmSnapshot() const noexcept;
+ RecordingHostSnapshot snapshot() const noexcept;
  RecordingHostResult startTake(TakeDescriptor,std::unique_ptr<RecordingWriterSink>,std::uint64_t nowMilliseconds,
   std::unique_ptr<RecordingReceiptSink> receipt={});
+ bool noteSessionFacts(InputEpoch,const TakeSessionFacts&) noexcept;
  RecordingHostResult requestStop(InputEpoch);
  RecordingHostResult disarm();
  RecordingHostResult notifyAuthorizationChanged(std::uint64_t newRootRevision);

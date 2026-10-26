@@ -133,6 +133,8 @@ public:
  RecordingControllerResult closeAfterQuiescence();
  RecordingControllerSnapshot snapshot() const noexcept;
 private:
+ friend class RecordingServiceHost;
+ bool ownsLocalTicket(const LocalInputTicket&) const noexcept;
  struct Impl;
  std::unique_ptr<Impl> m_impl;
 };

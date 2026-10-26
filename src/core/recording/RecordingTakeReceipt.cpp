@@ -93,6 +93,14 @@ bool RecordingTakeReceipt::append(const RecordingControllerSnapshot& input,const
  // Raw host error text, opaque endpoint IDs, paths, labels and samples are never persisted.
  record["host_error_known"]=d.hasHostError;
  if(d.hasHostError){record["host_error_code"]=QString::number(d.hostErrorCode);record["host_api_type"]=d.hostApiType;}
+ if(m_take.session)
+ {
+  const auto& s=*m_take.session;
+  record["session"]=QJsonObject{{"target_tick",QString::number(s.targetTick)},{"preroll_origin_tick",QString::number(s.prerollOriginTick)},
+   {"native_tempo",s.tempo},{"native_numerator",s.numerator},{"native_denominator",s.denominator},
+   {"raw_ready_observed_ms",QString::number(s.rawReadyObservedMilliseconds)},{"frames_at_readiness",QString::number(s.framesAtReadiness)},
+   {"performance_reached",s.performanceReached},{"cancelled",s.cancelled},{"placement_quality","uncalibrated"},{"sample_accuracy_verified",false}};
+ }
  const auto key=QJsonDocument(record).toJson(QJsonDocument::Compact);
  if(key==m_previous){m_code="receipt_saved";return true;}
  if(m_records>=MaximumRecords){m_code="receipt_resource_limit";m_poisoned=true;return false;}

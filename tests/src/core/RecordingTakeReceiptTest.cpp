@@ -82,6 +82,16 @@ private slots:
  void failedWriteIsVisibleAndNeverAppendsAfterATornTail()
  {Storage store;store.fail=true;RecordingTakeReceipt r(take(),std::make_unique<Sink>(store));QVERIFY(!r.append(input(),writer(),true));
   QCOMPARE(r.code(),QString("receipt_write_failed"));store.fail=false;QVERIFY(!r.append(input(),writer(),true));QCOMPARE(store.calls,1);}
+ void sessionFactsStayWithinExistingReceiptBounds()
+ {
+  Storage store;auto s=input();auto d=take();d.session=TakeSessionFacts{2147483647,2147483000,18446744073709551615ULL,5760000,999,32,32,true,true};
+  s.diagnostic.hostApiName=QString(64,'h');s.diagnostic.deviceDescription=QString(96,'d');s.diagnostic.libraryVersion=QString(96,'v');
+  s.diagnostic.description=QString(160,'e');s.errorCode=QString(96,'e');s.diagnostic.hasHostError=true;s.diagnostic.hostErrorCode=2147483647;
+  RecordingTakeReceipt r(d,std::make_unique<Sink>(store));QVERIFY(r.append(s,writer(),true));
+  QVERIFY(store.bytes.size()<=RecordingTakeReceipt::MaximumRecordBytes);const auto obj=QJsonDocument::fromJson(store.bytes).object();
+  QCOMPARE(obj["session"].toObject()["raw_ready_observed_ms"].toString(),QString("18446744073709551615"));
+  QVERIFY(!store.bytes.contains("PRIVATE_PATH"));
+ }
  void invalidTakeIdentityCannotCreateDiagnosticEvidence()
  {Storage store;auto d=take();d.takeId="../outside";RecordingTakeReceipt r(d,std::make_unique<Sink>(store));
   QVERIFY(!r.append(input(),writer(),true));QCOMPARE(store.calls,0);}

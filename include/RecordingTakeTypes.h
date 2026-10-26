@@ -5,9 +5,18 @@
 #include <array>
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <QByteArray>
 class QIODevice;
 namespace lmms::recording {
+// Control-thread observations, deliberately separate from ADC/native clock claims.
+struct TakeSessionFacts
+{
+ std::int64_t targetTick=0,prerollOriginTick=0;
+ std::uint64_t rawReadyObservedMilliseconds=0,framesAtReadiness=0;
+ int tempo=0,numerator=0,denominator=0;
+ bool performanceReached=false,cancelled=false;
+};
 struct TakeDescriptor
 {
  QString projectId,takeId,label;
@@ -15,6 +24,7 @@ struct TakeDescriptor
  std::uint64_t projectGeneration=0,maxRawFrames=0;
  std::int64_t targetTick=0;
  std::uint32_t sampleRate=0,countInBars=0;
+ std::optional<TakeSessionFacts> session;
 };
 struct TakeProgress
 {

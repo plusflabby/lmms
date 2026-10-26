@@ -7,6 +7,8 @@ set(CMAKE_AUTOMOC ON)
 set(LMMS_TESTS
 	src/core/RecordingOutputQueueTest.cpp
 	src/core/RecordingSessionStateTest.cpp
+	src/core/RecordingSessionManagerTest.cpp
+	src/core/RecordingTransportControlTest.cpp
 	src/core/RecordingLibraryTest.cpp
 	src/core/RecordingRecoveryTest.cpp
 	src/core/RecordingProjectIdentityTest.cpp

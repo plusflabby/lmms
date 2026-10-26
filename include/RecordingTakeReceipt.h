@@ -20,6 +20,7 @@ public:
  RecordingTakeReceipt(TakeDescriptor,std::unique_ptr<RecordingReceiptSink>);
  bool append(const RecordingControllerSnapshot&,const WriterSnapshot&,bool lifecycleClosed,
   RecordingStopAction action=RecordingStopAction::None) noexcept;
+ void noteSessionFacts(const TakeSessionFacts& facts) noexcept {m_take.session=facts;}
  QString code() const {return m_code;}
  int recordCount() const noexcept{return m_records;}
 private:
