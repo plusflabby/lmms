@@ -35,6 +35,7 @@
 #include "MixerView.h"
 #include "MainWindow.h"
 #include "RecordingServiceHost.h"
+#include "RecordingServiceClock.h"
 #include "MicrotunerConfig.h"
 #include "PatternEditor.h"
 #include "PianoRoll.h"
@@ -157,7 +158,7 @@ GuiApplication::GuiApplication()
 	m_recordingServiceTimer->setInterval(20);
 	connect(m_recordingServiceTimer,&QTimer::timeout,this,[this]{
 		if(auto* host=Engine::recordingServiceHost();host && !host->quiescent())
-			host->poll(std::uint64_t(m_recordingServiceClock.elapsed()));
+			host->poll(recording::recordingServiceMilliseconds(m_recordingServiceClock));
 	});
 	m_recordingServiceTimer->start();
 

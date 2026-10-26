@@ -1,4 +1,5 @@
 #include "RecordingServiceHost.h"
+#include "RecordingServiceClock.h"
 #include <QtTest>
 #include <mutex>
 #include <tuple>
@@ -13,11 +14,12 @@ public:
  RecordingDriverResult openInputOnly(const SelectedInputProfile&,RecordingInputCallback cb,void* context) noexcept override
  {++opens;callback=cb;callbackContext=context;return {"ok",true};}
  RecordingDriverResult start() noexcept override
- {++starts;if(callback){const float sample[]{.2f};InputBlock block{sample,1,1,0,1.,1.};std::ignore=callback(callbackContext,block);}return {"ok",false};}
+ {++starts;if(callback && deliverOnStart){const float sample[]{.2f};InputBlock block{sample,1,1,0,1.,1.};std::ignore=callback(callbackContext,block);}return {"ok",false};}
  RecordingDriverResult stop() noexcept override{++stops;return stopResult;}
  RecordingDriverResult close() noexcept override{++closes;return {"ok",true};}
  RecordingDriverResult terminate() noexcept override{++terminates;return {"ok",true};}
  int initializes=0,enumerations=0,opens=0,starts=0,stops=0,closes=0,terminates=0;
+ bool deliverOnStart=true;
  RecordingDriverResult stopResult{"ok",true};RecordingInputCallback callback=nullptr;void* callbackContext=nullptr;
 };
 class MemorySink final : public RecordingWriterSink
@@ -41,6 +43,29 @@ class RecordingServiceHostTest : public QObject
 {
  Q_OBJECT
 private slots:
+ void laterPanelClockCannotCauseImmediateApplicationWatchdogTimeout()
+ {
+  QElapsedTimer applicationClock;applicationClock.start();QTest::qWait(2100);
+  QElapsedTimer panelClock;panelClock.start();
+  auto driver=std::make_unique<FakeDriver>();auto* observed=driver.get();observed->deliverOnStart=false;
+  RecordingServiceHost host(std::move(driver));QCOMPARE(host.enumerateInputs(0,64).code,QString("ok"));
+  QVERIFY(host.arm(profile(),{1,1},3).ok);
+  QVERIFY(host.startTake(descriptor(),std::make_unique<MemorySink>(),recordingServiceMilliseconds(panelClock)).ok);
+  QElapsedTimer deadline;deadline.start();
+  while(deadline.elapsed()<3000 && observed->starts==0)
+  {std::ignore=host.poll(recordingServiceMilliseconds(panelClock));QTest::qWait(1);}
+  const auto beforeCallback=host.poll(recordingServiceMilliseconds(applicationClock));
+  if(beforeCallback.input.state==RecordingControllerState::Capturing)
+  {const float sample[]{.2f};InputBlock block{sample,1,1,0,1.,1.};std::ignore=observed->callback(observed->callbackContext,block);}
+  const auto afterCallback=host.poll(recordingServiceMilliseconds(panelClock));
+  std::ignore=host.requestShutdown(recordingServiceMilliseconds(applicationClock));deadline.restart();
+  while(deadline.elapsed()<3000 && !host.quiescent())
+  {std::ignore=host.poll(recordingServiceMilliseconds(applicationClock));QTest::qWait(1);}
+  QVERIFY(host.quiescent());QCOMPARE(observed->starts,1);
+  QCOMPARE(beforeCallback.input.state,RecordingControllerState::Capturing);
+  QVERIFY(afterCallback.input.firstCallbackSeen);QCOMPARE(afterCallback.input.input.acceptedFrames,quint64(1));
+  QCOMPARE(observed->closes,1);QCOMPARE(observed->terminates,1);
+ }
  void hostConstructionAndUnarmedStartMakeNoDriverCalls()
  {
  auto driver=std::make_unique<FakeDriver>();auto* observed=driver.get();RecordingServiceHost host(std::move(driver));

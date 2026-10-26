@@ -1,4 +1,5 @@
 #include "RecordingQualificationView.h"
+#include "RecordingServiceClock.h"
 #include "Engine.h"
 #include "Song.h"
 #include <QComboBox>
@@ -141,7 +142,7 @@ void RecordingQualificationView::startTake()
  TakeDescriptor descriptor;descriptor.projectId=m_project.id;descriptor.takeId=identity.id;descriptor.label=identity.label;
  descriptor.epoch=m_epoch;descriptor.projectGeneration=m_epoch.projectGeneration;descriptor.maxRawFrames=std::uint64_t(rate)*120;
  descriptor.targetTick=0;descriptor.sampleRate=rate;
- const auto started=m_host.startTake(std::move(descriptor),std::move(created.sink),std::uint64_t(m_clock.elapsed()));
+ const auto started=m_host.startTake(std::move(descriptor),std::move(created.sink),recordingServiceMilliseconds(m_clock));
  if(!started.ok){m_statusLabel->setText(started.code);return;}
  m_localArm=false;m_statusLabel->setText(tr("Preparing writer; microphone opens only after the WAV header is ready."));m_pollTimer->start();updateControls();
 }
@@ -155,7 +156,7 @@ void RecordingQualificationView::disarmLocally()
 }
 void RecordingQualificationView::pollHost()
 {
- const auto status=m_host.poll(std::uint64_t(m_clock.elapsed()));
+ const auto status=m_host.poll(recordingServiceMilliseconds(m_clock));
  const auto diagnosticText=status.input.diagnostic.localSummary();
  if(m_diagnostics->toPlainText()!=diagnosticText)m_diagnostics->setPlainText(diagnosticText);
  const auto quality=timestampQualityName(status.input.input.timestampQuality);
