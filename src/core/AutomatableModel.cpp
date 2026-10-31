@@ -24,6 +24,7 @@
 
 #include "AutomatableModel.h"
 
+#include <QPointer>
 #include <QRegularExpression>
 
 #include "lmms_math.h"
@@ -295,6 +296,7 @@ void AutomatableModel::loadSettings( const QDomElement& element, const QString& 
 
 void AutomatableModel::setValue(const float value, const bool isAutomated)
 {
+	QPointer<AutomatableModel> self(this);
 	if (fittedValue(value) == m_value)
 	{
 		// TODO check why we need this signal, is there a better solution?
@@ -303,12 +305,19 @@ void AutomatableModel::setValue(const float value, const bool isAutomated)
 	}
 
 	if (!isAutomated) { addJournalCheckPoint(); }
+	if (!self) { return; }
 
+	// A direct observer can synchronously delete the owner of this model while
+	// dataChanged is emitted. Keep a guarded self reference across callbacks.
 	// set value for this and the other linked models
 	setValueInternal(value);
-	for (auto model = m_nextLink; model != this; model = model->m_nextLink)
+	if (!self) { return; }
+	for (QPointer<AutomatableModel> model = m_nextLink; model && model.data() != self.data();)
 	{
+		QPointer<AutomatableModel> next(model->m_nextLink);
 		model->setValueInternal(value);
+		if (!self) { return; }
+		model = next;
 	}
 }
 
