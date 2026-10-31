@@ -249,12 +249,18 @@ public:
 	AutomatedValueMap automatedValuesAt(TimePos time, int clipNum = -1) const override;
 
 	// file management
+	enum class ProjectSavePurpose
+	{
+		UserProject,
+		RecoverySnapshot
+	};
 	void createNewProject();
 	void createNewProjectFromTemplate( const QString & templ );
 	void loadProject( const QString & filename );
 	bool guiSaveProject();
 	bool guiSaveProjectAs(const QString & filename);
-	bool saveProjectFile(const QString & filename, bool withResources = false);
+	bool saveProjectFile(const QString & filename, bool withResources = false,
+		ProjectSavePurpose purpose = ProjectSavePurpose::UserProject);
 	recording::RecordingProjectIdentity& recordingProjectIdentity() {return m_recordingProjectIdentity;}
 
 	const QString & projectFileName() const

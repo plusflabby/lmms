@@ -930,7 +930,7 @@ void MainWindow::saveProjectAsDefaultTemplate()
 		}
 	}
 
-	Engine::getSong()->saveProjectFile( defaultTemplate );
+	Engine::getSong()->saveProjectFile(defaultTemplate, false, Song::ProjectSavePurpose::RecoverySnapshot);
 }
 
 
@@ -1472,7 +1472,8 @@ void MainWindow::autoSave()
 				"enablerunningautosave" ).toInt() ||
 			! Engine::getSong()->isPlaying() ) )
 	{
-		Engine::getSong()->saveProjectFile(ConfigManager::inst()->recoveryFile());
+		Engine::getSong()->saveProjectFile(ConfigManager::inst()->recoveryFile(), false,
+			Song::ProjectSavePurpose::RecoverySnapshot);
 		autoSaveTimerReset();  // Reset timer
 	}
 	else
