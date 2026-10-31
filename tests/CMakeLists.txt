@@ -9,6 +9,8 @@ set(LMMS_TESTS
 	src/core/RecordingSessionStateTest.cpp
 	src/core/RecordingSessionManagerTest.cpp
 	src/core/RecordingTransportControlTest.cpp
+	src/core/RecordingClipOffsetPlaybackTest.cpp
+	src/core/RecordingPlacementTest.cpp
 	src/core/RecordingLibraryTest.cpp
 	src/core/RecordingRecoveryTest.cpp
 	src/core/RecordingProjectIdentityTest.cpp

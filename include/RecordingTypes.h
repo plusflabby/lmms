@@ -58,6 +58,7 @@ public:
  ManualPlacementApproval()=default;
 private:
  friend class RecordingRecorderView;
+ friend class RecordingPlacement;
  QString takeId;
  quint64 expectedProjectGeneration=0,placementRevision=0;
  qint64 sourceInTicks=0,targetTick=0;
