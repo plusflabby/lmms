@@ -421,6 +421,9 @@ jobs:
         run: |
           cd build/tests
           ctest --output-on-failure -j2 -V
+      - name: Print CTest failure log
+        if: failure()
+        run: Get-Content build/tests/Testing/Temporary/LastTest.log
       - name: Package
         run: cmake --build build --target package
       - name: Upload artifacts
