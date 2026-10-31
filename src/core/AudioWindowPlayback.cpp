@@ -74,7 +74,8 @@ bool validSpan(const AudioSourceWindowV2& window,const SampleBuffer& buffer)
 	return w.phaseOriginFrame>=0 && w.phaseOriginFrame<=w.inFrame && w.inFrame<w.outFrame
 		&& w.outFrame<=window.referenceEndFrame && window.referenceEndFrame<=w.sourceFrameCount
 		&& w.sourceFrameCount<=INT_MAX && size_t(w.sourceFrameCount)==buffer.size()
-		&& w.sourceRate==buffer.sampleRate() && (w.sourceRate==44100 || w.sourceRate==48000)
+		&& (w.sourceRate==44100 || w.sourceRate==48000)
+		&& static_cast<sample_rate_t>(w.sourceRate)==buffer.sampleRate()
 		&& DEFAULT_BUFFER_SIZE==256 && (window.referenceEndFrame-w.phaseOriginFrame)%DEFAULT_BUFFER_SIZE!=1;
 }
 }
