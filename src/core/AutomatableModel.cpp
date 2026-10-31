@@ -38,6 +38,8 @@
 namespace lmms
 {
 
+template class TypedAutomatableModel<int>;
+
 long AutomatableModel::s_periodCounter = 0;
 
 
