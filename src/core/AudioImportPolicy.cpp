@@ -2,10 +2,12 @@
 #include "ConfigManager.h"
 #include "RecordingTakeTypes.h"
 #include "SampleBuffer.h"
+#include "SampleFrame.h"
 #include <QCoreApplication>
 #include <QThread>
 #include <QJsonDocument>
 #include <QJsonArray>
+#include <limits>
 #include <new>
 namespace lmms {
 namespace {
@@ -15,6 +17,19 @@ QStringList settings()
 	auto c = ConfigManager::inst();
 	return {c->value("aibridge", "audio_import_roots"), c->value("aibridge", "audio_import_max_file_bytes"),
 		c->value("aibridge", "audio_import_max_decoded_bytes")};
+}
+SampleDecoder::PcmWaveLimits recordedTakeLimits(std::uint32_t sampleRate, quint64 frames)
+{
+	if ((sampleRate != 44100 && sampleRate != 48000) || !frames
+		|| frames > quint64(sampleRate) * 120)
+		return {};
+	constexpr quint64 wavHeaderBytes = 44;
+	const auto maximum = std::numeric_limits<quint64>::max();
+	if (frames > (maximum - wavHeaderBytes) / sizeof(qint16)
+		|| frames > (maximum - SampleDecoder::PcmWaveScratchBytes) / sizeof(SampleFrame))
+		return {};
+	return {frames * sizeof(qint16) + wavHeaderBytes,
+		frames * sizeof(SampleFrame) + SampleDecoder::PcmWaveScratchBytes};
 }
 }
 AudioImportPolicy::AudioImportPolicy()
@@ -93,9 +108,10 @@ AudioImportPolicy::Result AudioImportPolicy::prepareRecordedTake(recording::Seal
 	if (!source.isCurrent() || facts.projectId.isEmpty() || facts.takeId.isEmpty() || facts.rawFrames == 0
 		|| (facts.sampleRate != 44100 && facts.sampleRate != 48000) || !facts.sourceIdentity.index || facts.sourceDigest.size() != 32)
 		return {QStringLiteral("recorded_source_unavailable"), {}};
-	const auto limits = SampleDecoder::configuredImportLimits();
-	if (!limits.maxFileBytes || !limits.maxDecodedBytes)
-		return {QStringLiteral("audio_resource_limits_not_configured"), {}};
+	// A sealed take has an unforgeable local-library capability and a validated 120-second frame cap.
+	// Bound its decode by that exact source length without changing generic audio-import budgets.
+	const auto limits = recordedTakeLimits(facts.sampleRate, facts.rawFrames);
+	if (!limits.maxFileBytes || !limits.maxDecodedBytes) return {QStringLiteral("source_too_large"), {}};
 	const auto decoded = SampleDecoder::decodePcmWave(source.readOnlySource(), limits);
 	if (!decoded.sample) return {decoded.code, {}};
 	if (decoded.info.channels != 1 || decoded.info.sampleRate != int(facts.sampleRate)

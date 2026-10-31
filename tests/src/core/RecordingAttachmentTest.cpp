@@ -548,7 +548,7 @@ private slots:
 		QCOMPARE(fileHash(takePath(fixture)), before);
 	}
 
-	void partialNativeFailureNotReportedAttached()
+	void recordedTakeAttachmentUsesRecordingLimitNotGenericImportBudget()
 	{
 		Fixture fixture;
 		QVERIFY(prepare(fixture));
@@ -558,10 +558,12 @@ private slots:
 		const auto tracks = Engine::getSong()->tracks().size();
 		const auto before = fileHash(takePath(fixture));
 		const auto result = fixture.attachment->attach(*fixture.source, *planValue, 1);
-		QVERIFY(!result.attached);
-		QCOMPARE(result.code, QStringLiteral("saved_unattached"));
-		QCOMPARE(result.cause, QStringLiteral("source_too_large"));
-		QCOMPARE(Engine::getSong()->tracks().size(), tracks);
+		QVERIFY2(result.attached, qPrintable(result.cause));
+		QCOMPARE(result.code, QStringLiteral("ok"));
+		QCOMPARE(Engine::getSong()->tracks().size(), tracks + 1);
+		auto* clip = findRecordedClip(Engine::getSong(), fixture.takeId);
+		QVERIFY(clip);
+		QCOMPARE(clip->authorizedSourceInfo()->frames, fixture.source->facts().rawFrames);
 		QCOMPARE(fileHash(takePath(fixture)), before);
 		QCOMPARE(ConfigManager::inst()->value("aibridge", m_settingNames[2]), QStringLiteral("4179"));
 	}

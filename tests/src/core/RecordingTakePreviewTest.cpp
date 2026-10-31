@@ -226,6 +226,45 @@ private slots:
 		QVERIFY(!preview.active());
 	}
 
+	void sealedTakePreviewUsesRecordingBoundWhenGenericImportLimitsAreUnset()
+	{
+		Fixture fixture;
+		auto opened = fixture.host.openSealedTake(fixture.project, fixture.takeId);
+		QVERIFY(opened.source);
+		const auto plan = fixture.planFor(*opened.source);
+		auto* config = ConfigManager::inst();
+		const auto oldFileBudget = config->value(QStringLiteral("aibridge"), QStringLiteral("audio_import_max_file_bytes"));
+		const auto oldDecodedBudget = config->value(QStringLiteral("aibridge"), QStringLiteral("audio_import_max_decoded_bytes"));
+		config->setValue(QStringLiteral("aibridge"), QStringLiteral("audio_import_max_file_bytes"), QStringLiteral("0"));
+		config->setValue(QStringLiteral("aibridge"), QStringLiteral("audio_import_max_decoded_bytes"), QStringLiteral("0"));
+		QString previewCode;
+		QString stopCode;
+		bool active = false;
+		std::uint64_t previewFrames = 0;
+		SampleDecoder::PcmWaveLimits genericLimits;
+		{
+			RecordingTakePreview preview(*Engine::audioEngine());
+			previewCode = preview.play(std::move(*opened.source), plan);
+			active = preview.active();
+			previewFrames = preview.waveform().frameCount;
+			genericLimits = SampleDecoder::configuredImportLimits();
+			if (active) stopCode = preview.stop();
+		}
+		if (oldFileBudget.isEmpty()) config->deleteValue(QStringLiteral("aibridge"), QStringLiteral("audio_import_max_file_bytes"));
+		else config->setValue(QStringLiteral("aibridge"), QStringLiteral("audio_import_max_file_bytes"), oldFileBudget);
+		if (oldDecodedBudget.isEmpty()) config->deleteValue(QStringLiteral("aibridge"), QStringLiteral("audio_import_max_decoded_bytes"));
+		else config->setValue(QStringLiteral("aibridge"), QStringLiteral("audio_import_max_decoded_bytes"), oldDecodedBudget);
+		AudioImportPolicy::configured().refresh();
+		QCOMPARE(previewCode, QStringLiteral("ok"));
+		QVERIFY(active);
+		QCOMPARE(previewFrames, std::uint64_t(7000));
+		QCOMPARE(stopCode, QStringLiteral("stopped"));
+		QCOMPARE(genericLimits.maxFileBytes, quint64(0));
+		QCOMPARE(genericLimits.maxDecodedBytes, quint64(0));
+		QCOMPARE(fixture.driver->opens, 0);
+		QCOMPARE(sha256(fixture.audioPath), fixture.originalHash);
+	}
+
 	void previewOwnerRetiresOnGui()
 	{
 		Fixture fixture;

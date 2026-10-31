@@ -12,6 +12,8 @@
 #include <QTemporaryDir>
 #include <QDomDocument>
 #include <QFile>
+#include <QJsonArray>
+#include <QJsonDocument>
 #include <QCryptographicHash>
 #include <QUuid>
 #include <QElapsedTimer>
@@ -362,7 +364,7 @@ private slots:
 		QCOMPARE(after.input.state, RecordingControllerState::Closed);
 	}
 
-	void decodeBudgetNotSilentlyRaised()
+	void recordedTakeLimitDoesNotChangeGenericImportBudget()
 	{
 		auto* directory = root();
 		QVERIFY(directory);
@@ -373,13 +375,27 @@ private slots:
 		QVERIFY(writeCompleteTake(*approved.library, project, takeId));
 		auto opened = approved.library->openSealedTake(project, takeId);
 		QCOMPARE(opened.code, QStringLiteral("ok"));
+		const auto sourcePath = directory->path() + QLatin1Char('/') + project.id + QStringLiteral("/take-") + takeId + QStringLiteral(".wav");
+		auto* config = ConfigManager::inst();
+		const QString oldRoots = config->value("aibridge", m_settingNames[0]);
 		const QString oldBudget = ConfigManager::inst()->value("aibridge", m_settingNames[2]);
-		ConfigManager::inst()->setValue("aibridge", m_settingNames[2], QStringLiteral("4179"));
-		const auto result = AudioImportPolicy::configured().prepareRecordedTake(std::move(*opened.source));
-		QCOMPARE(result.code, QStringLiteral("source_too_large"));
-		QVERIFY(!result.audio);
-		QCOMPARE(ConfigManager::inst()->value("aibridge", m_settingNames[2]), QStringLiteral("4179"));
-		ConfigManager::inst()->setValue("aibridge", m_settingNames[2], oldBudget);
+		config->setValue("aibridge", m_settingNames[2], QStringLiteral("4179"));
+		auto result = AudioImportPolicy::configured().prepareRecordedTake(std::move(*opened.source));
+		QCOMPARE(result.code, QStringLiteral("ok"));
+		QVERIFY(result.audio);
+		QCOMPARE(result.audio->info().frames, quint64(4));
+		QCOMPARE(config->value("aibridge", m_settingNames[2]), QStringLiteral("4179"));
+		result.audio.reset();
+
+		const auto roots = QString::fromUtf8(QJsonDocument(QJsonArray{directory->path()}).toJson(QJsonDocument::Compact));
+		config->setValue("aibridge", m_settingNames[0], roots);
+		const auto genericImport = AudioImportPolicy::configured().prepare(sourcePath);
+		QCOMPARE(genericImport.code, QStringLiteral("source_too_large"));
+		QVERIFY(!genericImport.audio);
+		QCOMPARE(config->value("aibridge", m_settingNames[2]), QStringLiteral("4179"));
+		config->setValue("aibridge", m_settingNames[0], oldRoots);
+		config->setValue("aibridge", m_settingNames[2], oldBudget);
+		AudioImportPolicy::configured().refresh();
 	}
 };
 
