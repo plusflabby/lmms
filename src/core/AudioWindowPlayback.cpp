@@ -18,9 +18,11 @@
 namespace lmms {
 bool audioWindowReferenceProfileMatches(qint32 capacity,const QByteArray& digest)
 {
-	// Initial qualified Windows runtime only. Other builds require independent
-	// qualification, not automatic approval because they reuse a version string.
-	return capacity==256 && digest==QByteArray::fromHex("4f7f9b2ecea84bb8f5b27c8f36e85e8a100663c745ac25e82a512f485b663ac7");
+	// Only known Windows runtime images are admitted to the behavior probe below.
+	// Other builds require their own digest and behavior proof, even if the version matches.
+	return capacity==256 &&
+		(digest==QByteArray::fromHex("4f7f9b2ecea84bb8f5b27c8f36e85e8a100663c745ac25e82a512f485b663ac7")
+			|| digest==QByteArray::fromHex("55db2de7aece1fc3f5d6a001e1a824b83dd650fdd0f5d45078cb0f47dceb3881"));
 }
 namespace {
 bool qualifiedLibraryImage()

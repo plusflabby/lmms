@@ -95,7 +95,10 @@ private slots:
     {
         using namespace lmms;
         const auto digest=QByteArray::fromHex("4f7f9b2ecea84bb8f5b27c8f36e85e8a100663c745ac25e82a512f485b663ac7");
+        const auto msvcDigest=QByteArray::fromHex("55db2de7aece1fc3f5d6a001e1a824b83dd650fdd0f5d45078cb0f47dceb3881");
         QVERIFY(audioWindowReferenceProfileMatches(256,digest));
+        QVERIFY(audioWindowReferenceProfileMatches(256,msvcDigest));
+        QVERIFY(!audioWindowReferenceProfileMatches(128,msvcDigest));
         QVERIFY(!audioWindowReferenceProfileMatches(128,digest));
         QVERIFY(!audioWindowReferenceProfileMatches(256,QByteArray(32,'x')));
         QVERIFY(!audioWindowReferenceProfileMatches(256,{}));
