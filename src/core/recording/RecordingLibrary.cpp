@@ -94,16 +94,12 @@ struct OwnedNewFile::State
  quint64 written=0;
 };
 namespace {
+#ifdef Q_OS_WIN
 bool authorized(const std::shared_ptr<RecordingLibrary::RootState>& root)
 {
-#ifdef Q_OS_WIN
  return root && !root->revoked.load(std::memory_order_acquire) && !root->ancestors.empty()
   && ordinary(root->ancestors.back(),true,root->volume) && finalName(root->ancestors.back())==root->finalPath;
-#else
- return false;
-#endif
 }
-#ifdef Q_OS_WIN
 std::pair<QString,std::shared_ptr<ProjectPin>> projectPin(const std::shared_ptr<RecordingLibrary::RootState>& root,const ProjectIdentity& project,bool create=true)
 {
  if(const auto error=identityError(project);!error.isEmpty())return {error,{}};

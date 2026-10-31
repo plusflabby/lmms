@@ -429,6 +429,19 @@ jobs:
         if: ${{ failure() && steps.run_ctest.outcome == 'failure' }}
         shell: pwsh
         run: |
+          $sampleratePaths = @(
+            "build/vcpkg_installed/x64-windows/bin/samplerate.dll",
+            "build/vcpkg_installed/x64-windows/debug/bin/samplerate.dll",
+            "build/samplerate.dll",
+            "build/tests/samplerate.dll"
+          )
+          foreach ($path in $sampleratePaths) {
+            if (Test-Path -LiteralPath $path) {
+              $file = Get-Item -LiteralPath $path
+              $hash = Get-FileHash -LiteralPath $path -Algorithm SHA256
+              Write-Output "samplerate: $path bytes=$($file.Length) sha256=$($hash.Hash)"
+            }
+          }
           $failedTests = Get-Content build/tests/Testing/Temporary/LastTestsFailed.log | ForEach-Object {
             $parts = $_ -split ':', 2
             if ($parts.Length -eq 2) { $parts[1].Trim() }

@@ -47,7 +47,7 @@ bool hasOnlyKeys(const QJsonObject &object, const QSet<QString> &allowed)
 bool validPaging(const QJsonObject &parameters)
 {
 	if (!hasOnlyKeys(parameters, {QStringLiteral("offset"), QStringLiteral("limit")})) return false;
-	for (const auto key : {QStringLiteral("offset"), QStringLiteral("limit")})
+	for (const auto& key : {QStringLiteral("offset"), QStringLiteral("limit")})
 		if (parameters.contains(key) && (!isInteger(parameters.value(key)) || parameters.value(key).toInt() < 0 || parameters.value(key).toInt() > 256)) return false;
 	return true;
 }

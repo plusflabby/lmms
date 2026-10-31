@@ -27,6 +27,7 @@
 
 #include <QByteArray>
 
+#include <atomic>
 #include <memory>
 #include "Clip.h"
 #include "Sample.h"
@@ -122,7 +123,7 @@ private:
 	void refreshAudioWindowPlayback();
 	AudioWindowEligibility audioWindowEligibility() const;
 	std::atomic_bool m_loadingAudioWindow{false};
-	std::atomic<std::shared_ptr<const struct AudioWindowPlaybackView>> m_audioWindowView;
+	std::shared_ptr<const struct AudioWindowPlaybackView> m_audioWindowView;
 	void setSampleFileImpl(const QString& source, const QByteArray& expectedDigest, const QByteArray& expectedIdentity = {});
 	Sample m_sample;
 	// Preserve an intended file link when no file-backed buffer could be loaded.
