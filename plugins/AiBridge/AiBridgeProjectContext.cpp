@@ -3,11 +3,20 @@
 #include <algorithm>
 #include <tuple>
 #include <QApplication>
+#include <QCryptographicHash>
 #include <QDir>
+#include <QFile>
 #include <QFileInfo>
+#include <QDomDocument>
 #include <QRandomGenerator>
 #include <QUuid>
 #include <QThread>
+#ifdef Q_OS_WIN
+#include <windows.h>
+#include <io.h>
+#elif defined(Q_OS_UNIX)
+#include <sys/stat.h>
+#endif
 #include "Clip.h"
 #include "Engine.h"
 #include "GuiApplication.h"
@@ -35,6 +44,25 @@ namespace {
 bool qt() { return qApp && QThread::currentThread()==qApp->thread(); }
 int cap(int value) { return qBound(1,value,AiBridgeProjectContext::MaxPageSize); }
 QString makeId(const QString& prefix,const QString& session,quint64 generation,quint64 number) { return QStringLiteral("%1:%2:%3:%4").arg(prefix,session).arg(generation).arg(number); }
+QString sourceFileId(QFile &file) {
+#ifdef Q_OS_WIN
+	BY_HANDLE_FILE_INFORMATION info{};
+	HANDLE handle = reinterpret_cast<HANDLE>(static_cast<qintptr>(file.handle()));
+	if (!GetFileInformationByHandle(handle, &info) && file.handle() >= 0)
+		handle = reinterpret_cast<HANDLE>(_get_osfhandle(static_cast<int>(file.handle())));
+	if (handle == INVALID_HANDLE_VALUE || !GetFileInformationByHandle(handle, &info)) return {};
+	return QStringLiteral("%1:%2:%3").arg(info.dwVolumeSerialNumber, 8, 16, QLatin1Char('0'))
+		.arg(info.nFileIndexHigh, 8, 16, QLatin1Char('0')).arg(info.nFileIndexLow, 8, 16, QLatin1Char('0'));
+#elif defined(Q_OS_UNIX)
+	struct stat info{};
+	if (file.handle() < 0 || ::fstat(file.handle(), &info) != 0) return {};
+	return QStringLiteral("%1:%2").arg(static_cast<qulonglong>(info.st_dev), 0, 16)
+		.arg(static_cast<qulonglong>(info.st_ino), 0, 16);
+#else
+	Q_UNUSED(file)
+	return {};
+#endif
+}
 AiBridgeMutationState mutationState(const MidiClip *midi) {
 	AiBridgeMutationState state;
 	state.clip_length_ticks = midi->length().getTicks();
@@ -65,6 +93,48 @@ void AiBridgeProjectContext::ensureLifecycleHook() const {
 }
 void AiBridgeProjectContext::invalidate() const { if(!qt()) return; for(auto& e:s_tracks)e.generation=0; for(auto& e:s_clips)e.generation=0; ++s_generation; }
 quint64 AiBridgeProjectContext::projectGeneration() const { return s_generation; }
+QString AiBridgeProjectContext::projectDocumentHash() const {
+	auto *song = Engine::getSong();
+	return qt() && song ? QString::fromLatin1(song->projectDocumentHash()) : QString();
+}
+QString AiBridgeProjectContext::trackStateHash(Track *track) const {
+	if (!qt() || !track) return {};
+	QDomDocument document;
+	auto root = document.createElement(QStringLiteral("target"));
+	document.appendChild(root);
+	track->saveState(document, root);
+	return QString::fromLatin1(QCryptographicHash::hash(document.toByteArray(-1), QCryptographicHash::Sha256).toHex());
+}
+QString AiBridgeProjectContext::clipStateHash(Clip *clip) const {
+	if (!qt() || !clip) return {};
+	QDomDocument document;
+	auto root = document.createElement(QStringLiteral("target"));
+	document.appendChild(root);
+	clip->saveState(document, root);
+	return QString::fromLatin1(QCryptographicHash::hash(document.toByteArray(-1), QCryptographicHash::Sha256).toHex());
+}
+bool AiBridgeProjectContext::loadedSourceMatches() const {
+	if (!qt()) return false;
+	auto *song = Engine::getSong();
+	if (!song) return false;
+	const auto path = song->projectFileName();
+	if (path.isEmpty()) return true;
+	const auto expectedHash = song->projectSourceSha256();
+	const auto expectedFileId = song->projectSourceFileId();
+	if (expectedHash.size() != 64 || expectedFileId.isEmpty()) return false;
+	QFile file(path);
+	if (!file.open(QIODevice::ReadOnly)) return false;
+	const auto openedFileId = sourceFileId(file);
+	if (openedFileId.isEmpty() || openedFileId != expectedFileId) return false;
+	QCryptographicHash hash(QCryptographicHash::Sha256);
+	while (!file.atEnd()) {
+		const auto chunk = file.read(64 * 1024);
+		if (chunk.isEmpty() && file.error() != QFileDevice::NoError) return false;
+		hash.addData(chunk);
+	}
+	return file.error() == QFileDevice::NoError && sourceFileId(file) == openedFileId
+		&& hash.result().toHex() == expectedHash;
+}
 QJsonObject AiBridgeProjectContext::projectIdentity() const {
 	QJsonObject loaded;
 	auto *song = Engine::getSong();
@@ -80,7 +150,10 @@ QJsonObject AiBridgeProjectContext::projectIdentity() const {
 			const auto canonical = file.canonicalFilePath();
 			if (!canonical.isEmpty()) loaded.insert(QStringLiteral("canonical_path"), QDir::cleanPath(canonical));
 			if (!song->projectSourceSha256().isEmpty()) loaded.insert(QStringLiteral("sha256"), QString::fromLatin1(song->projectSourceSha256()));
+			if (!song->projectSourceFileId().isEmpty()) loaded.insert(QStringLiteral("file_id"), song->projectSourceFileId());
+#ifdef Q_OS_WIN
 			if (!song->projectSourceFileId().isEmpty()) loaded.insert(QStringLiteral("windows_file_id"), song->projectSourceFileId());
+#endif
 		}
 	}
 	return {{QStringLiteral("schema_version"), 1}, {QStringLiteral("availability"), QStringLiteral("unavailable")},
@@ -88,6 +161,7 @@ QJsonObject AiBridgeProjectContext::projectIdentity() const {
 		{QStringLiteral("project_load_generation"), QString::number(s_generation)},
 		{QStringLiteral("identity_revision"), QString::number(s_identityRevision)},
 		{QStringLiteral("document_state"), state}, {QStringLiteral("dirty"), dirty},
+		{QStringLiteral("document_state_hash"), projectDocumentHash()},
 		{QStringLiteral("loaded_project"), loaded}};
 }
 QString AiBridgeProjectContext::trackId(Track* track) const {
@@ -114,10 +188,10 @@ Clip* AiBridgeProjectContext::resolveClip(const QString& value) const { reconcil
 QVector<AiBridgeTrackValue> AiBridgeProjectContext::tracks(AiBridgePage& page) const {
  QVector<AiBridgeTrackValue> result; if(!qt())return result; reconcile(); auto* song=Engine::getSong(); if(!song){page={};return result;}
  page.total=static_cast<int>(song->tracks().size()); page.limit=cap(page.limit); page.offset=qBound(0,page.offset,page.total); page.hasMore=page.offset+page.limit<page.total;
- for(int i=page.offset;i<qMin(page.total,page.offset+page.limit);++i){auto* track=song->tracks().at(i);AiBridgeTrackValue value{trackId(track),track->displayName(),typeName(track),i,track->numOfClips()};if(auto* instrument=dynamic_cast<InstrumentTrack*>(track)){value.hasVolume=true;value.volume=instrument->getVolume();}result.append(value);} return result;
+ for(int i=page.offset;i<qMin(page.total,page.offset+page.limit);++i){auto* track=song->tracks().at(i);AiBridgeTrackValue value{trackId(track),track->displayName(),typeName(track),i,track->numOfClips()};value.stateHash=trackStateHash(track);if(auto* instrument=dynamic_cast<InstrumentTrack*>(track)){value.hasVolume=true;value.volume=instrument->getVolume();}result.append(value);} return result;
 }
 AiBridgeTrackValue AiBridgeProjectContext::trackSnapshot(Track* track) const {
- AiBridgeTrackValue value; if(!qt() || !track) return value; const auto id=trackId(track); value.id=id; value.name=track->displayName(); value.type=typeName(track); const auto &tracks=track->trackContainer()->tracks(); const auto position=std::find(tracks.begin(),tracks.end(),track); value.index=position==tracks.end() ? -1 : static_cast<int>(std::distance(tracks.begin(),position)); value.clipCount=track->numOfClips(); if(auto* instrument=dynamic_cast<InstrumentTrack*>(track)){value.hasVolume=true;value.volume=instrument->getVolume();} return value;
+ AiBridgeTrackValue value; if(!qt() || !track) return value; const auto id=trackId(track); value.id=id; value.name=track->displayName(); value.type=typeName(track); const auto &tracks=track->trackContainer()->tracks(); const auto position=std::find(tracks.begin(),tracks.end(),track); value.index=position==tracks.end() ? -1 : static_cast<int>(std::distance(tracks.begin(),position)); value.clipCount=track->numOfClips(); value.stateHash=trackStateHash(track); if(auto* instrument=dynamic_cast<InstrumentTrack*>(track)){value.hasVolume=true;value.volume=instrument->getVolume();} return value;
 }
 QString AiBridgeProjectContext::idForClip(Clip* clip) const { return qt() && clip ? clipId(clip) : QString(); }
 QString AiBridgeProjectContext::idForTrack(Track* track) const { return qt() && track ? trackId(track) : QString(); }
@@ -135,10 +209,10 @@ QVector<AiBridgeInstrumentValue> AiBridgeProjectContext::instruments(AiBridgePag
 QVector<AiBridgeClipValue> AiBridgeProjectContext::clips(const QString& trackValue,AiBridgePage& page) const {
  QVector<AiBridgeClipValue> result; if(!qt())return result; auto* track=resolveTrack(trackValue); if(!track){page={};return result;}
  page.total=track->numOfClips();page.limit=cap(page.limit);page.offset=qBound(0,page.offset,page.total);page.hasMore=page.offset+page.limit<page.total;
- for(int i=page.offset;i<qMin(page.total,page.offset+page.limit);++i){auto* clip=track->getClip(i);AiBridgeClipValue value;value.id=clipId(clip);value.trackId=trackValue;value.name=clip->displayName();value.startTicks=clip->startPosition().getTicks();value.lengthTicks=clip->length().getTicks();if(auto* midi=dynamic_cast<MidiClip*>(clip)){value.type=QStringLiteral("midi");value.noteCount=midi->notes().size();value.currentInPianoRoll=gui::getGUI()&&gui::getGUI()->pianoRoll()&&gui::getGUI()->pianoRoll()->aiBridgeCurrentMidiClip()==midi;}else value.type=QStringLiteral("clip");result.append(value);}return result;
+ for(int i=page.offset;i<qMin(page.total,page.offset+page.limit);++i){auto* clip=track->getClip(i);AiBridgeClipValue value;value.id=clipId(clip);value.trackId=trackValue;value.name=clip->displayName();value.startTicks=clip->startPosition().getTicks();value.lengthTicks=clip->length().getTicks();value.stateHash=clipStateHash(clip);if(auto* midi=dynamic_cast<MidiClip*>(clip)){value.type=QStringLiteral("midi");value.noteCount=midi->notes().size();value.currentInPianoRoll=gui::getGUI()&&gui::getGUI()->pianoRoll()&&gui::getGUI()->pianoRoll()->aiBridgeCurrentMidiClip()==midi;}else value.type=QStringLiteral("clip");result.append(value);}return result;
 }
 AiBridgeClipValue AiBridgeProjectContext::clip(const QString& clipValue,AiBridgePage& page) const {
- AiBridgeClipValue result;if(!qt())return result;auto* clip=resolveClip(clipValue);if(!clip){page={};return result;}result.id=clipValue;if(clip->getTrack())result.trackId=trackId(clip->getTrack());result.name=clip->displayName();result.startTicks=clip->startPosition().getTicks();result.lengthTicks=clip->length().getTicks();if(auto* midi=dynamic_cast<MidiClip*>(clip))result.currentInPianoRoll=gui::getGUI()&&gui::getGUI()->pianoRoll()&&gui::getGUI()->pianoRoll()->aiBridgeCurrentMidiClip()==midi;
+ AiBridgeClipValue result;if(!qt())return result;auto* clip=resolveClip(clipValue);if(!clip){page={};return result;}result.id=clipValue;if(clip->getTrack())result.trackId=trackId(clip->getTrack());result.name=clip->displayName();result.startTicks=clip->startPosition().getTicks();result.lengthTicks=clip->length().getTicks();result.stateHash=clipStateHash(clip);if(auto* midi=dynamic_cast<MidiClip*>(clip))result.currentInPianoRoll=gui::getGUI()&&gui::getGUI()->pianoRoll()&&gui::getGUI()->pianoRoll()->aiBridgeCurrentMidiClip()==midi;
  if(auto* midi=dynamic_cast<MidiClip*>(clip)){result.type=QStringLiteral("midi");result.autoResize=midi->getAutoResize();result.noteCount=static_cast<int>(midi->notes().size());for(int i=0;i<static_cast<int>(midi->notes().size());++i){auto* note=midi->notes().at(static_cast<std::size_t>(i));AiBridgeNoteValue value{note->pos().getTicks(),note->length().getTicks(),note->key(),note->getVolume(),note->getPanning(),i,note->type()==Note::Type::Step?QStringLiteral("step"):QStringLiteral("regular")};result.notes.append(value);}std::stable_sort(result.notes.begin(),result.notes.end(),[](const auto&a,const auto&b){return std::tie(a.position,a.key,a.length,a.volume,a.panning,a.noteType,a.sourceOrder)<std::tie(b.position,b.key,b.length,b.volume,b.panning,b.noteType,b.sourceOrder);});result.contentHash=AiBridgeMutationTypes::contentHash(mutationState(midi));page.total=result.noteCount;page.limit=cap(page.limit);page.offset=qBound(0,page.offset,page.total);page.hasMore=page.offset+page.limit<page.total;result.notes=result.notes.mid(page.offset,page.limit);}else{result.type=QStringLiteral("clip");page={};}return result;
 }
 AiBridgeProjectValue AiBridgeProjectContext::projectStructure() const {

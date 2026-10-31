@@ -1,3 +1,7 @@
+#if defined(__linux__) && !defined(_GNU_SOURCE)
+#define _GNU_SOURCE
+#endif
+
 #include "AiBridgeIpcServer.h"
 #include "AiBridgeAudioWire.h"
 #include "AiBridgeVocalJobs.h"
@@ -10,14 +14,21 @@
 #include <QJsonObject>
 #include <QJsonArray>
 #include <QMetaObject>
+#include <QFile>
 #include <optional>
 
 #ifdef Q_OS_WIN
 #include <windows.h>
+#elif defined(Q_OS_LINUX)
+#include <sys/socket.h>
+#include <sys/types.h>
+#include <unistd.h>
 #endif
 
 
 #include "AiBridgeActions.h"
+#include "AiBridgeProjectContext.h"
+#include "AiBridgeProjectMutationGuard.h"
 #include "AiBridgeProjectActions.h"
 #include "AiBridgeWindowActions.h"
 #include "AiBridgeWindowContext.h"
@@ -41,6 +52,8 @@
 #include "AiBridgeMidiPlanner.h"
 #include "MidiClip.h"
 #include "Note.h"
+#include "Engine.h"
+#include "Song.h"
 
 namespace lmms
 {
@@ -55,18 +68,113 @@ QString processCreationTime(HANDLE process)
 	const quint64 value = (static_cast<quint64>(creation.dwHighDateTime) << 32) | creation.dwLowDateTime;
 	return QString::number(value);
 }
+#elif defined(Q_OS_LINUX)
+QString processCreationTime(qint64 processId)
+{
+	QFile statFile(QStringLiteral("/proc/%1/stat").arg(processId));
+	if (!statFile.open(QIODevice::ReadOnly)) return {};
+	const auto stat = statFile.readAll();
+	const auto commandEnd = stat.lastIndexOf(')');
+	if (commandEnd < 0) return {};
+	const auto fields = stat.mid(commandEnd + 1).simplified().split(' ');
+	if (fields.size() <= 19) return {};
+	bool ok = false;
+	const auto startTime = fields.at(19).toULongLong(&ok);
+	return ok ? QString::number(startTime) : QString();
+}
 #endif
+
+QJsonObject projectIdentityForClient(QLocalSocket *client)
+{
+	auto identity = AiBridgeProjectContext{}.projectIdentity();
+	identity.insert(QStringLiteral("server_pid"), static_cast<qint64>(QCoreApplication::applicationPid()));
+#ifdef Q_OS_WIN
+	const auto descriptor = client ? client->socketDescriptor() : -1;
+	if (descriptor != -1)
+	{
+		const auto pipeHandle = reinterpret_cast<HANDLE>(static_cast<qintptr>(descriptor));
+		DWORD serverPid = 0;
+		DWORD clientPid = 0;
+		DWORD clientPidAfter = 0;
+		const auto serverCreationTime = processCreationTime(GetCurrentProcess());
+		if (GetNamedPipeServerProcessId(pipeHandle, &serverPid)
+			&& serverPid == static_cast<DWORD>(QCoreApplication::applicationPid())
+			&& !serverCreationTime.isEmpty()
+			&& GetNamedPipeClientProcessId(pipeHandle, &clientPid))
+		{
+			HANDLE clientProcess = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION | SYNCHRONIZE, FALSE, clientPid);
+			if (clientProcess != nullptr)
+			{
+				const auto clientCreationTime = processCreationTime(clientProcess);
+				const bool clientAlive = GetProcessId(clientProcess) == clientPid
+					&& WaitForSingleObject(clientProcess, 0) == WAIT_TIMEOUT
+					&& GetNamedPipeClientProcessId(pipeHandle, &clientPidAfter)
+					&& clientPidAfter == clientPid;
+				if (clientAlive && !clientCreationTime.isEmpty())
+				{
+					identity.insert(QStringLiteral("client_pid"), static_cast<qint64>(clientPid));
+					identity.insert(QStringLiteral("server_creation_time"), serverCreationTime);
+					identity.insert(QStringLiteral("client_creation_time"), clientCreationTime);
+					identity.insert(QStringLiteral("availability"), QStringLiteral("available"));
+				}
+				CloseHandle(clientProcess);
+			}
+		}
+	}
+#elif defined(Q_OS_LINUX)
+	if (client && client->state() == QLocalSocket::ConnectedState)
+	{
+		const auto descriptor = static_cast<int>(client->socketDescriptor());
+		struct ucred peer{};
+		socklen_t peerLength = sizeof(peer);
+		if (::getsockopt(descriptor, SOL_SOCKET, SO_PEERCRED, &peer, &peerLength) == 0
+			&& peerLength == sizeof(peer) && peer.pid > 0)
+		{
+			const auto serverCreationTime = processCreationTime(QCoreApplication::applicationPid());
+			const auto clientCreationTime = processCreationTime(peer.pid);
+			struct ucred peerAfter{};
+			socklen_t peerAfterLength = sizeof(peerAfter);
+			const bool samePeer = ::getsockopt(descriptor, SOL_SOCKET, SO_PEERCRED, &peerAfter, &peerAfterLength) == 0
+				&& peerAfterLength == sizeof(peerAfter) && peerAfter.pid == peer.pid;
+			const auto clientCreationTimeAfter = samePeer ? processCreationTime(peerAfter.pid) : QString();
+			if (samePeer && !serverCreationTime.isEmpty() && !clientCreationTime.isEmpty()
+				&& clientCreationTimeAfter == clientCreationTime)
+			{
+				identity.insert(QStringLiteral("client_pid"), static_cast<qint64>(peer.pid));
+				identity.insert(QStringLiteral("server_creation_time"), serverCreationTime);
+				identity.insert(QStringLiteral("client_creation_time"), clientCreationTime);
+				identity.insert(QStringLiteral("availability"), QStringLiteral("available"));
+			}
+		}
+	}
+#endif
+	return identity;
+}
 
 QJsonObject trackJson(const AiBridgeTrackValue& v)
 {
-	QJsonObject o{{"id",v.id},{"name",v.name},{"type",v.type},{"index",v.index},{"clip_count",v.clipCount}};
+	QJsonObject o{{"id",v.id},{"name",v.name},{"type",v.type},{"index",v.index},{"clip_count",v.clipCount},{"state_hash",v.stateHash}};
 	if(v.hasVolume)o.insert("volume",v.volume);
 	return o;
 }
 QJsonObject clipJson(const AiBridgeClipValue& v)
 {
-	return {{"id",v.id},{"track_id",v.trackId},{"name",v.name},{"type",v.type},{"start_ticks",v.startTicks},{"length_ticks",v.lengthTicks},{"note_count",v.noteCount},{"current_in_piano_roll",v.currentInPianoRoll}};
+	return {{"id",v.id},{"track_id",v.trackId},{"name",v.name},{"type",v.type},{"start_ticks",v.startTicks},{"length_ticks",v.lengthTicks},{"note_count",v.noteCount},{"current_in_piano_roll",v.currentInPianoRoll},{"state_hash",v.stateHash}};
 }
+bool sameProcessAndLoadedProject(const QJsonObject &before, const QJsonObject &after)
+{
+	for (const auto &key : {QStringLiteral("server_pid"), QStringLiteral("client_pid"),
+		QStringLiteral("server_creation_time"), QStringLiteral("client_creation_time"),
+		QStringLiteral("process_session_id"), QStringLiteral("project_load_generation")})
+		if (before.value(key) != after.value(key)) return false;
+	return before.value(QStringLiteral("loaded_project")) == after.value(QStringLiteral("loaded_project"));
+}
+
+struct ResetFlag
+{
+	bool &flag;
+	~ResetFlag() { flag = false; }
+};
 QJsonObject pageJson(const AiBridgePage& p)
 {
 	return {{"total",p.total},{"offset",p.offset},{"limit",p.limit},{"has_more",p.hasMore}};
@@ -773,11 +881,211 @@ void AiBridgeIpcServer::readProbe()
 	}
 }
 
+AiBridgeProtocolResponse AiBridgeIpcServer::executeGuardedMutation(const AiBridgeProtocolRequest &request)
+{
+	const auto fail = [&request](const QString &code, const QString &message)
+	{
+		return AiBridgeProtocolResponse{2, request.requestId, false, code, message};
+	};
+	const auto failWithData = [&request](const QString &code, const QString &message, const QJsonObject &data)
+	{
+		return AiBridgeProtocolResponse{2, request.requestId, false, code, message, data};
+	};
+	if (m_guardedMutationInProgress)
+		return fail(QStringLiteral("project_busy"), QStringLiteral("A guarded mutation is already executing"));
+	m_guardedMutationInProgress = true;
+	const ResetFlag reset{m_guardedMutationInProgress};
+
+	const auto &envelope = request.parameters;
+	const auto expectedIdentity = envelope.value(QStringLiteral("expected_project_identity")).toObject();
+	const auto operation = envelope.value(QStringLiteral("operation")).toString();
+	const auto parameters = envelope.value(QStringLiteral("parameters")).toObject();
+	const auto target = envelope.value(QStringLiteral("expected_target")).toObject();
+	AiBridgeProjectContext context;
+	const auto beforeIdentity = projectIdentityForClient(m_client.data());
+	const auto identityCheck = AiBridgeProjectMutationGuard::compareIdentity(expectedIdentity, beforeIdentity);
+	if (!identityCheck.success)
+		return fail(identityCheck.code, QStringLiteral("Guarded project identity precondition failed"));
+	if (!context.loadedSourceMatches())
+		return fail(QStringLiteral("loaded_source_changed"), QStringLiteral("The loaded project source changed or cannot be verified"));
+	auto *song = Engine::getSong();
+	if (!song) return fail(QStringLiteral("no_project"), QStringLiteral("No project is open"));
+	if (song->isPlaying() || song->isRecording())
+		return fail(QStringLiteral("project_busy"), QStringLiteral("Guarded mutations require stopped transport"));
+
+	QString targetKind;
+	QString targetId;
+	QString targetHash;
+	if (operation == QStringLiteral("set_tempo"))
+	{
+		targetKind = QStringLiteral("tempo");
+		if (target.value(QStringLiteral("expected_bpm")).toInt() != song->getTempo())
+			return fail(QStringLiteral("stale_target"), QStringLiteral("The tempo changed since it was inspected"));
+	}
+	else if (!target.isEmpty())
+	{
+		targetKind = target.value(QStringLiteral("kind")).toString();
+		targetId = target.value(QStringLiteral("object_id")).toString();
+		targetHash = target.value(QStringLiteral("expected_state_hash")).toString();
+		QString liveHash;
+		if (targetKind == QStringLiteral("track"))
+		{
+			auto *track = context.resolveTrack(targetId);
+			if (!track) return fail(QStringLiteral("stale_target"), QStringLiteral("The target track is no longer live"));
+			liveHash = context.trackStateHash(track);
+		}
+		else if (targetKind == QStringLiteral("clip"))
+		{
+			auto *clip = context.resolveClip(targetId);
+			if (!clip || !dynamic_cast<MidiClip *>(clip))
+				return fail(QStringLiteral("stale_target"), QStringLiteral("The target MIDI clip is no longer live"));
+			liveHash = context.clipStateHash(clip);
+		}
+		const auto targetCheck = AiBridgeProjectMutationGuard::compareHash(targetHash, liveHash);
+		if (!targetCheck.success)
+			return fail(targetCheck.code, QStringLiteral("The target state changed since it was inspected"));
+	}
+
+	const auto beforeDocumentHash = beforeIdentity.value(QStringLiteral("document_state_hash")).toString();
+	AiBridgeProjectActionResult projectResult;
+	AiBridgeActionResult actionResult;
+	QJsonObject operationResult;
+	if (operation == QStringLiteral("set_tempo"))
+	{
+		AiBridgeContext actionContext;
+		actionResult = AiBridgeActions::setSongTempo(actionContext, parameters.value(QStringLiteral("bpm")).toInt());
+		if (actionResult.success) operationResult.insert(QStringLiteral("bpm"), Engine::getSong()->getTempo());
+	}
+	else if (operation == QStringLiteral("create_instrument_track"))
+	{
+		projectResult = AiBridgeProjectActions::createInstrumentTrack(parameters.contains(QStringLiteral("name"))
+			? std::optional<QString>(parameters.value(QStringLiteral("name")).toString()) : std::nullopt);
+		if (projectResult.success) { operationResult = constructionTrackJson(projectResult.track); targetKind = QStringLiteral("track"); targetId = projectResult.track.trackId; }
+	}
+	else if (operation == QStringLiteral("set_track_instrument"))
+	{
+		projectResult = AiBridgeProjectActions::setTrackInstrument(parameters.value(QStringLiteral("track_id")).toString(), parameters.value(QStringLiteral("instrument_id")).toString());
+		if (projectResult.success) operationResult = constructionTrackJson(projectResult.track);
+	}
+	else if (operation == QStringLiteral("create_midi_clip"))
+	{
+		projectResult = AiBridgeProjectActions::createMidiClip(parameters.value(QStringLiteral("track_id")).toString(),
+			parameters.value(QStringLiteral("start_ticks")).toVariant().toLongLong(),
+			parameters.contains(QStringLiteral("length_ticks")) ? std::optional<qint64>(parameters.value(QStringLiteral("length_ticks")).toVariant().toLongLong()) : std::nullopt,
+			parameters.value(QStringLiteral("auto_resize")).toBool(false));
+		if (projectResult.success) { operationResult = constructionClipJson(projectResult.constructionClip); targetKind = QStringLiteral("clip"); targetId = projectResult.constructionClip.clipId; }
+	}
+	else if (operation == QStringLiteral("set_clip_properties"))
+	{
+		projectResult = AiBridgeProjectActions::setClipProperties(parameters.value(QStringLiteral("clip_id")).toString(),
+			parameters.contains(QStringLiteral("start_ticks")) ? std::optional<qint64>(parameters.value(QStringLiteral("start_ticks")).toVariant().toLongLong()) : std::nullopt,
+			parameters.contains(QStringLiteral("length_ticks")) ? std::optional<qint64>(parameters.value(QStringLiteral("length_ticks")).toVariant().toLongLong()) : std::nullopt,
+			parameters.contains(QStringLiteral("auto_resize")) ? std::optional<bool>(parameters.value(QStringLiteral("auto_resize")).toBool()) : std::nullopt,
+			parameters.value(QStringLiteral("expected_content_hash")).toString(),
+			parameters.value(QStringLiteral("expected_start_ticks")).toVariant().toLongLong());
+		if (projectResult.success) operationResult = clipPropertiesJson(projectResult.clipProperties);
+	}
+	else if (operation == QStringLiteral("add_notes"))
+	{
+		QVector<AiBridgeCopiedNote> notes;
+		for (const auto &value : parameters.value(QStringLiteral("notes")).toArray()) notes.append(copiedNote(value));
+		projectResult = AiBridgeProjectActions::addNotes(parameters.value(QStringLiteral("clip_id")).toString(), notes,
+			parameters.value(QStringLiteral("expected_content_hash")).toString());
+		if (projectResult.success) operationResult = mutationJson(projectResult.mutation);
+	}
+	else if (operation == QStringLiteral("delete_notes"))
+	{
+		projectResult = AiBridgeProjectActions::deleteNotes(parameters.value(QStringLiteral("clip_id")).toString(),
+			selection(parameters.value(QStringLiteral("selection")).toObject()), parameters.value(QStringLiteral("expected_content_hash")).toString());
+		if (projectResult.success) operationResult = mutationJson(projectResult.mutation);
+	}
+	else if (operation == QStringLiteral("transpose_notes"))
+	{
+		projectResult = AiBridgeProjectActions::transposeNotes(parameters.value(QStringLiteral("clip_id")).toString(),
+			selection(parameters.value(QStringLiteral("selection")).toObject()), parameters.value(QStringLiteral("semitones")).toInt(),
+			parameters.value(QStringLiteral("expected_content_hash")).toString());
+		if (projectResult.success) operationResult = mutationJson(projectResult.mutation);
+	}
+	else if (operation == QStringLiteral("move_notes"))
+	{
+		projectResult = AiBridgeProjectActions::moveNotes(parameters.value(QStringLiteral("clip_id")).toString(),
+			selection(parameters.value(QStringLiteral("selection")).toObject()), parameters.value(QStringLiteral("delta_ticks")).toVariant().toLongLong(),
+			parameters.value(QStringLiteral("expected_content_hash")).toString());
+		if (projectResult.success) operationResult = mutationJson(projectResult.mutation);
+	}
+	else
+	{
+		projectResult = AiBridgeProjectActions::duplicateRegion(parameters.value(QStringLiteral("clip_id")).toString(),
+			parameters.value(QStringLiteral("source_start")).toVariant().toLongLong(),
+			parameters.value(QStringLiteral("source_end")).toVariant().toLongLong(),
+			parameters.value(QStringLiteral("destination_start")).toVariant().toLongLong(),
+			parameters.value(QStringLiteral("expected_content_hash")).toString());
+		if (projectResult.success) operationResult = mutationJson(projectResult.mutation);
+	}
+
+	const bool operationSucceeded = operation == QStringLiteral("set_tempo") ? actionResult.success : projectResult.success;
+	const auto operationCode = operation == QStringLiteral("set_tempo") ? actionResult.code : projectResult.code;
+	const auto afterIdentity = projectIdentityForClient(m_client.data());
+	const bool stableProcessAndProject = sameProcessAndLoadedProject(beforeIdentity, afterIdentity);
+	const bool postIdentityComplete = AiBridgeProjectMutationGuard::validateIdentity(afterIdentity).success;
+	const bool sourceMatchesAfter = context.loadedSourceMatches();
+	const auto afterDocumentHash = afterIdentity.value(QStringLiteral("document_state_hash")).toString();
+	const bool documentChangedAfterFailure = !operationSucceeded && beforeDocumentHash != afterDocumentHash;
+
+	QJsonObject postTarget;
+	bool postTargetAvailable = true;
+	if (targetKind == QStringLiteral("tempo"))
+	{
+		postTarget = {{QStringLiteral("kind"), targetKind}, {QStringLiteral("bpm"), Engine::getSong() ? Engine::getSong()->getTempo() : 0}};
+	}
+	else if (targetKind == QStringLiteral("track"))
+	{
+		auto *track = context.resolveTrack(targetId);
+		if (!track) postTargetAvailable = false;
+		else postTarget = {{QStringLiteral("kind"), targetKind}, {QStringLiteral("object_id"), targetId},
+			{QStringLiteral("state_hash"), context.trackStateHash(track)}};
+	}
+	else if (targetKind == QStringLiteral("clip"))
+	{
+		auto *clip = context.resolveClip(targetId);
+		if (!clip) postTargetAvailable = false;
+		else postTarget = {{QStringLiteral("kind"), targetKind}, {QStringLiteral("object_id"), targetId},
+			{QStringLiteral("state_hash"), context.clipStateHash(clip)}};
+	}
+	else postTargetAvailable = false;
+
+	QJsonObject data{{QStringLiteral("operation"), operation},
+		{QStringLiteral("operation_result"), operationResult},
+		{QStringLiteral("post_identity"), AiBridgeProjectMutationGuard::pathFreeIdentity(afterIdentity)},
+		{QStringLiteral("post_target"), postTarget}};
+	if (!stableProcessAndProject || !sourceMatchesAfter || (operationSucceeded && !postTargetAvailable) || documentChangedAfterFailure)
+	{
+		if (postIdentityComplete && postTargetAvailable)
+		{
+			data.insert(QStringLiteral("outcome"), QStringLiteral("ambiguous"));
+			return failWithData(QStringLiteral("ambiguous_mutation"), QStringLiteral("Mutation outcome requires a fresh project read"), data);
+		}
+		return fail(QStringLiteral("ambiguous_mutation"), QStringLiteral("Mutation outcome requires a fresh project read"));
+	}
+	if (!operationSucceeded)
+	{
+		if (!postIdentityComplete || !postTargetAvailable)
+			return fail(operationCode.isEmpty() ? QStringLiteral("operation_failed") : operationCode,
+				QStringLiteral("Guarded operation failed; inspect current project state before continuing"));
+		data.insert(QStringLiteral("outcome"), QStringLiteral("not_completed"));
+		return failWithData(operationCode.isEmpty() ? QStringLiteral("operation_failed") : operationCode,
+			QStringLiteral("Guarded operation failed; inspect current project state before continuing"), data);
+	}
+	data.insert(QStringLiteral("outcome"), QStringLiteral("completed"));
+	return {2, request.requestId, true, QStringLiteral("ok"), QStringLiteral("Guarded mutation completed"), data};
+}
+
 void AiBridgeIpcServer::executeRequest(const AiBridgeProtocolRequest &request)
 {
 	const QPointer<AiBridgeIpcServer> self(this);const auto client=m_client;const auto revision=m_connectionRevision;
 	AiBridgeProtocolResponse response{2, request.requestId, false, QStringLiteral("internal_error"), QStringLiteral("Request did not execute")};
-	if (AiBridgeMidiExportWire::handles(request.action)) response=AiBridgeMidiExportWire::execute(request,m_midiExportJobs);
+	if (request.action == QStringLiteral("guarded_mutate_project")) response = executeGuardedMutation(request);
+	else if (AiBridgeMidiExportWire::handles(request.action)) response=AiBridgeMidiExportWire::execute(request,m_midiExportJobs);
 	else if (AiBridgeVocalWire::handles(request.action)) response=AiBridgeVocalWire::execute(request,m_vocalJobs);
 	else if (AiBridgeAudioWire::handles(request.action)) response=AiBridgeAudioWire::execute(request);
 	else if (request.action == QStringLiteral("get_context"))
@@ -1047,42 +1355,7 @@ void AiBridgeIpcServer::executeRequest(const AiBridgeProtocolRequest &request)
 			if (request.action == QStringLiteral("get_project_structure"))
 			{
 				QJsonArray tracks; for (const auto& item : result.project.tracks) tracks.append(trackJson(item));
-				auto identity = AiBridgeProjectContext{}.projectIdentity();
-				identity.insert(QStringLiteral("server_pid"), static_cast<qint64>(QCoreApplication::applicationPid()));
-#ifdef Q_OS_WIN
-				const auto descriptor = m_client ? m_client->socketDescriptor() : -1;
-				if (descriptor != -1)
-				{
-					const auto pipeHandle = reinterpret_cast<HANDLE>(static_cast<qintptr>(descriptor));
-					DWORD serverPid = 0;
-					DWORD clientPid = 0;
-					DWORD clientPidAfter = 0;
-					const auto serverCreationTime = processCreationTime(GetCurrentProcess());
-					if (GetNamedPipeServerProcessId(pipeHandle, &serverPid)
-						&& serverPid == static_cast<DWORD>(QCoreApplication::applicationPid())
-						&& !serverCreationTime.isEmpty()
-						&& GetNamedPipeClientProcessId(pipeHandle, &clientPid))
-					{
-						HANDLE clientProcess = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION | SYNCHRONIZE, FALSE, clientPid);
-						if (clientProcess != nullptr)
-						{
-							const auto clientCreationTime = processCreationTime(clientProcess);
-							const bool clientAlive = GetProcessId(clientProcess) == clientPid
-								&& WaitForSingleObject(clientProcess, 0) == WAIT_TIMEOUT
-								&& GetNamedPipeClientProcessId(pipeHandle, &clientPidAfter)
-								&& clientPidAfter == clientPid;
-							if (clientAlive && !clientCreationTime.isEmpty())
-							{
-								identity.insert(QStringLiteral("client_pid"), static_cast<qint64>(clientPid));
-								identity.insert(QStringLiteral("server_creation_time"), serverCreationTime);
-								identity.insert(QStringLiteral("client_creation_time"), clientCreationTime);
-								identity.insert(QStringLiteral("availability"), QStringLiteral("available"));
-							}
-							CloseHandle(clientProcess);
-						}
-					}
-				}
-#endif
+				auto identity = projectIdentityForClient(m_client.data());
 				data = {{"project_generation", static_cast<qint64>(AiBridgeProjectContext{}.projectGeneration())}, {"identity", identity}, {"song", QJsonObject{{"name",result.project.songName},{"tempo",result.project.tempo},{"length_bars",result.project.lengthBars},{"length_ticks",result.project.lengthTicks},{"track_count",result.project.trackCount}}}, {"tracks",tracks}};
 			}
 			else if (request.action == QStringLiteral("list_tracks")) { QJsonArray items; for(const auto& item:result.tracks)items.append(trackJson(item)); data=pageJson(result.page);data.insert("tracks",items); }

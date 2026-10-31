@@ -7,6 +7,7 @@
 #include <QLocalSocket>
 #include <QTemporaryDir>
 #include <QFile>
+#include <QRegularExpression>
 #include <QScopeGuard>
 #include <QtEndian>
 #include <cstring>
@@ -22,6 +23,7 @@
 #include "InstrumentTrack.h"
 #include "MidiClip.h"
 #include "Note.h"
+#include "Track.h"
 #include "Song.h"
 
 class IpcFailingAudioCopy : public lmms::SampleClip
@@ -326,7 +328,10 @@ private slots:
 		QVERIFY(!identity.value(QStringLiteral("identity_revision")).toString().isEmpty());
 		QVERIFY(!identity.value(QStringLiteral("document_state")).toString().isEmpty());
 		QVERIFY(identity.contains(QStringLiteral("loaded_project")));
+		const auto initialDocumentHash = identity.value(QStringLiteral("document_state_hash")).toString();
+		QVERIFY(QRegularExpression(QStringLiteral("^[a-f0-9]{64}$")).match(initialDocumentHash).hasMatch());
 		QVERIFY(identity.value(QStringLiteral("server_pid")).toInt() > 0);
+#if defined(Q_OS_WIN) || defined(Q_OS_LINUX)
 		QCOMPARE(identity.value(QStringLiteral("availability")).toString(), QStringLiteral("available"));
 		QVERIFY(identity.value(QStringLiteral("client_pid")).toInt() > 0);
 		QCOMPARE(identity.value(QStringLiteral("client_pid")).toInt(), static_cast<int>(QCoreApplication::applicationPid()));
@@ -338,6 +343,10 @@ private slots:
 		const auto clientCreationTime = identity.value(QStringLiteral("client_creation_time")).toString().toULongLong(&clientCreationParsed);
 		QVERIFY(clientCreationParsed);
 		QVERIFY(clientCreationTime > 0);
+#else
+		QCOMPARE(identity.value(QStringLiteral("availability")).toString(), QStringLiteral("unavailable"));
+		QVERIFY(!identity.contains(QStringLiteral("client_pid")));
+#endif
 		QCOMPARE(identity.value(QStringLiteral("document_state")).toString(), QStringLiteral("unsaved"));
 
 		QTemporaryDir projectRoot;
@@ -355,8 +364,15 @@ private slots:
 		QCOMPARE(loaded.value(QStringLiteral("document_state")).toString(), QStringLiteral("saved"));
 		QCOMPARE(loaded.value(QStringLiteral("loaded_project")).toObject().value(QStringLiteral("canonical_path")).toString(), QFileInfo(projectPath).canonicalFilePath());
 		QCOMPARE(loaded.value(QStringLiteral("loaded_project")).toObject().value(QStringLiteral("sha256")).toString().toLatin1(), expectedHash);
+#ifdef Q_OS_WIN
 		QVERIFY(!loaded.value(QStringLiteral("loaded_project")).toObject().value(QStringLiteral("windows_file_id")).toString().isEmpty());
+#endif
+#ifdef Q_OS_UNIX
+		QVERIFY(!loaded.value(QStringLiteral("loaded_project")).toObject().value(QStringLiteral("file_id")).toString().isEmpty());
+#endif
 		QVERIFY(loaded.value(QStringLiteral("project_load_generation")).toString().toULongLong() > identity.value(QStringLiteral("project_load_generation")).toString().toULongLong());
+		const auto loadedDocumentHash = loaded.value(QStringLiteral("document_state_hash")).toString();
+		QVERIFY(QRegularExpression(QStringLiteral("^[a-f0-9]{64}$")).match(loadedDocumentHash).hasMatch());
 
 		Engine::getSong()->setModified();
 		socket.write(QByteArrayLiteral("{\"version\":2,\"request_id\":\"identity-modified\",\"action\":\"get_project_structure\",\"parameters\":{}}\n"));
@@ -366,6 +382,29 @@ private slots:
 		QCOMPARE(modified.value(QStringLiteral("document_state")).toString(), QStringLiteral("modified"));
 		QVERIFY(modified.value(QStringLiteral("dirty")).toBool());
 		QVERIFY(modified.value(QStringLiteral("identity_revision")).toString().toULongLong() > loaded.value(QStringLiteral("identity_revision")).toString().toULongLong());
+		auto* changedTrack = Track::create(Track::Type::Instrument, Engine::getSong());
+		QVERIFY(changedTrack);
+		changedTrack->setName(QStringLiteral("Changed while already dirty"));
+		socket.write(QByteArrayLiteral("{\"version\":2,\"request_id\":\"identity-dirty-edit\",\"action\":\"get_project_structure\",\"parameters\":{}}\n"));
+		socket.flush();
+		QTRY_VERIFY_WITH_TIMEOUT(socket.bytesAvailable() > 0, 1000);
+		const auto dirtyEdit = QJsonDocument::fromJson(socket.readAll()).object().value(QStringLiteral("data")).toObject();
+		const auto dirtyEditIdentity = dirtyEdit.value(QStringLiteral("identity")).toObject();
+		QCOMPARE(dirtyEditIdentity.value(QStringLiteral("identity_revision")).toString(), modified.value(QStringLiteral("identity_revision")).toString());
+		QVERIFY(dirtyEditIdentity.value(QStringLiteral("document_state_hash")).toString() != modified.value(QStringLiteral("document_state_hash")).toString());
+		bool foundTrackHash = false;
+		for (const auto &value : dirtyEdit.value(QStringLiteral("tracks")).toArray())
+		{
+			const auto track = value.toObject();
+			if (track.value(QStringLiteral("name")).toString() == QStringLiteral("Changed while already dirty"))
+			{
+				foundTrackHash = QRegularExpression(QStringLiteral("^[a-f0-9]{64}$")).match(track.value(QStringLiteral("state_hash")).toString()).hasMatch();
+			}
+		}
+		QVERIFY(foundTrackHash);
+		QFile unchangedProjectFile(projectPath);
+		QVERIFY(unchangedProjectFile.open(QIODevice::ReadOnly));
+		QCOMPARE(QCryptographicHash::hash(unchangedProjectFile.readAll(), QCryptographicHash::Sha256).toHex(), expectedHash);
 
 		const auto saveAsPath = projectRoot.filePath(QStringLiteral("identity-save-as.mmp"));
 		QVERIFY(Engine::getSong()->guiSaveProjectAs(saveAsPath));
@@ -393,6 +432,151 @@ private slots:
 		const auto reloaded = QJsonDocument::fromJson(socket.readAll()).object().value(QStringLiteral("data")).toObject().value(QStringLiteral("identity")).toObject();
 		QVERIFY(reloaded.value(QStringLiteral("project_load_generation")).toString().toULongLong() > switched.value(QStringLiteral("project_load_generation")).toString().toULongLong());
 		QCOMPARE(reloaded.value(QStringLiteral("process_session_id")).toString(), identity.value(QStringLiteral("process_session_id")).toString());
+	}
+
+	void enforcesGuardedProjectIdentityAndTargetPreconditions()
+	{
+		using namespace lmms;
+#if !defined(Q_OS_WIN) && !defined(Q_OS_LINUX)
+		QSKIP("Guarded mutations require verified Windows or Linux IPC peer identity");
+#endif
+		Engine::getSong()->createNewProject();
+		QTemporaryDir root;
+		QVERIFY(root.isValid());
+		const auto projectPath = root.filePath(QStringLiteral("guarded.mmp"));
+		QVERIFY(Engine::getSong()->saveProjectFile(projectPath, false));
+		Engine::getSong()->loadProject(projectPath);
+
+		AiBridgeIpcServer server(nullptr, QStringLiteral("lmms-guarded-mutation-test"));
+		QVERIFY(server.start());
+		QLocalSocket socket;
+		socket.connectToServer(server.endpointName());
+		QVERIFY(socket.waitForConnected(1000));
+		auto call = [&socket](const QString &action, const QJsonObject &parameters) {
+			socket.write(QJsonDocument(QJsonObject{{"version", 2}, {"request_id", "guarded-test"},
+				{"action", action}, {"parameters", parameters}}).toJson(QJsonDocument::Compact) + '\n');
+			socket.flush();
+			QElapsedTimer timer;
+			timer.start();
+			QByteArray bytes;
+			while (!bytes.endsWith('\n') && timer.elapsed() < 3000)
+			{
+				QTest::qWait(1);
+				bytes += socket.readAll();
+			}
+			return QJsonDocument::fromJson(bytes).object();
+		};
+		auto readStructure = [&]() {
+			return call(QStringLiteral("get_project_structure"), {}).value(QStringLiteral("data")).toObject();
+		};
+		auto structure = readStructure();
+		auto identity = structure.value(QStringLiteral("identity")).toObject();
+		QCOMPARE(identity.value(QStringLiteral("availability")).toString(), QStringLiteral("available"));
+		QFile source(projectPath);
+		QVERIFY(source.open(QIODevice::ReadOnly));
+		const auto originalBytes = source.readAll();
+		source.close();
+		QVERIFY(source.open(QIODevice::WriteOnly | QIODevice::Append));
+		QCOMPARE(source.write(QByteArrayLiteral("external-change")), qint64(15));
+		source.close();
+		const auto trackCountBefore = Engine::getSong()->tracks().size();
+		const QJsonObject createTrack{{"expected_project_identity", identity}, {"operation", "create_instrument_track"},
+			{"parameters", QJsonObject{{"name", "Guarded source check"}}}};
+		const auto sourceRejected = call(QStringLiteral("guarded_mutate_project"), createTrack);
+		QCOMPARE(sourceRejected.value(QStringLiteral("code")).toString(), QStringLiteral("loaded_source_changed"));
+		QCOMPARE(Engine::getSong()->tracks().size(), trackCountBefore);
+		QVERIFY(!QJsonDocument(sourceRejected).toJson().contains(root.path().toUtf8()));
+		QVERIFY(source.open(QIODevice::WriteOnly | QIODevice::Truncate));
+		QCOMPARE(source.write(originalBytes), qint64(originalBytes.size()));
+		source.close();
+		Engine::getSong()->loadProject(projectPath);
+
+		structure = readStructure();
+		identity = structure.value(QStringLiteral("identity")).toObject();
+		const auto freshCreateTrack = QJsonObject{{"expected_project_identity", identity},
+			{"operation", "create_instrument_track"}, {"parameters", QJsonObject{{"name", "Guarded track"}}}};
+		const auto created = call(QStringLiteral("guarded_mutate_project"), freshCreateTrack);
+		QCOMPARE(created.value(QStringLiteral("code")).toString(), QStringLiteral("ok"));
+		const auto createdData = created.value(QStringLiteral("data")).toObject();
+		QCOMPARE(createdData.value(QStringLiteral("outcome")).toString(), QStringLiteral("completed"));
+		QVERIFY(QRegularExpression(QStringLiteral("^[a-f0-9]{64}$")).match(createdData.value(QStringLiteral("post_target")).toObject().value(QStringLiteral("state_hash")).toString()).hasMatch());
+		QCOMPARE(Engine::getSong()->tracks().size(), trackCountBefore + 1);
+
+		const auto staleIdentity = call(QStringLiteral("guarded_mutate_project"), createTrack);
+		QCOMPARE(staleIdentity.value(QStringLiteral("code")).toString(), QStringLiteral("stale_project_identity"));
+		QCOMPARE(Engine::getSong()->tracks().size(), trackCountBefore + 1);
+
+		structure = readStructure();
+		identity = structure.value(QStringLiteral("identity")).toObject();
+		QString trackId;
+		QString trackHash;
+		for (const auto &value : structure.value(QStringLiteral("tracks")).toArray())
+		{
+			const auto track = value.toObject();
+			if (track.value(QStringLiteral("name")).toString() == QStringLiteral("Guarded track"))
+			{
+				trackId = track.value(QStringLiteral("id")).toString();
+				trackHash = track.value(QStringLiteral("state_hash")).toString();
+			}
+		}
+		QVERIFY(!trackId.isEmpty());
+		QVERIFY(!trackHash.isEmpty());
+		const auto clipsBefore = Engine::getSong()->tracks().back()->numOfClips();
+		const auto staleInstrument = call(QStringLiteral("guarded_mutate_project"), {{"expected_project_identity", identity},
+			{"operation", "set_track_instrument"}, {"parameters", QJsonObject{{"track_id", trackId}, {"instrument_id", "tripleoscillator"}}},
+			{"expected_target", QJsonObject{{"kind", "track"}, {"object_id", trackId}, {"expected_state_hash", QString(64, '0')}}}});
+		QCOMPARE(staleInstrument.value(QStringLiteral("code")).toString(), QStringLiteral("stale_target"));
+		QCOMPARE(Engine::getSong()->tracks().back()->numOfClips(), clipsBefore);
+		const auto staleTarget = call(QStringLiteral("guarded_mutate_project"), {{"expected_project_identity", identity},
+			{"operation", "create_midi_clip"}, {"parameters", QJsonObject{{"track_id", trackId}, {"start_ticks", 0}}},
+			{"expected_target", QJsonObject{{"kind", "track"}, {"object_id", trackId}, {"expected_state_hash", QString(64, '0')}}}});
+		QCOMPARE(staleTarget.value(QStringLiteral("code")).toString(), QStringLiteral("stale_target"));
+		QCOMPARE(Engine::getSong()->tracks().back()->numOfClips(), clipsBefore);
+		const auto clipCreated = call(QStringLiteral("guarded_mutate_project"), {{"expected_project_identity", identity},
+			{"operation", "create_midi_clip"}, {"parameters", QJsonObject{{"track_id", trackId}, {"start_ticks", 0}, {"length_ticks", 384}}},
+			{"expected_target", QJsonObject{{"kind", "track"}, {"object_id", trackId}, {"expected_state_hash", trackHash}}}});
+		QCOMPARE(clipCreated.value(QStringLiteral("code")).toString(), QStringLiteral("ok"));
+		const auto clipId = clipCreated.value(QStringLiteral("data")).toObject().value(QStringLiteral("operation_result")).toObject().value(QStringLiteral("clip_id")).toString();
+		QVERIFY(!clipId.isEmpty());
+		const auto clipRead = call(QStringLiteral("get_clip"), {{"clip_id", clipId}}).value(QStringLiteral("data")).toObject();
+		const auto freshStructure = readStructure();
+		const auto freshIdentity = freshStructure.value(QStringLiteral("identity")).toObject();
+		const auto staleContentHash = QString(64, 'f');
+		const QJsonObject note{{"position_ticks", 0}, {"length_ticks", 96}, {"key", 60},
+			{"volume", 100}, {"panning", 0}, {"note_type", "regular"}};
+		const QJsonObject clipTarget{{"kind", "clip"}, {"object_id", clipId},
+			{"expected_state_hash", clipRead.value(QStringLiteral("state_hash"))}};
+		const QVector<QPair<QString, QJsonObject>> staleClipMutations{
+			{QStringLiteral("add_notes"), QJsonObject{{"clip_id", clipId}, {"notes", QJsonArray{note}}, {"expected_content_hash", staleContentHash}}},
+			{QStringLiteral("delete_notes"), QJsonObject{{"clip_id", clipId}, {"selection", QJsonObject{{"position_start", 0}, {"position_end", 96}}}, {"expected_content_hash", staleContentHash}}},
+			{QStringLiteral("transpose_notes"), QJsonObject{{"clip_id", clipId}, {"selection", QJsonObject{{"key_min", 0}, {"key_max", 127}}}, {"semitones", 1}, {"expected_content_hash", staleContentHash}}},
+			{QStringLiteral("move_notes"), QJsonObject{{"clip_id", clipId}, {"selection", QJsonObject{{"position_start", 0}, {"position_end", 96}}}, {"delta_ticks", 12}, {"expected_content_hash", staleContentHash}}},
+			{QStringLiteral("duplicate_region"), QJsonObject{{"clip_id", clipId}, {"source_start", 0}, {"source_end", 96}, {"destination_start", 96}, {"expected_content_hash", staleContentHash}}},
+			{QStringLiteral("set_clip_properties"), QJsonObject{{"clip_id", clipId}, {"auto_resize", true}, {"expected_start_ticks", 0}, {"expected_content_hash", staleContentHash}}}};
+		for (const auto &mutation : staleClipMutations)
+		{
+			const auto rejected = call(QStringLiteral("guarded_mutate_project"), {{"expected_project_identity", freshIdentity},
+				{"operation", mutation.first}, {"parameters", mutation.second}, {"expected_target", clipTarget}});
+			QVERIFY2(!rejected.value(QStringLiteral("success")).toBool(), qPrintable(mutation.first));
+			QCOMPARE(Engine::getSong()->tracks().back()->getClip(0)->length().getTicks(), qint64(384));
+			QCOMPARE(dynamic_cast<MidiClip *>(Engine::getSong()->tracks().back()->getClip(0))->notes().size(), 0);
+		}
+		const auto noteAdded = call(QStringLiteral("guarded_mutate_project"), {{"expected_project_identity", freshIdentity},
+			{"operation", "add_notes"}, {"parameters", QJsonObject{{"clip_id", clipId}, {"notes", QJsonArray{note}},
+				{"expected_content_hash", clipRead.value(QStringLiteral("content_hash"))}}},
+			{"expected_target", QJsonObject{{"kind", "clip"}, {"object_id", clipId},
+				{"expected_state_hash", clipRead.value(QStringLiteral("state_hash"))}}}});
+		QCOMPARE(noteAdded.value(QStringLiteral("code")).toString(), QStringLiteral("ok"));
+		QCOMPARE(Engine::getSong()->tracks().back()->getClip(0)->getTrack()->numOfClips(), 1);
+		const auto postNoteStructure = readStructure();
+		const auto postNoteIdentity = postNoteStructure.value(QStringLiteral("identity")).toObject();
+		const auto currentTempo = Engine::getSong()->getTempo();
+		const auto wrongExpectedTempo = currentTempo == 999 ? 998 : currentTempo + 1;
+		const auto staleTempo = call(QStringLiteral("guarded_mutate_project"), {{"expected_project_identity", postNoteIdentity},
+			{"operation", "set_tempo"}, {"parameters", QJsonObject{{"bpm", 100}}},
+			{"expected_target", QJsonObject{{"kind", "tempo"}, {"expected_bpm", wrongExpectedTempo}}}});
+		QCOMPARE(staleTempo.value(QStringLiteral("code")).toString(), QStringLiteral("stale_target"));
+		QCOMPARE(Engine::getSong()->getTempo(), currentTempo);
 	}
 };
 

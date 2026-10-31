@@ -29,12 +29,14 @@ private:
 	void readProbe();
 	void clientDisconnected();
 	void executeRequest(const AiBridgeProtocolRequest &request);
+	AiBridgeProtocolResponse executeGuardedMutation(const AiBridgeProtocolRequest &request);
 	void sendResponse(const AiBridgeProtocolResponse &response);
 
 	QLocalServer m_server;
 	QPointer<QLocalSocket> m_client;
 	QByteArray m_input;
 	bool m_busy = false;
+	bool m_guardedMutationInProgress = false;
 	QString m_endpoint;
 	QPointer<AiBridgeVocalJobs> m_vocalJobs;
 	QPointer<AiBridgeMidiExportJobs> m_midiExportJobs;

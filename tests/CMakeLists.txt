@@ -635,6 +635,18 @@ foreach(LMMS_TEST_SRC IN LISTS LMMS_TESTS)
 			${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeProtocol.cpp
 			${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeMutationTypes.cpp)
 	endif()
+	if(LMMS_TEST_NAME STREQUAL "AiBridgeProtocolTest"
+		OR LMMS_TEST_NAME STREQUAL "AiBridgeMidiProtocolTest"
+		OR LMMS_TEST_NAME STREQUAL "AiBridgePhase3GProtocolTest"
+		OR LMMS_TEST_NAME STREQUAL "AiBridgeIpcServerTest"
+		OR LMMS_TEST_NAME STREQUAL "AiBridgeAudioRangeProtocolTest"
+		OR LMMS_TEST_NAME STREQUAL "AiBridgeViewTest"
+		OR LMMS_TEST_NAME STREQUAL "AiBridgeVocalJobSafetyTest"
+		OR LMMS_TEST_NAME STREQUAL "AiBridgeVocalJobViewTest"
+		OR LMMS_TEST_NAME MATCHES "^AiBridge(MixerProtocol|EffectProtocol|FrameSize|Phase3HSecurity|Phase3HFrameSize)Test$")
+		target_sources(${LMMS_TEST_NAME} PRIVATE
+			${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeProjectMutationGuard.cpp)
+	endif()
 	if(LMMS_TEST_NAME STREQUAL "AiBridgeIpcServerTest" OR LMMS_TEST_NAME STREQUAL "AiBridgeAudioRangeProtocolTest" OR LMMS_TEST_NAME STREQUAL "AiBridgeViewTest")
 		target_sources(${LMMS_TEST_NAME} PRIVATE
 			${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeMidiExportCapture.cpp
