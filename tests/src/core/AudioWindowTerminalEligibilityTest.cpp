@@ -1,6 +1,6 @@
-// Bounded endpoint characterization only. No candidate renderer or library fix.
-// All library probes retain initialized prefix/suffix padding inside their
-// allocations; no invalid memory is deliberately supplied or dereferenced.
+// Bounded source-history and endpoint characterization for the hash-pinned
+// libsamplerate profiles. Probes keep initialized prefix/suffix padding inside
+// their allocations; no invalid memory is deliberately supplied or read.
 #include <QtTest>
 #include <samplerate.h>
 #include <algorithm>
@@ -107,7 +107,7 @@ private slots:
 	void refillQuantumControlsFreshSingleton()
 	{
 		QFETCH(int, quantum); QFETCH(int, channels); QFETCH(int, eof);
-		int cases = 0, sensitive = 0;
+		int cases = 0, singletonStreams = 0;
 		for (int n = 1; n <= 2 * quantum + 2; ++n) for (int capacity : {1, 7, 32, 64, 128, 256, 512})
 		{
 			const auto a = streamProbe(quantum, n, capacity, channels, eof, SRC_LINEAR, 0.875f);
@@ -118,15 +118,15 @@ private slots:
 			for (int i = 0; i < n; ++i) for (int ch = 0; ch < channels; ++ch)
 			{
 				if (a.output[i * channels + ch] != b.output[i * channels + ch]) { ++differences; }
-				if (quantum > 1 && n % quantum != 1)
-					QCOMPARE(a.output[i * channels + ch], sourceValue(std::max(0, i - 1), ch));
+				const auto expected = sourceValue(std::max(0, i - 1), ch);
+				QCOMPARE(a.output[i * channels + ch], expected);
+				QCOMPARE(b.output[i * channels + ch], expected);
 			}
-			const bool freshSingleton = quantum == 1 || n % quantum == 1;
-			QCOMPARE(differences, freshSingleton ? (quantum == 1 ? n : 1) * channels : 0);
-			if (freshSingleton) { ++sensitive; }
+			QCOMPARE(differences, 0);
+			if (quantum == 1 || n % quantum == 1) { ++singletonStreams; }
 			++cases;
 		}
-		qInfo() << "BOUNDED_MATRIX" << quantum << channels << eof << "cases" << cases << "prefix_sensitive" << sensitive;
+		qInfo() << "BOUNDED_MATRIX" << quantum << channels << eof << "cases" << cases << "singleton_streams" << singletonStreams;
 	}
 	void layoutAndInterpolationAreIndependentVariables_data()
 	{
@@ -145,10 +145,11 @@ private slots:
 				const auto zoh = streamProbe(quantum, n, capacity, channels, eof, SRC_ZERO_ORDER_HOLD, 0.875f);
 				QCOMPARE(padded.error, 0); QCOMPARE(backed.error, 0); QCOMPARE(zoh.error, 0);
 				QCOMPARE(int(backed.output.size()), n * channels); QCOMPARE(int(zoh.output.size()), n * channels);
-				QVERIFY(padded.output != backed.output);
+				QCOMPARE(padded.output, backed.output);
 				for (int i = 0; i < n; ++i) for (int ch = 0; ch < channels; ++ch)
 				{
 					const auto expected = sourceValue(std::max(0, i - 1), ch);
+					QCOMPARE(padded.output[i * channels + ch], expected);
 					QCOMPARE(backed.output[i * channels + ch], expected);
 					QCOMPARE(zoh.output[i * channels + ch], expected);
 				}
@@ -168,7 +169,7 @@ private slots:
 	{
 		QFETCH(int, rate); QFETCH(int, originTicks);
 		const int q = rate / 100, origin = originTicks * q;
-		int cases = 0, rejected = 0;
+		int cases = 0, v2BoundaryCases = 0;
 		for (int ticks : {1, 30, 80, 100, 137, 199, 200}) for (int quantum : {64, 128, 256, 511})
 			for (int capacity : {1, 7, 32, 256, 512})
 			{
@@ -176,14 +177,13 @@ private slots:
 				const auto a = streamProbe(quantum, n, capacity, 2, 0, SRC_LINEAR, 0.875f, false, origin);
 				const auto b = streamProbe(quantum, n, capacity, 2, 0, SRC_LINEAR, -0.875f, false, origin);
 				QCOMPARE(a.error, 0); QCOMPARE(b.error, 0); QCOMPARE(int(a.output.size()), n * 2);
-				const bool unsafe = n % quantum == 1;
-				QCOMPARE(a.output != b.output, unsafe);
-				if (unsafe) { ++rejected; }
-				else for (int i = 0; i < n; ++i) for (int ch = 0; ch < 2; ++ch)
+				QCOMPARE(a.output, b.output);
+				for (int i = 0; i < n; ++i) for (int ch = 0; ch < 2; ++ch)
 					QCOMPARE(a.output[i * 2 + ch], sourceValue(origin + std::max(0, i - 1), ch));
+				if (n % quantum == 1) { ++v2BoundaryCases; }
 				++cases;
 			}
-		qInfo() << "SOURCE_REFERENCE_MATRIX" << rate << origin << "cases" << cases << "unsafe" << rejected;
+		qInfo() << "SOURCE_REFERENCE_MATRIX" << rate << origin << "cases" << cases << "v2_remainder_boundaries" << v2BoundaryCases;
 	}
 	void realNativePeriodDoesNotChangeScratchQuantum()
 	{
