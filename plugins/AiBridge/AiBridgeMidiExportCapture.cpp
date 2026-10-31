@@ -20,6 +20,12 @@ namespace lmms
 {
 namespace
 {
+int initialIntValue(const IntModel& model)
+{
+	// Avoid requiring an exported TypedAutomatableModel<int> template instantiation.
+	return static_cast<const AutomatableModel&>(model).initValue<int>();
+}
+
 MidiExportNoteSource copyNote(const Note& note)
 {
 	MidiExportNoteSource value{note.pos().getTicks(), note.length().getTicks(), note.key(), note.getVolume(),
@@ -65,11 +71,11 @@ void captureTrackMidiState(InstrumentTrack& track,const Song& song,QVector<MidiE
 {
 	if(track.panningModel()->initValue()!=0)unsupportedAutomation=true;
 	if(track.pitchModel()->isAutomated()||track.pitchRangeModel()->isAutomated())unsupportedAutomation=true;
-	if(track.baseNoteModel()->initValue()!=DefaultKey)unsupportedAutomation=true;
+	if(initialIntValue(*track.baseNoteModel())!=DefaultKey)unsupportedAutomation=true;
 	if(track.useMasterPitchModel()->initValue()&&song.masterPitch()!=0)unsupportedAutomation=true;
 	const auto pitch=track.pitchModel()->initValue();const auto pitchRange=track.pitchModel()->range();
 	const auto bend=pitchRange>0?static_cast<int>((pitch+pitchRange/2)*MidiMaxPitchBend/pitchRange):0;
-	const auto sensitivity=qBound(0,track.pitchRangeModel()->initValue(),127);
+	const auto sensitivity=qBound(0,initialIntValue(*track.pitchRangeModel()),127);
 	if(pitch!=0||sensitivity!=2)
 	{
 		events.append({0,MidiExportEventType::ControlChange,0,101,0});
@@ -117,8 +123,8 @@ MidiExportCaptureResult captureMidiExport(const MidiExportSelection& selection,A
 	snapshot.projectGeneration=identities.projectGeneration();
 	snapshot.songName=song->displayName();
 	snapshot.tempo=song->tempoModel().initValue();
-	snapshot.numerator=song->getTimeSigModel().numeratorModel().initValue();
-	snapshot.denominator=song->getTimeSigModel().denominatorModel().initValue();
+	snapshot.numerator=initialIntValue(song->getTimeSigModel().numeratorModel());
+	snapshot.denominator=initialIntValue(song->getTimeSigModel().denominatorModel());
 	snapshot.songEnd=TimePos(song->length(),0).getTicks();
 	snapshot.hasTempoAutomation=song->tempoModel().isAutomated();
 	snapshot.hasTimeSignatureAutomation=song->getTimeSigModel().numeratorModel().isAutomated()
