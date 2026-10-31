@@ -1,6 +1,7 @@
 #include "AudioWindowPlayback.h"
 #include "AudioEngine.h"
 #include <QCoreApplication>
+#include <QDebug>
 #include <QThread>
 #include <QCryptographicHash>
 #include <QFile>
@@ -37,7 +38,10 @@ bool qualifiedLibraryImage()
 	if(!file.open(QIODevice::ReadOnly) || file.size()<=0 || file.size()>8*1024*1024) return false;
 	QCryptographicHash hash(QCryptographicHash::Sha256);
 	if(!hash.addData(&file)) return false;
-	return audioWindowReferenceProfileMatches(DEFAULT_BUFFER_SIZE,hash.result());
+	const auto digest=hash.result();
+	if(qEnvironmentVariableIsSet("LMMS_DIAG_AUDIO_WINDOW_PROFILE"))
+		qInfo().noquote()<<"AUDIO_WINDOW_PROFILE_IMAGE"<<file.fileName()<<file.size()<<digest.toHex();
+	return audioWindowReferenceProfileMatches(DEFAULT_BUFFER_SIZE,digest);
 #else
 	return false;
 #endif

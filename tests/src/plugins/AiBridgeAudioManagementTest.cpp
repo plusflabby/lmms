@@ -37,7 +37,12 @@ class AiBridgeAudioManagementTest : public QObject
 	lmms::SampleClip* make(lmms::SampleTrack& track,int position)
 	{
 		lmms::AiBridgeProjectContext ids;auto r=lmms::AiBridgeAudioActions{}.importFile({ids.idForTrack(&track),source,position,false});
-		if(r.code!="ok")return nullptr;auto* clip=static_cast<lmms::SampleClip*>(ids.resolveClip(r.clipId));clip->setAutoResize(false);clip->changeLength(40);clip->setStartTimeOffset(-10);return clip;
+		if(r.code!="ok") { return nullptr; }
+		auto* clip=static_cast<lmms::SampleClip*>(ids.resolveClip(r.clipId));
+		clip->setAutoResize(false);
+		clip->changeLength(40);
+		clip->setStartTimeOffset(-10);
+		return clip;
 	}
 	lmms::AiBridgeAudioEdit request(lmms::AiBridgeAudioEditKind kind,lmms::SampleClip* clip,std::optional<qint64> position={},const QString& target={})
 	{

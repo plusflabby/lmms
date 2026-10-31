@@ -429,6 +429,7 @@ jobs:
         if: ${{ failure() && steps.run_ctest.outcome == 'failure' }}
         shell: pwsh
         run: |
+          $env:LMMS_DIAG_AUDIO_WINDOW_PROFILE = "1"
           $sampleratePaths = @(
             "build/vcpkg_installed/x64-windows/bin/samplerate.dll",
             "build/vcpkg_installed/x64-windows/debug/bin/samplerate.dll",
