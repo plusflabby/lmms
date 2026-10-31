@@ -22,7 +22,7 @@ private slots:
 		for(const auto& action:{"load_audio_file","set_audio_clip"})QCOMPARE(parse(action,{}).code,QStringLiteral("unknown_action"));
 		for(const auto& action:{"trim_audio_clip","split_audio_clip"})QCOMPARE(parse(action,{}).code,QStringLiteral("invalid_parameter"));
 		for(const auto& key:{"clip_id","expected_audio_state_hash"}){auto bad=move;bad.remove(key);QVERIFY(!parse("move_audio_clip",bad).success);}
-		for(const QJsonValue value:{QJsonValue(-1),QJsonValue(0.5),QJsonValue(2147483648.0),QJsonValue("10")}){auto bad=move;bad.insert("position_ticks",value);QVERIFY(!parse("move_audio_clip",bad).success);}
+		for(const QJsonValue& value:{QJsonValue(-1),QJsonValue(0.5),QJsonValue(2147483648.0),QJsonValue("10")}){auto bad=move;bad.insert("position_ticks",value);QVERIFY(!parse("move_audio_clip",bad).success);}
 		auto bad=move;bad.insert("dry_run","true");QVERIFY(!parse("move_audio_clip",bad).success);
 		bad=cases[3].second;bad.insert("path",QString(1025,'x'));QVERIFY(!parse("import_audio_file",bad).success);
 		for(const auto& operation:{"import","trim","split","batch","shell"}){op.insert("operation",operation);QVERIFY(!parse("batch_edit_audio_clips",{{"operations",QJsonArray{op}}}).success);}
@@ -187,7 +187,7 @@ private slots:
 
 	void rejectsMalformedAndUnknownFields()
 	{
-		for (const QByteArray frame : {QByteArray("not json\n"), QByteArray("{\"version\":2,\"request_id\":\"r\",\"action\":\"nope\",\"parameters\":{}}\n"), QByteArray("{\"version\":2,\"request_id\":\"r\",\"action\":\"get_context\",\"parameters\":{},\"extra\":1}\n")})
+		for (const QByteArray& frame : {QByteArray("not json\n"), QByteArray("{\"version\":2,\"request_id\":\"r\",\"action\":\"nope\",\"parameters\":{}}\n"), QByteArray("{\"version\":2,\"request_id\":\"r\",\"action\":\"get_context\",\"parameters\":{},\"extra\":1}\n")})
 			QVERIFY(!lmms::AiBridgeProtocol::parseRequest(frame).success);
 	}
 
