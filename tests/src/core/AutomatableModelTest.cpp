@@ -24,6 +24,9 @@
 
 
 #include <QtTest>
+#include <QProcess>
+#include <QProcessEnvironment>
+#include <QTemporaryDir>
 #include "AutomatableModel.h"
 #include "ComboBoxModel.h"
 #include "Engine.h"
@@ -115,6 +118,41 @@ private slots: // tests
 		QVERIFY(m2.value() == m3.value());
 		QVERIFY(!m3.value());
 		QVERIFY(m1.countLinks() == 2);
+	}
+
+	void LinkedModelUnlinkDuringNotification()
+	{
+		if (qEnvironmentVariableIsSet("LMMS_LINKED_MODEL_UNLINK_CHILD"))
+		{
+			using namespace lmms;
+			BoolModel first(false), unlinked(false), last(false);
+			first.linkToModel(&unlinked);
+			unlinked.linkToModel(&last);
+			connect(&last, &BoolModel::dataChanged, this, [&] { unlinked.unlink(); }, Qt::DirectConnection);
+
+			first.setValue(1.0f);
+			QVERIFY(first.value());
+			QVERIFY(last.value());
+			QVERIFY(!unlinked.value());
+			return;
+		}
+
+		QTemporaryDir directory;
+		QVERIFY(directory.isValid());
+		QProcess child;
+		auto environment = QProcessEnvironment::systemEnvironment();
+		environment.insert("LMMS_LINKED_MODEL_UNLINK_CHILD", "1");
+		child.setProcessEnvironment(environment);
+		child.start(QCoreApplication::applicationFilePath(),
+			{"LinkedModelUnlinkDuringNotification", "-o", directory.filePath("child.log") + ",txt"});
+		if (!child.waitForFinished(3000))
+		{
+			child.kill();
+			child.waitForFinished();
+			QFAIL("Linked-model propagation did not finish after a direct observer unlinked the next model");
+		}
+		QCOMPARE(child.exitStatus(), QProcess::NormalExit);
+		QCOMPARE(child.exitCode(), 0);
 	}
 };
 

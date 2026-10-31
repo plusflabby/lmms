@@ -312,12 +312,19 @@ void AutomatableModel::setValue(const float value, const bool isAutomated)
 	// set value for this and the other linked models
 	setValueInternal(value);
 	if (!self) { return; }
-	for (QPointer<AutomatableModel> model = m_nextLink; model && model.data() != self.data();)
+	QPointer<AutomatableModel> previous = self;
+	QPointer<AutomatableModel> model = previous->m_nextLink;
+	while (model && model.data() != self.data())
 	{
-		QPointer<AutomatableModel> next(model->m_nextLink);
+		QPointer<AutomatableModel> current = model;
 		model->setValueInternal(value);
-		if (!self) { return; }
-		model = next;
+		if (!self || !previous) { return; }
+		// Direct observers can unlink or delete the current model and its next
+		// link. Advance from the surviving predecessor's updated link instead
+		// of following a pointer captured before the signal was emitted.
+		if (previous->m_nextLink == current.data()) { previous = current; }
+		if (!previous || previous->m_nextLink == previous.data()) { return; }
+		model = previous->m_nextLink;
 	}
 }
 
