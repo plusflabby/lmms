@@ -29,6 +29,7 @@
 #include <QDebug>
 #include <QFile>
 #include <QMessageBox>
+#include <QScopeGuard>
 #include <QThread>
 #include "SampleClip.h"
 #include "MainWindow.h"
@@ -1290,10 +1291,33 @@ QByteArray Song::projectDocumentHash()
 {
 	DataFile dataFile(DataFile::Type::SongProject);
 	const bool wasSavingProject = m_savingProject;
+	const bool wasDiscardingMidiConnections = m_saveOptions.discardMIDIConnections.value();
 	m_savingProject = true;
+	m_saveOptions.discardMIDIConnections.setValue(true);
+	const auto restoreOptions = qScopeGuard([this, wasSavingProject, wasDiscardingMidiConnections] {
+		m_saveOptions.discardMIDIConnections.setValue(wasDiscardingMidiConnections);
+		m_savingProject = wasSavingProject;
+	});
 	populateProjectDataFile(dataFile);
-	m_savingProject = wasSavingProject;
 	return QCryptographicHash::hash(dataFile.toByteArray(-1), QCryptographicHash::Sha256).toHex();
+}
+
+QByteArray Song::projectObjectStateHash(SerializingObject &object)
+{
+	const bool wasSavingProject = m_savingProject;
+	const bool wasDiscardingMidiConnections = m_saveOptions.discardMIDIConnections.value();
+	m_savingProject = true;
+	m_saveOptions.discardMIDIConnections.setValue(true);
+	const auto restoreOptions = qScopeGuard([this, wasSavingProject, wasDiscardingMidiConnections] {
+		m_saveOptions.discardMIDIConnections.setValue(wasDiscardingMidiConnections);
+		m_savingProject = wasSavingProject;
+	});
+
+	QDomDocument document;
+	auto root = document.createElement(QStringLiteral("target"));
+	document.appendChild(root);
+	object.saveState(document, root);
+	return QCryptographicHash::hash(document.toByteArray(-1), QCryptographicHash::Sha256).toHex();
 }
 
 bool Song::saveProjectFile(const QString & filename, bool withResources)

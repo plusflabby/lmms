@@ -99,11 +99,8 @@ QString AiBridgeProjectContext::projectDocumentHash() const {
 }
 QString AiBridgeProjectContext::trackStateHash(Track *track) const {
 	if (!qt() || !track) return {};
-	QDomDocument document;
-	auto root = document.createElement(QStringLiteral("target"));
-	document.appendChild(root);
-	track->saveState(document, root);
-	return QString::fromLatin1(QCryptographicHash::hash(document.toByteArray(-1), QCryptographicHash::Sha256).toHex());
+	auto *song = Engine::getSong();
+	return song ? QString::fromLatin1(song->projectObjectStateHash(*track)) : QString();
 }
 QString AiBridgeProjectContext::clipStateHash(Clip *clip) const {
 	if (!qt() || !clip) return {};

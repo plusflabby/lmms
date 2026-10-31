@@ -257,6 +257,7 @@ public:
 	bool guiSaveProjectAs(const QString & filename);
 	bool saveProjectFile(const QString & filename, bool withResources = false);
 	QByteArray projectDocumentHash();
+	QByteArray projectObjectStateHash(SerializingObject &object);
 	recording::RecordingProjectIdentity& recordingProjectIdentity() {return m_recordingProjectIdentity;}
 
 	const QString & projectFileName() const

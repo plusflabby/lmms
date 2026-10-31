@@ -904,7 +904,7 @@ AiBridgeProtocolResponse AiBridgeIpcServer::executeGuardedMutation(const AiBridg
 	AiBridgeProjectContext context;
 	auto *song = Engine::getSong();
 	if (!song) return fail(QStringLiteral("no_project"), QStringLiteral("No project is open"));
-	if (!song->isStopped() || song->isRecording() || song->isExporting())
+	if (!song->isStopped() || song->isExporting())
 		return fail(QStringLiteral("project_busy"), QStringLiteral("Guarded mutations require stopped transport"));
 
 	const auto beforeIdentity = projectIdentityForClient(m_client.data());
