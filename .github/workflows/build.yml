@@ -418,12 +418,38 @@ jobs:
       - name: Build
         run: cmake --build build
       - name: Run tests
+        id: run_ctest
         run: |
           cd build/tests
           ctest --output-on-failure -j2 -V
       - name: Print CTest failure log
-        if: failure()
+        if: ${{ failure() && steps.run_ctest.outcome == 'failure' }}
         run: Get-Content build/tests/Testing/Temporary/LastTest.log
+      - name: Print QtTest reports for failed tests
+        if: ${{ failure() && steps.run_ctest.outcome == 'failure' }}
+        shell: pwsh
+        run: |
+          $failedTests = Get-Content build/tests/Testing/Temporary/LastTestsFailed.log | ForEach-Object {
+            $parts = $_ -split ':', 2
+            if ($parts.Length -eq 2) { $parts[1].Trim() }
+          } | Where-Object { $_ }
+          Push-Location build/tests
+          try {
+            foreach ($testName in $failedTests) {
+              $executable = ".\$($testName).exe"
+              $report = "$($testName).qt-test-output.txt"
+              Write-Output "===== $testName (QtTest verbose) ====="
+              if (-not (Test-Path -LiteralPath $executable)) {
+                Write-Output "Executable not found: $executable"
+                continue
+              }
+              & $executable -o "$report,txt" -v1
+              Write-Output "exit code: $LASTEXITCODE"
+              if (Test-Path -LiteralPath $report) { Get-Content -LiteralPath $report }
+            }
+          } finally {
+            Pop-Location
+          }
       - name: Package
         run: cmake --build build --target package
       - name: Upload artifacts
