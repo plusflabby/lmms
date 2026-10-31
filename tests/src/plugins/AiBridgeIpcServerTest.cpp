@@ -493,6 +493,17 @@ private slots:
 
 		structure = readStructure();
 		identity = structure.value(QStringLiteral("identity")).toObject();
+		const auto tracksBeforeExport = Engine::getSong()->tracks().size();
+		Engine::getSong()->startExport();
+		const auto exportRejected = call(QStringLiteral("guarded_mutate_project"),
+			{{"expected_project_identity", identity}, {"operation", "create_instrument_track"},
+			 {"parameters", QJsonObject{{"name", "Guarded during export"}}}});
+		QCOMPARE(exportRejected.value(QStringLiteral("code")).toString(), QStringLiteral("project_busy"));
+		QCOMPARE(Engine::getSong()->tracks().size(), tracksBeforeExport);
+		Engine::getSong()->stopExport();
+
+		structure = readStructure();
+		identity = structure.value(QStringLiteral("identity")).toObject();
 		const auto freshCreateTrack = QJsonObject{{"expected_project_identity", identity},
 			{"operation", "create_instrument_track"}, {"parameters", QJsonObject{{"name", "Guarded track"}}}};
 		const auto created = call(QStringLiteral("guarded_mutate_project"), freshCreateTrack);

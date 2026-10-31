@@ -902,16 +902,17 @@ AiBridgeProtocolResponse AiBridgeIpcServer::executeGuardedMutation(const AiBridg
 	const auto parameters = envelope.value(QStringLiteral("parameters")).toObject();
 	const auto target = envelope.value(QStringLiteral("expected_target")).toObject();
 	AiBridgeProjectContext context;
+	auto *song = Engine::getSong();
+	if (!song) return fail(QStringLiteral("no_project"), QStringLiteral("No project is open"));
+	if (!song->isStopped() || song->isRecording() || song->isExporting())
+		return fail(QStringLiteral("project_busy"), QStringLiteral("Guarded mutations require stopped transport"));
+
 	const auto beforeIdentity = projectIdentityForClient(m_client.data());
 	const auto identityCheck = AiBridgeProjectMutationGuard::compareIdentity(expectedIdentity, beforeIdentity);
 	if (!identityCheck.success)
 		return fail(identityCheck.code, QStringLiteral("Guarded project identity precondition failed"));
 	if (!context.loadedSourceMatches())
 		return fail(QStringLiteral("loaded_source_changed"), QStringLiteral("The loaded project source changed or cannot be verified"));
-	auto *song = Engine::getSong();
-	if (!song) return fail(QStringLiteral("no_project"), QStringLiteral("No project is open"));
-	if (song->isPlaying() || song->isRecording())
-		return fail(QStringLiteral("project_busy"), QStringLiteral("Guarded mutations require stopped transport"));
 
 	QString targetKind;
 	QString targetId;
