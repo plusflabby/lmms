@@ -41,6 +41,32 @@
 
 namespace lmms
 {
+namespace
+{
+#if defined(__clang__)
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+#elif defined(__GNUC__)
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
+#endif
+std::shared_ptr<const AudioWindowPlaybackView> loadPublishedAudioWindowView(
+	const std::shared_ptr<const AudioWindowPlaybackView>& view)
+{
+	return std::atomic_load_explicit(&view, std::memory_order_acquire);
+}
+
+void storePublishedAudioWindowView(std::shared_ptr<const AudioWindowPlaybackView>& view,
+	std::shared_ptr<const AudioWindowPlaybackView> replacement)
+{
+	std::atomic_store_explicit(&view, std::move(replacement), std::memory_order_release);
+}
+#if defined(__clang__)
+#pragma clang diagnostic pop
+#elif defined(__GNUC__)
+#pragma GCC diagnostic pop
+#endif
+}
 
 SampleClip::SampleClip(Track* _track, Sample sample, bool isPlaying):
 	Clip(_track),
@@ -201,7 +227,7 @@ QString SampleClip::applyAudioWindow(const AudioSourceWindowV2& window,const Aud
 		// Retire any unversioned handle before changing its legacy Sample's mode.
 		if(!hasAudioSourceWindow()) Engine::audioEngine()->removePlayHandlesOfTypes(getTrack(),PlayHandle::Type::SamplePlayHandle);
 		published->expectedEpoch=m_audioWindowGuard->epoch.fetch_add(1,std::memory_order_acq_rel)+1;
-		m_audioWindowView.store({},std::memory_order_release);
+		storePublishedAudioWindowView(m_audioWindowView, {});
 		m_audioWindowStorage=std::move(storage);
 		m_sample.m_audioWindowGuard=m_audioWindowGuard;
 		{
@@ -213,7 +239,7 @@ QString SampleClip::applyAudioWindow(const AudioSourceWindowV2& window,const Aud
 		}
 		m_startFrameOffset=-int(window.base.inFrame);
 		setIsPlaying(false);
-		m_audioWindowView.store(std::move(published),std::memory_order_release);
+		storePublishedAudioWindowView(m_audioWindowView, std::move(published));
 	}
 	song->setModified();
 	if(original.positionTicks!=geometry.positionTicks) emit positionChanged();
@@ -258,7 +284,7 @@ AudioWindowEligibility SampleClip::audioWindowEligibility() const
 
 std::shared_ptr<const AudioWindowPlaybackView> SampleClip::audioWindowPlaybackView() const
 {
-	auto view=m_audioWindowView.load(std::memory_order_acquire);
+	auto view=loadPublishedAudioWindowView(m_audioWindowView);
 	if(view && view->guard->epoch.load(std::memory_order_acquire)==view->expectedEpoch) return view;
 	return {};
 }
@@ -269,7 +295,7 @@ void SampleClip::initializeAudioWindowConnections()
 	{
 		if(!hasAudioSourceWindow()) return;
 		m_audioWindowGuard->epoch.fetch_add(1,std::memory_order_acq_rel);
-		m_audioWindowView.store({},std::memory_order_release);
+		storePublishedAudioWindowView(m_audioWindowView, {});
 		// Graph producers may still own an automation-clip mutex. Invalidate
 		// synchronously, but traverse/requalify only after the edit completes.
 		QMetaObject::invokeMethod(this,[this]{refreshAudioWindowPlayback();},Qt::QueuedConnection);
@@ -287,7 +313,7 @@ void SampleClip::refreshAudioWindowPlayback()
 {
 	if(!hasAudioSourceWindow() || m_loadingAudioWindow) return;
 	const auto epoch=m_audioWindowGuard->epoch.fetch_add(1,std::memory_order_acq_rel)+1;
-	m_audioWindowView.store({},std::memory_order_release);
+	storePublishedAudioWindowView(m_audioWindowView, {});
 	if(QThread::currentThread()!=thread())
 	{
 		QMetaObject::invokeMethod(this,[this]{refreshAudioWindowPlayback();},Qt::QueuedConnection);
@@ -304,7 +330,7 @@ void SampleClip::refreshAudioWindowPlayback()
 			auto published=std::make_shared<const AudioWindowPlaybackView>(std::move(*view));
 			const auto changes=Engine::audioEngine()->requestChangesGuard();
 			setIsPlaying(false);
-			m_audioWindowView.store(std::move(published),std::memory_order_release);
+			storePublishedAudioWindowView(m_audioWindowView, std::move(published));
 		}
 	}
 	emit audioWindowStatusChanged(code);
@@ -602,7 +628,7 @@ void SampleClip::loadSettings( const QDomElement & _this )
 			Engine::audioEngine()->removePlayHandlesOfTypes(getTrack(),PlayHandle::Type::SamplePlayHandle);
 			setIsPlaying(false);
 		}
-		m_audioWindowView.store({},std::memory_order_release);
+		storePublishedAudioWindowView(m_audioWindowView, {});
 		m_sample.m_audioWindowGuard.reset();
 		m_audioWindowStorage = parseAudioWindow(_this);
 	}

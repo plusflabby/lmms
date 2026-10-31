@@ -24,6 +24,7 @@
 
 #include "AutomatableModel.h"
 
+#include <QPointer>
 #include <QRegularExpression>
 
 #include "lmms_math.h"
@@ -37,6 +38,8 @@
 
 namespace lmms
 {
+
+template class TypedAutomatableModel<int>;
 
 long AutomatableModel::s_periodCounter = 0;
 
@@ -293,6 +296,7 @@ void AutomatableModel::loadSettings( const QDomElement& element, const QString& 
 
 void AutomatableModel::setValue(const float value, const bool isAutomated)
 {
+	QPointer<AutomatableModel> self(this);
 	if (fittedValue(value) == m_value)
 	{
 		// TODO check why we need this signal, is there a better solution?
@@ -301,12 +305,51 @@ void AutomatableModel::setValue(const float value, const bool isAutomated)
 	}
 
 	if (!isAutomated) { addJournalCheckPoint(); }
+	if (!self) { return; }
+	auto remainingLinks = countLinks();
 
+	// A direct observer can synchronously delete the owner of this model while
+	// dataChanged is emitted. Keep a guarded self reference across callbacks.
 	// set value for this and the other linked models
 	setValueInternal(value);
-	for (auto model = m_nextLink; model != this; model = model->m_nextLink)
+	if (!self) { return; }
+	QPointer<AutomatableModel> previous = self;
+	QPointer<AutomatableModel> model = previous->m_nextLink;
+	while (remainingLinks && model && model.data() != self.data())
 	{
+		--remainingLinks;
+		QPointer<AutomatableModel> current = model;
+		QPointer<AutomatableModel> successor = current->m_nextLink;
 		model->setValueInternal(value);
+		if (!self) { return; }
+		// Direct observers can unlink or delete the current model and its next
+		// link. Follow the live predecessor link when it survives, or re-anchor
+		// at the surviving current/successor. The original group size bounds
+		// traversal if a callback detaches this model from its ring.
+		if (previous && previous->m_nextLink == current.data())
+		{
+			previous = current;
+			model = current ? current->m_nextLink : nullptr;
+		}
+		else if (previous && previous->m_nextLink != previous.data())
+		{
+			model = previous->m_nextLink;
+		}
+		else if (current)
+		{
+			previous = current;
+			model = current->m_nextLink;
+		}
+		else if (successor)
+		{
+			previous.clear();
+			model = successor;
+		}
+		else
+		{
+			previous = self;
+			model = self->m_nextLink;
+		}
 	}
 }
 

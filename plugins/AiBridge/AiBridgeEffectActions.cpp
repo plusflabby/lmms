@@ -73,7 +73,7 @@ AiBridgeEffectParameterActionResult AiBridgeEffectActions::getParameters(const Q
 	const auto effectId = QString::fromUtf8(effect->descriptor()->name);
 	const auto all = AiBridgeEffectAdapters::parameters(effectId, effect->controls());
 	result.success = true; result.code = "ok"; result.message = "parameters read"; result.effectInstanceId = id;
-	result.page.page = {all.size(), offset, limit, offset + limit < all.size()};
+	result.page.page = {static_cast<int>(all.size()), offset, limit, offset + limit < all.size()};
 	result.page.items = all.mid(offset, limit);
 	return result;
 }
@@ -93,7 +93,7 @@ AiBridgeEffectParameterActionResult AiBridgeEffectActions::setParameters(const Q
 	Engine::getSong()->setModified();
 	result.success = true; result.code = "ok"; result.message = "parameters updated"; result.effectInstanceId = id;
 	const auto after = AiBridgeEffectAdapters::parameters(effectId, effect->controls());
-	result.page.page = {after.size(), 0, after.size(), false}; result.page.items = after;
+	result.page.page = {static_cast<int>(after.size()), 0, static_cast<int>(after.size()), false}; result.page.items = after;
 	return result;
 }
 }

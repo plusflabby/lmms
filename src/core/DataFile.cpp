@@ -42,6 +42,8 @@
 #ifdef Q_OS_WIN
 #include <windows.h>
 #include <io.h>
+#elif defined(Q_OS_UNIX)
+#include <sys/stat.h>
 #endif
 
 #include "base64.h"
@@ -202,6 +204,14 @@ DataFile::DataFile( const QString & _fileName ) :
 			.arg(fileInfo.dwVolumeSerialNumber, 8, 16, QLatin1Char('0'))
 			.arg(fileInfo.nFileIndexHigh, 8, 16, QLatin1Char('0'))
 			.arg(fileInfo.nFileIndexLow, 8, 16, QLatin1Char('0'));
+	}
+#elif defined(Q_OS_UNIX)
+	struct stat fileInfo{};
+	if (inFile.handle() >= 0 && ::fstat(inFile.handle(), &fileInfo) == 0)
+	{
+		m_sourceFileId = QStringLiteral("%1:%2")
+			.arg(static_cast<qulonglong>(fileInfo.st_dev), 0, 16)
+			.arg(static_cast<qulonglong>(fileInfo.st_ino), 0, 16);
 	}
 #endif
 	loadData(sourceBytes, _fileName);

@@ -94,16 +94,12 @@ struct OwnedNewFile::State
  quint64 written=0;
 };
 namespace {
+#ifdef Q_OS_WIN
 bool authorized(const std::shared_ptr<RecordingLibrary::RootState>& root)
 {
-#ifdef Q_OS_WIN
  return root && !root->revoked.load(std::memory_order_acquire) && !root->ancestors.empty()
   && ordinary(root->ancestors.back(),true,root->volume) && finalName(root->ancestors.back())==root->finalPath;
-#else
- return false;
-#endif
 }
-#ifdef Q_OS_WIN
 std::pair<QString,std::shared_ptr<ProjectPin>> projectPin(const std::shared_ptr<RecordingLibrary::RootState>& root,const ProjectIdentity& project,bool create=true)
 {
  if(const auto error=identityError(project);!error.isEmpty())return {error,{}};
@@ -298,16 +294,18 @@ QString RecordingLibrary::storeIdentityRecord(const ProjectIdentity& project,con
  const auto file=relative(pin->directory,name,GENERIC_READ|GENERIC_WRITE|DELETE,FILE_CREATE,false,status);
  if(file==INVALID_HANDLE_VALUE)return "write_failed";
  bool saved=ordinary(file,false,m_root->volume) && finalName(file)==m_root->finalPath+'/'+project.id+'/'+name && writeAll(file,bytes);
- const QString target="identity.json";const auto size=offsetof(FILE_RENAME_INFORMATION,FileName)+size_t(target.size())*sizeof(wchar_t);
- std::vector<std::uint64_t> memory((size+7)/8,0);auto* rename=reinterpret_cast<FILE_RENAME_INFORMATION*>(memory.data());
+ struct RenameInformation{BOOLEAN replace;HANDLE root;ULONG nameBytes;WCHAR name[1];};
+ using NtSetInformationFileFunction=NTSTATUS (NTAPI*)(HANDLE,PIO_STATUS_BLOCK,PVOID,ULONG,FILE_INFORMATION_CLASS);
+ const QString target="identity.json";const auto size=offsetof(RenameInformation,name)+size_t(target.size())*sizeof(wchar_t);
+ std::vector<std::uint64_t> memory((size+7)/8,0);auto* rename=reinterpret_cast<RenameInformation*>(memory.data());
  // A simple NT rename with NULL RootDirectory resolves in the source handle's
  // own directory, never the process working directory. Only this managed metadata
  // file may be replaced; original take publication must remain no-clobber.
- rename->ReplaceIfExists=TRUE;rename->RootDirectory=nullptr;rename->FileNameLength=ULONG(target.size()*2);std::memcpy(rename->FileName,target.utf16(),size_t(target.size())*2);
+ rename->replace=TRUE;rename->root=nullptr;rename->nameBytes=ULONG(target.size()*2);std::memcpy(rename->name,target.utf16(),size_t(target.size())*2);
  if(saved)
  {
-  const auto set=reinterpret_cast<decltype(&NtSetInformationFile)>(GetProcAddress(GetModuleHandleW(L"ntdll.dll"),"NtSetInformationFile"));IO_STATUS_BLOCK io{};
-  const auto renamed=set?set(file,&io,rename,ULONG(size),FileRenameInformation):NTSTATUS(0xc0000002u);
+  const auto set=reinterpret_cast<NtSetInformationFileFunction>(GetProcAddress(GetModuleHandleW(L"ntdll.dll"),"NtSetInformationFile"));IO_STATUS_BLOCK io{};
+  const auto renamed=set?set(file,&io,rename,ULONG(size),static_cast<FILE_INFORMATION_CLASS>(10)):NTSTATUS(0xc0000002u); // FileRenameInformation
   if(renamed<0){qWarning("recording identity publication failed (native status %lx)",ULONG(renamed));saved=false;}
   else saved=finalName(file)==m_root->finalPath+'/'+project.id+"/identity.json" && FlushFileBuffers(file);
  }

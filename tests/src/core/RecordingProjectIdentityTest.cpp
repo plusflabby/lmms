@@ -80,7 +80,7 @@ private slots:
  {
   QTemporaryDir temp;QVERIFY(QDir(temp.path()).mkdir("library"));auto library=RecordingLibrary::authorizeLocalRoot(temp.filePath("library"));QVERIFY(library.library);auto* song=Engine::getSong();
   auto* track=Track::create(Track::Type::Sample,song);QVERIFY(track);track->setName(QString::fromUtf8("Hook \xCE\xA9"));
-  for(const auto suffix:{QString("mmp"),QString("mmpz")}){
+  for(const auto& suffix:{QString("mmp"),QString("mmpz")}){
    const auto path=temp.filePath("Unicode."+suffix);const auto current=song->recordingProjectIdentity().getOrCreateForCurrentProject(*library.library);QCOMPARE(current.code,QString("ok"));
    QVERIFY2(song->guiSaveProjectAs(path),qPrintable(song->recordingProjectIdentity().lastCode()));const auto saved=song->recordingProjectIdentity().getOrCreateForCurrentProject(*library.library);QVERIFY(saved.code=="ok");
    if(suffix=="mmp")QCOMPARE(saved.identity.id,current.identity.id);else QVERIFY(saved.identity.id!=current.identity.id);

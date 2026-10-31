@@ -2,6 +2,7 @@
 
 #include <QCryptographicHash>
 #include <QDataStream>
+#include <QIODevice>
 
 #include <algorithm>
 

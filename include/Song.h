@@ -46,6 +46,7 @@ namespace lmms
 {
 
 class AutomationTrack;
+class DataFile;
 class Keymap;
 class MidiClip;
 class Scale;
@@ -255,6 +256,8 @@ public:
 	bool guiSaveProject();
 	bool guiSaveProjectAs(const QString & filename);
 	bool saveProjectFile(const QString & filename, bool withResources = false);
+	QByteArray projectDocumentHash();
+	QByteArray projectObjectStateHash(SerializingObject &object);
 	recording::RecordingProjectIdentity& recordingProjectIdentity() {return m_recordingProjectIdentity;}
 
 	const QString & projectFileName() const
@@ -392,6 +395,7 @@ private:
 	}
 
 	void saveControllerStates( QDomDocument & doc, QDomElement & element );
+	void populateProjectDataFile( DataFile & dataFile );
 	void restoreControllerStates( const QDomElement & element );
 
 	void removeAllControllers();

@@ -124,6 +124,18 @@ foreach(LMMS_TEST_SRC IN LISTS LMMS_TESTS)
 
 	add_executable(${LMMS_TEST_NAME} ${LMMS_TEST_SRC})
 	add_test(NAME ${LMMS_TEST_NAME} COMMAND ${LMMS_TEST_NAME})
+	if(LMMS_TEST_NAME STREQUAL "AiBridgeIpcServerTest")
+		# This integration test loads the real instrument modules from build/plugins.
+		set_target_properties(${LMMS_TEST_NAME} PROPERTIES ENABLE_EXPORTS ON)
+		if(WIN32)
+			# Native plugin import tables refer to lmms.exe; use the same module
+			# name for this exported test host so Windows binds plugins to it.
+			set_target_properties(${LMMS_TEST_NAME} PROPERTIES OUTPUT_NAME "lmms")
+		endif()
+		if(UNIX AND NOT APPLE)
+			target_link_options(${LMMS_TEST_NAME} PRIVATE -Wl,--export-dynamic)
+		endif()
+	endif()
 
 	# TODO CMake 3.12: Propagate usage requirements by linking to lmmsobjs
 	target_include_directories(${LMMS_TEST_NAME} PRIVATE $<TARGET_PROPERTY:lmmsobjs,INCLUDE_DIRECTORIES>)
@@ -634,6 +646,18 @@ foreach(LMMS_TEST_SRC IN LISTS LMMS_TESTS)
 		target_sources(${LMMS_TEST_NAME} PRIVATE
 			${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeProtocol.cpp
 			${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeMutationTypes.cpp)
+	endif()
+	if(LMMS_TEST_NAME STREQUAL "AiBridgeProtocolTest"
+		OR LMMS_TEST_NAME STREQUAL "AiBridgeMidiProtocolTest"
+		OR LMMS_TEST_NAME STREQUAL "AiBridgePhase3GProtocolTest"
+		OR LMMS_TEST_NAME STREQUAL "AiBridgeIpcServerTest"
+		OR LMMS_TEST_NAME STREQUAL "AiBridgeAudioRangeProtocolTest"
+		OR LMMS_TEST_NAME STREQUAL "AiBridgeViewTest"
+		OR LMMS_TEST_NAME STREQUAL "AiBridgeVocalJobSafetyTest"
+		OR LMMS_TEST_NAME STREQUAL "AiBridgeVocalJobViewTest"
+		OR LMMS_TEST_NAME MATCHES "^AiBridge(MixerProtocol|EffectProtocol|FrameSize|Phase3HSecurity|Phase3HFrameSize)Test$")
+		target_sources(${LMMS_TEST_NAME} PRIVATE
+			${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeProjectMutationGuard.cpp)
 	endif()
 	if(LMMS_TEST_NAME STREQUAL "AiBridgeIpcServerTest" OR LMMS_TEST_NAME STREQUAL "AiBridgeAudioRangeProtocolTest" OR LMMS_TEST_NAME STREQUAL "AiBridgeViewTest")
 		target_sources(${LMMS_TEST_NAME} PRIVATE

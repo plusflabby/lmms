@@ -39,6 +39,59 @@ private slots:
 		}
 	}
 
+	void validatesGuardedProjectMutationEnvelopes()
+	{
+		using namespace lmms;
+		const QString hash(64, QLatin1Char('a'));
+		const QJsonObject identity{{"schema_version", 1}, {"availability", "available"},
+			{"server_pid", 100}, {"client_pid", 101}, {"server_creation_time", "10"},
+			{"client_creation_time", "20"}, {"process_session_id", "session"},
+			{"project_load_generation", "1"}, {"identity_revision", "1"},
+			{"document_state", "unsaved"}, {"dirty", false},
+			{"document_state_hash", hash}, {"loaded_project", QJsonObject{}}};
+		auto parse = [](const QJsonObject &parameters) {
+			return AiBridgeProtocol::parseRequest(QJsonDocument(QJsonObject{{"version", 2},
+				{"request_id", "guarded"}, {"action", "guarded_mutate_project"},
+				{"parameters", parameters}}).toJson(QJsonDocument::Compact) + '\n');
+		};
+		QVERIFY(parse({{"expected_project_identity", identity}, {"operation", "create_instrument_track"},
+			{"parameters", QJsonObject{{"name", "Guarded"}}}}).success);
+		QVERIFY(parse({{"expected_project_identity", identity}, {"operation", "set_tempo"},
+			{"parameters", QJsonObject{{"bpm", 100}}},
+			{"expected_target", QJsonObject{{"kind", "tempo"}, {"expected_bpm", 90}}}}).success);
+		const QJsonObject note{{"position_ticks", 0}, {"length_ticks", 120}, {"key", 60},
+			{"volume", 100}, {"panning", 0}, {"note_type", "regular"}};
+		QVERIFY(parse({{"expected_project_identity", identity}, {"operation", "add_notes"},
+			{"parameters", QJsonObject{{"clip_id", "clip-1"}, {"notes", QJsonArray{note}},
+				{"expected_content_hash", hash}}},
+			{"expected_target", QJsonObject{{"kind", "clip"}, {"object_id", "clip-1"},
+				{"expected_state_hash", hash}}}}).success);
+
+		auto bad = QJsonObject{{"operation", "create_instrument_track"}, {"parameters", QJsonObject{}}};
+		QVERIFY(!parse(bad).success);
+		bad = {{"expected_project_identity", identity}, {"operation", "unsupported"}, {"parameters", QJsonObject{}}};
+		QVERIFY(!parse(bad).success);
+		bad = {{"expected_project_identity", identity}, {"operation", "set_tempo"},
+			{"parameters", QJsonObject{{"bpm", 100}}},
+			{"expected_target", QJsonObject{{"kind", "clip"}, {"object_id", "clip-1"}, {"expected_state_hash", hash}}}};
+		QVERIFY(!parse(bad).success);
+		bad = {{"expected_project_identity", identity}, {"operation", "add_notes"},
+			{"parameters", QJsonObject{{"clip_id", "clip-1"}, {"notes", QJsonArray{note}}}},
+			{"expected_target", QJsonObject{{"kind", "clip"}, {"object_id", "clip-1"}, {"expected_state_hash", hash}}}};
+		QVERIFY(!parse(bad).success);
+		bad = {{"expected_project_identity", identity}, {"operation", "create_instrument_track"},
+			{"parameters", QJsonObject{}}, {"extra", true}};
+		QVERIFY(!parse(bad).success);
+		auto unsupportedIdentity = identity;
+		unsupportedIdentity.insert(QStringLiteral("availability"), QStringLiteral("unavailable"));
+		unsupportedIdentity.remove(QStringLiteral("client_pid"));
+		unsupportedIdentity.remove(QStringLiteral("server_creation_time"));
+		unsupportedIdentity.remove(QStringLiteral("client_creation_time"));
+		const auto unsupported = parse({{"expected_project_identity", unsupportedIdentity},
+			{"operation", "create_instrument_track"}, {"parameters", QJsonObject{}}});
+		QCOMPARE(unsupported.code, QStringLiteral("guard_unsupported"));
+	}
+
 	void validatesMidiExportRequestsWithoutAcceptingPaths()
 	{
 		auto parse=[](const QString& action,const QJsonObject& parameters){
