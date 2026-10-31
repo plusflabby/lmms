@@ -19,6 +19,10 @@
 namespace lmms::recording {
 namespace {
 bool validId(const QString& text){const QUuid id(text);return !id.isNull() && id.toString(QUuid::WithoutBraces)==text;}
+std::uint16_t readLe16(const char* p)
+{return std::uint16_t(std::uint8_t(p[0]))|std::uint16_t(std::uint8_t(p[1]))<<8;}
+std::uint32_t readLe32(const char* p)
+{std::uint32_t value=0;for(unsigned i=0;i<4;++i)value|=std::uint32_t(std::uint8_t(p[i]))<<(8*i);return value;}
 QString identityError(const ProjectIdentity& project)
 {
  if(project.schema!=1)return "unsupported_schema";
@@ -77,6 +81,13 @@ SealedTakeToken::~SealedTakeToken()=default;
 SealedTakeToken::SealedTakeToken(SealedTakeToken&&) noexcept=default;
 SealedTakeToken& SealedTakeToken::operator=(SealedTakeToken&&) noexcept=default;
 const RawTakeFacts& SealedTakeToken::facts() const noexcept{return m_state->facts;}
+bool SealedTakeToken::isCurrent() const noexcept
+{
+	if(!m_state || !m_state->source || !m_state->source->isOpen())return false;
+	const auto position=m_state->source->pos();
+	return position>=0 && m_state->source->seek(position);
+}
+QIODevice& SealedTakeToken::readOnlySource() const noexcept{return *m_state->source;}
 struct RecordingLibrary::RootState
 {
  std::atomic_bool revoked{false};
@@ -461,6 +472,101 @@ RecordingLibrary::CheckedFile RecordingLibrary::openRecoveryCandidate(const Proj
 #else
  return {"unsupported_backend",{}};
 #endif
+}
+RecordingLibrary::SealedSourceResult RecordingLibrary::openSealedTake(const ProjectIdentity& project,const QString& take)
+{
+	if(!validId(take))return {QStringLiteral("invalid_identity"),{}};
+	auto files=readRecoveryFiles(project,take);
+	if(files.code!=QStringLiteral("ok"))return {files.code,{}};
+	if(!files.sealed || !files.audio || !files.journal)return {QStringLiteral("take_not_sealed"),{}};
+	const auto fileBytes=files.audio->size();
+	if(fileBytes<44 || fileBytes>11520044 || ((fileBytes-44)&1))return {QStringLiteral("invalid_audio_header"),{}};
+	const auto journalSize=files.journal->size();
+	if(journalSize<4 || journalSize>65536 || !files.journal->seek(0))return {QStringLiteral("invalid_manifest"),{}};
+	const auto journal=files.journal->read(journalSize);
+	if(journal.size()!=journalSize || std::uint8_t(journal[1])!=1)return {QStringLiteral("invalid_manifest"),{}};
+	const auto headerSize=readLe16(journal.constData()+2);
+	TakeDescriptor descriptor;
+	if(headerSize>TakeJournalRecordMaximum || headerSize>journal.size()
+	 || !RecordingTakeJournalCodec::validateHeader(journal.left(headerSize),descriptor)
+	 || descriptor.projectId!=project.id || descriptor.takeId!=take
+	 || (descriptor.sampleRate!=44100 && descriptor.sampleRate!=48000))
+		return {QStringLiteral("invalid_manifest"),{}};
+	const auto rawFrames=std::uint64_t((fileBytes-44)/2);
+	if(!rawFrames || rawFrames>descriptor.maxRawFrames || descriptor.maxRawFrames>std::uint64_t(descriptor.sampleRate)*120
+	 || fileBytes!=qint64(44+rawFrames*2))return {QStringLiteral("audio_limit"),{}};
+	if(!files.audio->seek(0))return {QStringLiteral("source_identity_changed"),{}};
+	const auto audioHeader=files.audio->read(44);
+	const auto canonical=RecordingWavHeader::encodePcm16(descriptor.sampleRate,0);
+	if(audioHeader.size()!=44 || !canonical.valid)return {QStringLiteral("invalid_audio_header"),{}};
+	for(int i=0;i<44;++i)
+	{
+		if((i>=4 && i<8) || i>=40)continue;
+		if(std::uint8_t(audioHeader[i])!=canonical.bytes[std::size_t(i)])return {QStringLiteral("invalid_audio_header"),{}};
+	}
+	if(readLe32(audioHeader.constData()+4)!=std::uint32_t(fileBytes-8)
+	 || readLe32(audioHeader.constData()+40)!=std::uint32_t(fileBytes-44))return {QStringLiteral("sealed_counter_mismatch"),{}};
+	TakeJournalCursor cursor;
+	std::size_t at=headerSize;
+	bool sealIntent=false,complete=false;
+	std::uint64_t intentFrames=0;
+	while(at<std::size_t(journal.size()))
+	{
+		const auto remaining=std::size_t(journal.size())-at;
+		if(complete || remaining<4)return {QStringLiteral("invalid_manifest_record"),{}};
+		const auto* record=reinterpret_cast<const std::uint8_t*>(journal.constData()+at);
+		const auto size=readLe16(reinterpret_cast<const char*>(record+2));
+		if((record[0]!=2 && record[0]!=3) || record[1]!=1 || size<8 || size>TakeJournalRecordMaximum || size>remaining)
+			return {QStringLiteral("invalid_manifest_record"),{}};
+		const auto previous=cursor.lastProgress;
+		if(!RecordingTakeJournalCodec::validateRecord(record,size,cursor))return {QStringLiteral("invalid_manifest_record"),{}};
+		const auto& progress=cursor.lastProgress;
+		if(progress.acceptedFrames>descriptor.maxRawFrames || progress.writtenFrames>rawFrames
+		 || progress.receivedFrames>descriptor.maxRawFrames+4096 || progress.applicationDroppedFrames>progress.receivedFrames
+		 || progress.invalidSamples>progress.receivedFrames || progress.clippedSamples>progress.writtenFrames
+		 || progress.intentionallyUnrecordedFrames>progress.receivedFrames-progress.acceptedFrames)
+			return {QStringLiteral("manifest_counter_mismatch"),{}};
+		if(record[0]==3)
+		{
+			const auto terminal=static_cast<TakeTerminal>(record[4]);
+			if(terminal==TakeTerminal::SealIntent)
+			{
+				if(!previous.sequence || previous.writtenFrames!=progress.writtenFrames || sealIntent)
+					return {QStringLiteral("invalid_seal_intent"),{}};
+				sealIntent=true;intentFrames=progress.writtenFrames;
+			}
+			else if(terminal==TakeTerminal::Complete)
+			{
+				if(!sealIntent || progress.writtenFrames!=intentFrames)return {QStringLiteral("invalid_complete"),{}};
+				complete=true;
+			}
+			else return {QStringLiteral("take_not_complete"),{}};
+		}
+		at+=size;
+	}
+	const auto& final=cursor.lastProgress;
+	if(!sealIntent || !complete || final.writtenFrames!=rawFrames || final.acceptedFrames!=rawFrames
+	 || final.applicationDroppedFrames || final.invalidSamples || final.fault!=InputFault::None
+	 || !final.hardwareLossCountKnown || final.hardwareLostFrames || !final.sourceDigestKnown)
+		return {QStringLiteral("take_not_complete"),{}};
+	if(!files.audio->seek(0))return {QStringLiteral("source_identity_changed"),{}};
+	QCryptographicHash digest(QCryptographicHash::Sha256);
+	std::array<char,65536> chunk{};
+	for(;;)
+	{
+		const auto read=files.audio->read(chunk.data(),qint64(chunk.size()));
+		if(read<0)return {QStringLiteral("source_read_failed"),{}};
+		if(!read)break;
+		digest.addData(chunk.data(),int(read));
+	}
+	const QByteArray expected(reinterpret_cast<const char*>(final.sourceDigest.data()),int(final.sourceDigest.size()));
+	if(digest.result()!=expected)return {QStringLiteral("sealed_digest_mismatch"),{}};
+	RawTakeFacts facts{project.id,take,descriptor.sampleRate,rawFrames,files.audioIdentity,digest.result()};
+	if(!facts.sourceIdentity.index || !files.journalIdentity.index)
+		return {QStringLiteral("source_identity_changed"),{}};
+	auto token=mintRecoveryToken(facts);
+	if(!token)return {QStringLiteral("source_identity_changed"),{}};
+	return {QStringLiteral("ok"),std::move(token)};
 }
 void RecordingLibrary::revoke(){if(m_root)m_root->revoked.store(true,std::memory_order_release);}
 

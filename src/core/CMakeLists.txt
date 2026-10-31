@@ -8,6 +8,8 @@ set(LMMS_SRCS
 	core/recording/RecordingSessionState.cpp
 	core/recording/RecordingSessionManager.cpp
 	core/recording/RecordingPlacement.cpp
+	core/recording/RecordedTakeSource.cpp
+	core/recording/RecordingAttachment.cpp
 	core/recording/RecordingLibrary.cpp
 	core/recording/RecordingRecovery.cpp
 	core/recording/RecordingProjectIdentity.cpp

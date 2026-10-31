@@ -26,6 +26,9 @@ class RecordingPlacement
 public:
  // No source/device I/O, model mutation or attachment. Source authorization is Task 7.
  static PlacementResult plan(const RawTakeFacts&,const ManualPlacementApproval&,const NativeGeometrySnapshot&);
+ static PlacementResult revalidatePlan(const RawTakeFacts&,const PlacementPlan&,const NativeGeometrySnapshot&);
+ static PlacementResult restorePersistedPlan(const RawTakeFacts&,qint64 positionTicks,qint64 offsetTicks,
+  qint64 lengthTicks,quint64 placementRevision,const NativeGeometrySnapshot&);
  static NativeGeometrySnapshot captureGeometry(RecordingTransportControl&,const RawTakeFacts& reviewedSource,
   const RecordingTransportSnapshot& reviewedTransport,quint64 placementRevision);
 };

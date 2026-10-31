@@ -52,6 +52,8 @@ struct PrepareTakeRequest
 struct StartTakeRequest {QString preparedTakeId;quint64 expectedProjectGeneration=0;QString startRequestId;};
 struct PageRequest {qint64 offset=0;int limit=25;};
 class RecordingRecorderView;
+class RecordingAttachment;
+class RecordingSessionManager;
 class ManualPlacementApproval
 {
 public:
@@ -59,6 +61,7 @@ public:
 private:
  friend class RecordingRecorderView;
  friend class RecordingPlacement;
+ friend class RecordingSessionManager;
  QString takeId;
  quint64 expectedProjectGeneration=0,placementRevision=0;
  qint64 sourceInTicks=0,targetTick=0;

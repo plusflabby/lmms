@@ -62,7 +62,7 @@ struct RecordingProjectIdentity::State
  ProjectIdentity identity;
  QString nonce,sourcePath;
  QString lastCode;
- bool loaded=false;
+ bool loaded=false,sourceTrusted=false;
  quint64 revision=1;
  struct Pending {bool active=false;ProjectIdentity identity;QString target,nonce,digest;QJsonObject current;} pending;
  explicit State(Song* song):owner(song){}
@@ -71,6 +71,7 @@ RecordingProjectIdentity::RecordingProjectIdentity(Song* owner):m_state(std::mak
 RecordingProjectIdentity::~RecordingProjectIdentity()=default;
 quint64 RecordingProjectIdentity::revision() const{return m_state->revision;}
 ProjectIdentity RecordingProjectIdentity::cachedIdentity() const{return m_state->identity;}
+bool RecordingProjectIdentity::sourceIdentityTrusted() const noexcept{return m_state->sourceTrusted;}
 QString RecordingProjectIdentity::lastCode() const{return m_state->lastCode;}
 bool RecordingProjectIdentity::reject(const QString& code){m_state->lastCode=code;return false;}
 bool RecordingProjectIdentity::metadataSupported(const QDomElement& head)
@@ -87,29 +88,31 @@ void RecordingProjectIdentity::resetForNewProject()
 void RecordingProjectIdentity::acceptLoad(const QDomElement& head,const QString& source)
 {
  const auto field=head.firstChildElement("recording_project");if(field.isNull())return;
- m_state->identity={field.attribute("id"),1};m_state->nonce=field.attribute("nonce");m_state->sourcePath=normalized(source);m_state->loaded=true;
+ m_state->identity={field.attribute("id"),1};m_state->nonce=field.attribute("nonce");m_state->sourcePath=normalized(source);m_state->loaded=true;m_state->sourceTrusted=false;
 }
 RecordingProjectIdentity::IdentityResult RecordingProjectIdentity::getOrCreateForCurrentProject(RecordingLibrary& library)
 {
  if(m_state->pending.active)return {"recording_busy",{}};
  m_state->library=&library;
- if(m_state->identity.id.isEmpty()){m_state->identity={freshId(),1};m_state->sourcePath=m_state->owner->projectFileName().isEmpty()?QString{}:normalized(m_state->owner->projectFileName());}
- auto code=library.prepareProjectFolder(m_state->identity);if(code!="ok")return {code,{}};
+ if(m_state->identity.id.isEmpty()){m_state->identity={freshId(),1};m_state->sourcePath=m_state->owner->projectFileName().isEmpty()?QString{}:normalized(m_state->owner->projectFileName());m_state->sourceTrusted=false;}
+ auto code=library.prepareProjectFolder(m_state->identity);if(code!="ok"){m_state->sourceTrusted=false;return {code,{}};}
  if(!m_state->loaded)return {"ok",m_state->identity};
- const auto actual=snapshot(m_state->sourcePath);if(actual.code!="ok")return {actual.code,{}};
+ const auto actual=snapshot(m_state->sourcePath);if(actual.code!="ok"){m_state->sourceTrusted=false;return {actual.code,{}};}
  QString readCode;const auto record=library.identityRecord(m_state->identity,readCode);
- if(readCode!="ok" && readCode!="identity_not_registered")return {readCode,{}};
+ if(readCode!="ok" && readCode!="identity_not_registered"){m_state->sourceTrusted=false;return {readCode,{}};}
  const auto current=record["current"].toObject(),pending=record["pending"].toObject();
- if(!bindingValid(current,false) || !bindingValid(pending,true))return {"recovery_required",{}};
- if(current["file_id"]==QJsonValue(actual.id) && current["digest"]==QJsonValue(actual.sha) && current["nonce"]==QJsonValue(m_state->nonce))return {"ok",m_state->identity};
+ if(!bindingValid(current,false) || !bindingValid(pending,true)){m_state->sourceTrusted=false;return {"recovery_required",{}};}
+ if(current["file_id"]==QJsonValue(actual.id) && current["digest"]==QJsonValue(actual.sha) && current["nonce"]==QJsonValue(m_state->nonce))
+ {m_state->sourceTrusted=true;return {"ok",m_state->identity};}
  if(pending["path"]==QJsonValue(m_state->sourcePath) && pending["digest"]==QJsonValue(actual.sha) && pending["nonce"]==QJsonValue(m_state->nonce))
  {
   const QJsonObject recovered{{"path",m_state->sourcePath},{"digest",actual.sha},{"nonce",m_state->nonce},{"file_id",actual.id}};
   code=library.storeIdentityRecord(m_state->identity,recordFor(m_state->identity,recovered,{}));
+  m_state->sourceTrusted=code=="ok";
   return {code,code=="ok"?m_state->identity:ProjectIdentity{}};
  }
  // A copied serialized UUID is not authority to reuse the original recording folder.
- m_state->identity={freshId(),1};m_state->loaded=false;m_state->nonce.clear();
+ m_state->identity={freshId(),1};m_state->loaded=false;m_state->nonce.clear();m_state->sourceTrusted=false;
  code=library.prepareProjectFolder(m_state->identity);return {code,code=="ok"?m_state->identity:ProjectIdentity{}};
 }
 bool RecordingProjectIdentity::beginSave(DataFile& file,const QString& target,bool withResources)
@@ -146,7 +149,7 @@ bool RecordingProjectIdentity::finishSave(const QString& target,bool nativeResul
  if(actual.code!="ok" || actual.sha!=pending.digest)return reject("project_publish_mismatch");
  const QJsonObject current{{"nonce",pending.nonce},{"path",pending.target},{"digest",actual.sha},{"file_id",actual.id}};
  const auto stored=m_state->library->storeIdentityRecord(pending.identity,recordFor(pending.identity,current,{}));if(stored!="ok")return reject(stored);
- m_state->identity=pending.identity;m_state->nonce=pending.nonce;m_state->sourcePath=pending.target;m_state->loaded=true;
+ m_state->identity=pending.identity;m_state->nonce=pending.nonce;m_state->sourcePath=pending.target;m_state->loaded=true;m_state->sourceTrusted=true;
  return true;
 }
 }

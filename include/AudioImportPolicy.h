@@ -7,6 +7,7 @@
 namespace lmms {
 class SampleBuffer;
 class SampleClip;
+namespace recording { class SealedTakeToken; class RecordingAttachment; }
 class LMMS_EXPORT AudioImportPolicy
 {
 	struct Epoch { bool active = true; };
@@ -20,9 +21,11 @@ public:
 		const SampleDecoder::PcmWaveInfo& info() const { return m_info; }
 		const QByteArray& identity() const { return m_lease.identity; }
 		const QString& sourceReference() const { return m_path; }
+		bool isRecordedTake() const noexcept { return bool(m_recordedTake); }
 	private:
 		friend class AudioImportPolicy;
 		friend class SampleClip;
+		friend class recording::RecordingAttachment;
 		Prepared() = default;
 		std::shared_ptr<Epoch> m_epoch;
 		std::shared_ptr<Slot> m_slot;
@@ -30,6 +33,7 @@ public:
 		quint64 m_revision = 0;
 		AudioFileAuthorization::Result m_lease;
 		std::shared_ptr<const SampleBuffer> m_buffer;
+		std::shared_ptr<recording::SealedTakeToken> m_recordedTake;
 		SampleDecoder::PcmWaveInfo m_info;
 		QString m_path;
 	};
@@ -38,6 +42,7 @@ public:
 	~AudioImportPolicy();
 	QString refresh();
 	Result prepare(const QString& path, const QByteArray& expectedDigest = {}, const QByteArray& expectedIdentity = {});
+	Result prepareRecordedTake(recording::SealedTakeToken&& source);
 	static AudioImportPolicy& configured();
 private:
 	void revoke();

@@ -12,6 +12,8 @@ set(LMMS_TESTS
 	src/core/RecordingClipOffsetPlaybackTest.cpp
 	src/core/RecordingPlacementTest.cpp
 	src/core/RecordingLibraryTest.cpp
+	src/core/RecordedTakeSourceTest.cpp
+	src/core/RecordingAttachmentTest.cpp
 	src/core/RecordingRecoveryTest.cpp
 	src/core/RecordingProjectIdentityTest.cpp
 	src/core/RecordingRingTest.cpp

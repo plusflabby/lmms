@@ -81,6 +81,19 @@ private slots:
  void geometryCaptureCopiesActualNativeValues()
  {auto s=source();auto g=geometry(s,137);s.sampleRate=lmms::Engine::audioEngine()->outputSampleRate();g.current.sampleRate=s.sampleRate;Transport transport;transport.world=g.current;
   const auto captured=RecordingPlacement::captureGeometry(transport,s,g.current,5);QVERIFY(captured.current.available);QCOMPARE(captured.sourceFramesPerTick,lmms::Engine::framesPerTick(s.sampleRate));QCOMPARE(captured.current.tempo,137);QCOMPARE(captured.placementRevision,quint64(5));}
+ void revalidatedPlanRejectsStaleGeometryAndTamperedMetadata()
+ {const auto s=source();auto g=geometry(s);const auto original=RecordingPlacement::plan(s,approved(),g);QVERIFY(original.plan);
+  const auto valid=RecordingPlacement::revalidatePlan(s,*original.plan,g);QVERIFY(valid.plan);QCOMPARE(valid.plan->offsetTicks,original.plan->offsetTicks);
+  auto stale=g;++stale.current.tempo;stale.reviewed=stale.current;lmms::Engine::getSong()->setTempo(stale.current.tempo);stale.sourceFramesPerTick=lmms::Engine::framesPerTick(s.sampleRate);
+  const auto changedGeometry=RecordingPlacement::revalidatePlan(s,*original.plan,stale);QVERIFY(!changedGeometry.plan);QCOMPARE(changedGeometry.code,QStringLiteral("placement_review_stale"));
+  auto forged=*original.plan;forged.lengthTicks+=1;const auto changedLength=RecordingPlacement::revalidatePlan(s,forged,g);QVERIFY(!changedLength.plan);QCOMPARE(changedLength.code,QStringLiteral("placement_review_stale"));}
+ void persistedClipGeometryReconstructsOnlyWhenStillNativeEquivalent()
+ {const auto s=source();const auto g=geometry(s);const auto original=RecordingPlacement::plan(s,approved(),g);QVERIFY(original.plan);
+  const auto restored=RecordingPlacement::restorePersistedPlan(s,original.plan->positionTicks,original.plan->offsetTicks,original.plan->lengthTicks,original.plan->placementRevision,g);
+  QVERIFY(restored.plan);QCOMPARE(restored.plan->positionTicks,original.plan->positionTicks);QCOMPARE(restored.plan->offsetTicks,original.plan->offsetTicks);
+  auto changed=g;++changed.current.tempo;changed.reviewed=changed.current;lmms::Engine::getSong()->setTempo(changed.current.tempo);changed.sourceFramesPerTick=lmms::Engine::framesPerTick(s.sampleRate);
+  const auto stale=RecordingPlacement::restorePersistedPlan(s,original.plan->positionTicks,original.plan->offsetTicks,original.plan->lengthTicks,original.plan->placementRevision,changed);
+  QVERIFY(!stale.plan);QCOMPARE(stale.code,QStringLiteral("persisted_geometry_mismatch"));}
 };
 QTEST_GUILESS_MAIN(RecordingPlacementTest)
 #include "RecordingPlacementTest.moc"

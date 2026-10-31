@@ -26,6 +26,13 @@ bool sameGeometry(const RecordingTransportSnapshot& a,const RecordingTransportSn
   && a.tempo==b.tempo && a.numerator==b.numerator && a.denominator==b.denominator
   && a.ticksPerBar==b.ticksPerBar && a.sampleRate==b.sampleRate;
 }
+bool samePlan(const PlacementPlan& a,const PlacementPlan& b)
+{
+ return a.positionTicks==b.positionTicks && a.offsetTicks==b.offsetTicks && a.lengthTicks==b.lengthTicks
+  && a.effectiveSourceInFrame==b.effectiveSourceInFrame && a.nativeEndFrame==b.nativeEndFrame && a.rawEndFrame==b.rawEndFrame
+  && a.placementRevision==b.placementRevision && a.placementQuality==b.placementQuality
+  && a.driftQuality==b.driftQuality && a.sampleAccuracyVerified==b.sampleAccuracyVerified;
+}
 // Deliberately retain native float multiplication/truncation. SampleTrack::play
 // maps source-time ticks this way; rational/double rounding would change boundaries.
 float nativeProduct(qint64 ticks,float framesPerTick)
@@ -82,6 +89,29 @@ PlacementResult RecordingPlacement::plan(const RawTakeFacts& source,const Manual
  PlacementPlan plan;plan.positionTicks=p;plan.offsetTicks=-q;plan.lengthTicks=lo;
  plan.effectiveSourceInFrame=first;plan.nativeEndFrame=end;plan.rawEndFrame=source.rawFrames;plan.placementRevision=approval.placementRevision;
  return {"ok",std::move(plan)};
+}
+PlacementResult RecordingPlacement::revalidatePlan(const RawTakeFacts& source,const PlacementPlan& candidate,const NativeGeometrySnapshot& geometry)
+{
+ ManualPlacementApproval approval;
+ approval.takeId=source.takeId;approval.expectedProjectGeneration=geometry.current.projectGeneration;
+ approval.placementRevision=candidate.placementRevision;approval.sourceInTicks=-candidate.offsetTicks;approval.targetTick=candidate.positionTicks;
+ const auto current=plan(source,approval,geometry);
+ if(!current.plan)return current;
+ if(!samePlan(*current.plan,candidate))return {"placement_review_stale",{}};
+ return current;
+}
+PlacementResult RecordingPlacement::restorePersistedPlan(const RawTakeFacts& source,qint64 positionTicks,qint64 offsetTicks,
+ qint64 lengthTicks,quint64 revision,const NativeGeometrySnapshot& geometry)
+{
+ if(offsetTicks>0 || offsetTicks==std::numeric_limits<qint64>::min() || lengthTicks<=0 || !revision)
+  return {"persisted_geometry_mismatch",{}};
+ ManualPlacementApproval approval;approval.takeId=source.takeId;approval.expectedProjectGeneration=geometry.current.projectGeneration;
+ approval.placementRevision=revision;approval.sourceInTicks=-offsetTicks;approval.targetTick=positionTicks;
+ const auto current=plan(source,approval,geometry);
+ if(!current.plan)return current;
+ if(current.plan->positionTicks!=positionTicks || current.plan->offsetTicks!=offsetTicks || current.plan->lengthTicks!=lengthTicks)
+  return {"persisted_geometry_mismatch",{}};
+ return current;
 }
 NativeGeometrySnapshot RecordingPlacement::captureGeometry(RecordingTransportControl& transport,const RawTakeFacts& source,
  const RecordingTransportSnapshot& reviewed,quint64 revision)

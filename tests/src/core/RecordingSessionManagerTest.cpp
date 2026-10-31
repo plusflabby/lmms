@@ -1,22 +1,52 @@
 #include "RecordingSessionManager.h"
+#include "RecordingAttachment.h"
+#include "AudioImportPolicy.h"
+#include "ConfigManager.h"
 #include "Engine.h"
 #include "AudioEngine.h"
 #include "AudioDevice.h"
 #include "Song.h"
 #include <QtTest>
 #include <QTemporaryDir>
+#include <QDomDocument>
 #include <QDir>
 #include <QFile>
 #include <QUuid>
 #include <QCryptographicHash>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QScopeGuard>
 #include <windows.h>
 #include <functional>
 #include <tuple>
 using namespace lmms::recording;
+using namespace lmms;
+namespace lmms::recording {
+class RecordingRecorderView
+{
+public:
+	static ManualPlacementApproval approve(const QString& take, quint64 generation, quint64 revision, qint64 sourceIn, qint64 target)
+	{
+		ManualPlacementApproval value;
+		value.takeId = take;
+		value.expectedProjectGeneration = generation;
+		value.placementRevision = revision;
+		value.sourceInTicks = sourceIn;
+		value.targetTick = target;
+		return value;
+	}
+};
+}
 namespace {
 QString uuid(){return QUuid::createUuid().toString(QUuid::WithoutBraces);}
+class SyntheticOutput final : public AudioDevice
+{
+public:
+	explicit SyntheticOutput(int rate):AudioDevice(2,Engine::audioEngine()){setSampleRate(rate);}
+private:
+	void startProcessingImpl() override{}
+	void stopProcessingImpl() override{}
+};
 class Input final : public RecordingInputDriver
 {
 public:
@@ -292,8 +322,38 @@ private slots:
   std::ignore=f.manager.poll(200);QVERIFY(f.manager.stop(f.manager.status().takeId).ok);f.until([&]{return f.manager.quiescent();});const auto status=f.manager.status();
   QCOMPARE(status.captureIntegrity,CaptureIntegrity::Complete);QCOMPARE(status.placementState,PlacementState::AwaitingLocalPlacement);
   QCOMPARE(status.placementQuality,QString("uncalibrated"));QCOMPARE(status.driftQuality,QString("unmeasured"));QCOMPARE(status.outputContinuity,QString("unobserved"));
-  QVERIFY(!status.sampleAccuracyVerified);QVERIFY(!status.placementConfirmed);QCOMPARE(f.manager.confirmPlacement({}).code,QString("unsupported_placement"));
+  QVERIFY(!status.sampleAccuracyVerified);QVERIFY(!status.placementConfirmed);QCOMPARE(f.manager.confirmPlacement({}).code,QString("manual_approval_required"));
   QCOMPARE(f.manager.takes().takes.size(),std::size_t(1));
+ }
+ void localConfirmationAttachesOneTakeWithoutCalibrating()
+ {
+  Engine::audioEngine()->setAudioDevice(new SyntheticOutput(48000),false);Engine::getSong()->setTempo(120);
+  Fixture f;QVERIFY(f.arm());auto p=f.prepare(0);QVERIFY(p.ok);QVERIFY(f.start(p).ok);f.until([&]{return f.transport.plays==1;});
+  f.transport.world.songTick=768;std::ignore=f.manager.poll(200);const auto takeId=f.manager.status().takeId;
+  QVERIFY(!takeId.isEmpty());QVERIFY(f.manager.stop(takeId).ok);f.until([&]{return f.manager.quiescent();});
+  const auto beforeStatus=f.manager.status();QCOMPARE(beforeStatus.captureIntegrity,CaptureIntegrity::Complete);
+  QCOMPARE(beforeStatus.placementState,PlacementState::AwaitingLocalPlacement);
+
+  QDomDocument document;auto head=document.createElement(QStringLiteral("head"));document.appendChild(head);
+  auto identity=head.ownerDocument().createElement(QStringLiteral("recording_project"));
+  identity.setAttribute(QStringLiteral("schema"),1);identity.setAttribute(QStringLiteral("id"),f.host.projectIdentity().id);identity.setAttribute(QStringLiteral("nonce"),uuid());head.appendChild(identity);
+  Engine::getSong()->recordingProjectIdentity().acceptLoad(head,QString{});
+  auto* config=ConfigManager::inst();const auto oldFile=config->value("aibridge","audio_import_max_file_bytes","task7-absent");
+  const auto oldDecoded=config->value("aibridge","audio_import_max_decoded_bytes","task7-absent");
+  auto restore= qScopeGuard([&]{if(oldFile=="task7-absent")config->deleteValue("aibridge","audio_import_max_file_bytes");else config->setValue("aibridge","audio_import_max_file_bytes",oldFile);
+   if(oldDecoded=="task7-absent")config->deleteValue("aibridge","audio_import_max_decoded_bytes");else config->setValue("aibridge","audio_import_max_decoded_bytes",oldDecoded);AudioImportPolicy::configured().refresh();});
+  config->setValue("aibridge","audio_import_max_file_bytes","2000000");config->setValue("aibridge","audio_import_max_decoded_bytes","2000000");
+  const auto folder=f.folder();const auto takePath=folder+"/take-"+takeId+".wav";QFile audio(takePath);QVERIFY(audio.open(QIODevice::ReadOnly));const auto before=QCryptographicHash::hash(audio.readAll(),QCryptographicHash::Sha256);audio.close();
+  const auto tracksBefore=Engine::getSong()->tracks().size();
+  const auto approval=RecordingRecorderView::approve(takeId,1,1,0,768);
+  const auto attached=f.manager.confirmPlacement(approval);QVERIFY(attached.ok);QCOMPARE(attached.code,QStringLiteral("take_attached"));
+  const auto status=f.manager.status();QCOMPARE(status.placementState,PlacementState::Attached);QVERIFY(status.placementConfirmed);
+  QCOMPARE(status.placementQuality,QStringLiteral("uncalibrated"));QCOMPARE(status.driftQuality,QStringLiteral("unmeasured"));QVERIFY(!status.sampleAccuracyVerified);
+  QCOMPARE(Engine::getSong()->tracks().size(),tracksBefore+1);const auto clipCount=Engine::getSong()->tracks().back()->numOfClips();QCOMPARE(clipCount,1);
+  const auto repeated=f.manager.confirmPlacement(approval);QVERIFY(repeated.ok);QCOMPARE(repeated.code,QStringLiteral("already_attached"));
+  QCOMPARE(Engine::getSong()->tracks().size(),tracksBefore+1);
+  QFile afterFile(takePath);QVERIFY(afterFile.open(QIODevice::ReadOnly));QCOMPARE(QCryptographicHash::hash(afterFile.readAll(),QCryptographicHash::Sha256),before);
+  QVERIFY(f.manager.disarm().ok);
  }
 };
 QTEST_GUILESS_MAIN(RecordingSessionManagerTest)

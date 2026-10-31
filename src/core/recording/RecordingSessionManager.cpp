@@ -1,4 +1,6 @@
 #include "RecordingSessionManager.h"
+#include "RecordingAttachment.h"
+#include "RecordingPlacement.h"
 #include "RecordingSessionState.h"
 #include "AudioEngine.h"
 #include "AudioDevice.h"
@@ -74,11 +76,11 @@ QString inputFailure(const RecordingHostSnapshot& h)
 }
 struct RecordingSessionManager::Impl
 {
- Impl(RecordingServiceHost& input,RecordingTransportControl& native):host(input),transport(native)
+ Impl(RecordingServiceHost& input,RecordingTransportControl& native):host(input),transport(native),attachment(input,native)
  {
   const auto world=transport.snapshot();context=makeContext(world);state=std::make_unique<RecordingSessionState>(context);current.projectGeneration=world.projectGeneration;
  }
- RecordingServiceHost& host;RecordingTransportControl& transport;QThread* owner=QThread::currentThread();
+ RecordingServiceHost& host;RecordingTransportControl& transport;RecordingAttachment attachment;QThread* owner=QThread::currentThread();
  const QString processId=QUuid::createUuid().toString(QUuid::WithoutBraces);
  LocalArmContext context;std::unique_ptr<RecordingSessionState> state;
  std::optional<PreparedTake> prepared;RecordingTransportSnapshot frozen,expected;
@@ -199,7 +201,8 @@ RecordingSessionManager::~RecordingSessionManager()
  if(m_impl && !quiescent())std::ignore=requestShutdown();
  // The host remains the closing barrier and owns all live stream/writer storage.
 }
-RecordingCapabilities RecordingSessionManager::capabilities() const noexcept{return {};}
+RecordingCapabilities RecordingSessionManager::capabilities() const noexcept
+{RecordingCapabilities value;value.placementImplemented=true;return value;}
 RecordingStatus RecordingSessionManager::status() const
 {
  auto& s=*m_impl;s.assertOwner();auto value=s.current;
@@ -292,7 +295,66 @@ RecordingReply RecordingSessionManager::requestShutdown()
  if(s.active){s.queueStop(true,!s.current.performanceReached);std::ignore=s.stopWork();return s.reply(quiescent(),quiescent()?"quiescent":"shutdown_pending");}
  std::ignore=s.state->disarm();const auto result=s.host.requestShutdown(s.now);s.base();return s.reply(result.ok,result.code);
 }
-RecordingReply RecordingSessionManager::confirmPlacement(const ManualPlacementApproval&){return m_impl->reply(false,"unsupported_placement");}
+RecordingReply RecordingSessionManager::confirmPlacement(const ManualPlacementApproval& approval)
+{
+	auto& s=*m_impl;s.assertOwner();
+	if(s.active || s.commandDepth)return s.reply(false,"recording_busy");
+	if(s.closing)return s.reply(false,"shutting_down");
+	if(!opaqueId(approval.takeId) || !approval.expectedProjectGeneration || !approval.placementRevision)
+		return s.reply(false,"manual_approval_required");
+	const auto world=s.transport.snapshot();s.syncContext(world);
+	if(approval.expectedProjectGeneration!=world.projectGeneration)return s.reply(false,"stale_project");
+	RecordingStatus* takeStatus=nullptr;
+	if(s.current.takeId==approval.takeId && s.current.captureIntegrity!=CaptureIntegrity::Pending)takeStatus=&s.current;
+	else
+	{
+		const auto found=std::find_if(s.history.begin(),s.history.end(),[&](const auto& value){return value.takeId==approval.takeId;});
+		if(found!=s.history.end())takeStatus=&*found;
+	}
+	if(!takeStatus)return s.reply(false,"stale_take");
+	const bool wasAttached=takeStatus->placementState==PlacementState::Attached;
+	if(takeStatus->projectGeneration!=approval.expectedProjectGeneration)return s.reply(false,"stale_project");
+	if(takeStatus->captureIntegrity!=CaptureIntegrity::Complete || takeStatus->cancelled || !takeStatus->performanceReached)
+	{
+		if(!wasAttached)takeStatus->placementState=PlacementState::SavedUnattached;
+		takeStatus->code="take_saved_unattached";
+		return {false,takeStatus->code,*takeStatus};
+	}
+	if(takeStatus->placementState==PlacementState::Attached && !takeStatus->placementConfirmed)
+		return {false,"placement_state_invalid",*takeStatus};
+	const auto project=s.host.projectIdentity();
+	if(project.id.isEmpty() || project.id!=world.projectId)return s.reply(false,"stale_project");
+	auto opened=s.host.openSealedTake(project,approval.takeId);
+	if(!opened.source)
+	{
+		if(!wasAttached) takeStatus->placementState=PlacementState::SavedUnattached;
+		takeStatus->code=wasAttached?opened.code:"take_saved_unattached";
+		return {false,takeStatus->code,*takeStatus};
+	}
+	const auto geometry=RecordingPlacement::captureGeometry(s.transport,opened.source->facts(),world,approval.placementRevision);
+	const auto placement=RecordingPlacement::plan(opened.source->facts(),approval,geometry);
+	if(!placement.plan)
+	{
+		if(!wasAttached) takeStatus->placementState=PlacementState::SavedUnattached;
+		takeStatus->code=wasAttached?placement.code:"take_saved_unattached";
+		return {false,takeStatus->code,*takeStatus};
+	}
+	const auto attached=s.attachment.attach(*opened.source,*placement.plan,approval.expectedProjectGeneration);
+	if(!attached.attached)
+	{
+		if(!wasAttached)takeStatus->placementState=PlacementState::SavedUnattached;
+		takeStatus->placementConfirmed=wasAttached;
+		takeStatus->code=attached.code=="saved_unattached" && !wasAttached?"take_saved_unattached":publicCode(attached.code);
+		return {false,takeStatus->code,*takeStatus};
+	}
+	takeStatus->placementState=PlacementState::Attached;
+	takeStatus->placementConfirmed=true;
+	takeStatus->placementQuality="uncalibrated";
+	takeStatus->driftQuality="unmeasured";
+	takeStatus->sampleAccuracyVerified=false;
+	takeStatus->code=attached.code=="already_attached"?"already_attached":"take_attached";
+	return {true,takeStatus->code,*takeStatus};
+}
 TakePage RecordingSessionManager::takes(PageRequest request) const
 {
  auto& s=*m_impl;s.assertOwner();if(request.offset<0 || request.limit<1 || request.limit>100)return {"invalid_page"};

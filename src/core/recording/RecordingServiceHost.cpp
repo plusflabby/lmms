@@ -103,6 +103,22 @@ RecordingLibrary::NewTakeResult RecordingServiceHost::createUniqueTake(const Tak
  m_impl->assertOwner();if(!m_impl->library || m_impl->project.id.isEmpty())return {"unauthorized_library",{}};
  return m_impl->library->createUniqueTake(m_impl->project,take,rate,maximum);
 }
+RecordingLibrary::SealedSourceResult RecordingServiceHost::openSealedTake(const ProjectIdentity& project,const QString& takeId)
+{
+	m_impl->assertOwner();
+	if(!m_impl->library || m_impl->project.id!=project.id)return {QStringLiteral("recording_library_required"),{}};
+	return m_impl->library->openSealedTake(project,takeId);
+}
+RecordingLibrary::SealedSourceResult RecordingServiceHost::reopenRecordedTake(RecordingProjectIdentity& identity,
+	const ProjectIdentity& sourceProject,const QString& takeId)
+{
+	m_impl->assertOwner();
+	if(!m_impl->library || m_impl->project.id.isEmpty())return {QStringLiteral("recording_library_required"),{}};
+	const auto current=identity.getOrCreateForCurrentProject(*m_impl->library);
+	if(current.code!=QStringLiteral("ok"))return {current.code,{}};
+	if(!identity.sourceIdentityTrusted())return {QStringLiteral("project_identity_unverified"),{}};
+	return m_impl->library->openSealedTake(sourceProject,takeId);
+}
 ProjectIdentity RecordingServiceHost::projectIdentity() const noexcept{return m_impl->project;}
 std::uint64_t RecordingServiceHost::rootRevision() const noexcept{return m_impl->rootRevision;}
 RecordingHostResult RecordingServiceHost::arm(const SelectedInputProfile& profile,InputEpoch epoch,std::uint64_t revision)

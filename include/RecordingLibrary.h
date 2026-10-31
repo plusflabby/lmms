@@ -31,6 +31,7 @@ public:
  struct NewFileResult {QString code;std::unique_ptr<OwnedNewFile> file;};
  struct NewTakeResult {QString code;std::unique_ptr<RecordingWriterSink> sink;std::unique_ptr<RecordingReceiptSink> receipt;};
  struct CheckedFile {QString code;std::unique_ptr<QIODevice> source;};
+ struct SealedSourceResult {QString code;std::unique_ptr<SealedTakeToken> source;};
  struct RecoveryName {QString code,projectId,takeId;bool candidate=false,end=false;};
  class RecoveryScan
  {
@@ -56,6 +57,7 @@ public:
  QString prepareProjectFolder(const ProjectIdentity&);
  NewFileResult createUniquePartial(const ProjectIdentity&,const TakeIdentity&);
  NewTakeResult createUniqueTake(const ProjectIdentity&,const TakeIdentity&,std::uint32_t sampleRate,std::uint64_t maxRawFrames);
+ SealedSourceResult openSealedTake(const ProjectIdentity&,const QString& takeId);
  CheckedFile openRecoveryCandidate(const ProjectIdentity&,const QString& takeId);
  void revoke();
 private:

@@ -8,6 +8,7 @@
 #include <optional>
 #include <QByteArray>
 class QIODevice;
+namespace lmms { class AudioImportPolicy; }
 namespace lmms::recording {
 // Control-thread observations, deliberately separate from ADC/native clock claims.
 struct TakeSessionFacts
@@ -80,10 +81,13 @@ public:
  SealedTakeToken(const SealedTakeToken&)=delete;
  SealedTakeToken& operator=(const SealedTakeToken&)=delete;
  const RawTakeFacts& facts() const noexcept;
+ bool isCurrent() const noexcept;
 private:
  friend class RecordingLibrary;
+ friend class ::lmms::AudioImportPolicy;
  struct State;
  explicit SealedTakeToken(std::unique_ptr<State>);
+ QIODevice& readOnlySource() const noexcept;
  std::unique_ptr<State> m_state;
 };
 enum class TakeTerminal : std::uint8_t { NoTakeCreated,Incomplete,Complete,SavedUnattached,SealIntent };

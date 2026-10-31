@@ -44,6 +44,9 @@ public:
  RecordingInputDevicePage enumerateInputs(std::uint32_t offset,std::uint32_t limit);
  RecordingLibrarySelectionResult selectRecordingRoot(const QString&,RecordingProjectIdentity&);
  RecordingLibrary::NewTakeResult createUniqueTake(const TakeIdentity&,std::uint32_t sampleRate,std::uint64_t maxRawFrames);
+ RecordingLibrary::SealedSourceResult openSealedTake(const ProjectIdentity&,const QString& takeId);
+ RecordingLibrary::SealedSourceResult reopenRecordedTake(RecordingProjectIdentity&,const ProjectIdentity& sourceProject,
+  const QString& takeId);
  ProjectIdentity projectIdentity() const noexcept;
  std::uint64_t rootRevision() const noexcept;
  RecordingHostResult arm(const SelectedInputProfile&,InputEpoch,std::uint64_t rootRevision);
