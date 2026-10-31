@@ -5,6 +5,7 @@
 #include <memory>
 namespace lmms {class Song;}
 namespace lmms::recording {
+struct PlacementPlan;
 struct RecordingTransportSnapshot
 {
  bool outputCaptureSafe=true;
@@ -17,6 +18,12 @@ struct RecordingTransportSnapshot
 };
 struct RecordingPlaybackOwnership {quint64 serial=0,stateRevision=0;};
 struct RecordingTransportResult {bool ok=false;QString code;RecordingPlaybackOwnership ownership;};
+struct RecordingPlacementReview
+{
+	QString code;
+	std::shared_ptr<const PlacementPlan> plan;
+	std::optional<SealedTakeToken> source;
+};
 class RecordingTransportControl
 {
 public:
@@ -43,6 +50,7 @@ public:
  RecordingReply stop(const QString& takeId);
  RecordingReply disarm();
  RecordingReply requestShutdown();
+ RecordingPlacementReview reviewPlacement(const ManualPlacementApproval&);
  RecordingReply confirmPlacement(const ManualPlacementApproval&);
  RecordingStatus status() const;
  TakePage takes(PageRequest={}) const;

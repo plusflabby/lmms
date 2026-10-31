@@ -4,6 +4,7 @@
 #include "Engine.h"
 #include "ProjectJournal.h"
 #include "RecordingAttachment.h"
+#include "RecordingRecorderView.h"
 #include "RecordingPlacement.h"
 #include "RecordingServiceHost.h"
 #include "RecordingWriter.h"
@@ -22,23 +23,6 @@
 
 using namespace lmms;
 using namespace lmms::recording;
-
-namespace lmms::recording {
-class RecordingRecorderView
-{
-public:
-	static ManualPlacementApproval approve(const QString& take, quint64 generation, quint64 revision, qint64 sourceIn, qint64 target)
-	{
-		ManualPlacementApproval value;
-		value.takeId = take;
-		value.expectedProjectGeneration = generation;
-		value.placementRevision = revision;
-		value.sourceInTicks = sourceIn;
-		value.targetTick = target;
-		return value;
-	}
-};
-}
 
 namespace
 {

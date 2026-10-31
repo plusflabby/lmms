@@ -118,6 +118,7 @@ struct RecordingSessionManager::Impl
   if(h.input.input.epoch!=admitted.epoch)return;
   const auto& in=h.input.input;current.receivedFrames=in.receivedFrames;current.acceptedFrames=in.acceptedFrames;current.writtenFrames=h.writer.writtenFrames;
   current.durableFrames=h.writer.durableFrames;current.applicationDroppedFrames=in.applicationDroppedFrames;current.intentionallyUnrecordedFrames=in.intentionallyUnrecordedFrames;
+  current.inputPeak=in.inputPeak;
   current.clippedSamples=h.writer.clippedSamples;current.invalidSamples=in.invalidSamples;current.observationsDropped=in.observationsDropped;
   current.hardwareLossCountKnown=h.input.firstCallbackSeen && in.hardwareLossCountKnown;current.hardwareLostFrames=in.hardwareLostFrames;
   current.inputTimestampQuality=h.input.observations.observations?std::max(in.timestampQuality,h.input.observations.quality):in.timestampQuality;
@@ -206,6 +207,7 @@ RecordingCapabilities RecordingSessionManager::capabilities() const noexcept
 RecordingStatus RecordingSessionManager::status() const
 {
  auto& s=*m_impl;s.assertOwner();auto value=s.current;
+ if(value.takeId.isEmpty())value.projectGeneration=s.transport.snapshot().projectGeneration;
  value.armed=value.armed && (s.active || s.host.localArmSnapshot().armed);
  return value;
 }
@@ -294,6 +296,46 @@ RecordingReply RecordingSessionManager::requestShutdown()
  auto& s=*m_impl;s.assertOwner();s.closing=true;
  if(s.active){s.queueStop(true,!s.current.performanceReached);std::ignore=s.stopWork();return s.reply(quiescent(),quiescent()?"quiescent":"shutdown_pending");}
  std::ignore=s.state->disarm();const auto result=s.host.requestShutdown(s.now);s.base();return s.reply(result.ok,result.code);
+}
+RecordingPlacementReview RecordingSessionManager::reviewPlacement(const ManualPlacementApproval& approval)
+{
+	auto& s = *m_impl;
+	s.assertOwner();
+	if (s.active || s.commandDepth) return {QStringLiteral("recording_busy"), {}, {}};
+	if (s.closing) return {QStringLiteral("shutting_down"), {}, {}};
+	if (!opaqueId(approval.takeId) || !approval.expectedProjectGeneration || !approval.placementRevision)
+		return {QStringLiteral("manual_approval_required"), {}, {}};
+	const auto world = s.transport.snapshot();
+	s.syncContext(world);
+	if (approval.expectedProjectGeneration != world.projectGeneration)
+		return {QStringLiteral("stale_project"), {}, {}};
+	const RecordingStatus* takeStatus = nullptr;
+	if (s.current.takeId == approval.takeId && s.current.captureIntegrity != CaptureIntegrity::Pending)
+		takeStatus = &s.current;
+	else
+	{
+		const auto found = std::find_if(s.history.begin(), s.history.end(), [&](const auto& value) {
+			return value.takeId == approval.takeId;
+		});
+		if (found != s.history.end()) takeStatus = &*found;
+	}
+	if (!takeStatus) return {QStringLiteral("stale_take"), {}, {}};
+	if (takeStatus->projectGeneration != approval.expectedProjectGeneration)
+		return {QStringLiteral("stale_project"), {}, {}};
+	if (takeStatus->captureIntegrity != CaptureIntegrity::Complete || takeStatus->cancelled || !takeStatus->performanceReached)
+		return {QStringLiteral("take_saved_unattached"), {}, {}};
+	const auto project = s.host.projectIdentity();
+	if (project.id.isEmpty() || project.id != world.projectId)
+		return {QStringLiteral("stale_project"), {}, {}};
+	if (!s.host.quiescent()) return {QStringLiteral("recording_busy"), {}, {}};
+	auto opened = s.host.openSealedTake(project, approval.takeId);
+	if (!opened.source) return {QStringLiteral("take_saved_unattached"), {}, {}};
+	const auto geometry = RecordingPlacement::captureGeometry(s.transport, opened.source->facts(), world,
+		approval.placementRevision);
+	const auto placement = RecordingPlacement::plan(opened.source->facts(), approval, geometry);
+	if (!placement.plan) return {placement.code, {}, {}};
+	return {QStringLiteral("ok"), std::make_shared<const PlacementPlan>(std::move(*placement.plan)),
+		std::optional<SealedTakeToken>(std::move(*opened.source))};
 }
 RecordingReply RecordingSessionManager::confirmPlacement(const ManualPlacementApproval& approval)
 {

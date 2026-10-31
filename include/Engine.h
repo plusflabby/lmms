@@ -41,7 +41,7 @@ class PatternStore;
 class ProjectJournal;
 class Song;
 class Ladspa2LMMS;
-namespace recording {class RecordingServiceHost;}
+namespace recording {class RecordingServiceHost; class RecordingSessionManager;}
 
 namespace gui
 {
@@ -56,6 +56,7 @@ public:
 	static void init( bool renderOnly );
 	static void destroy();
 	static recording::RecordingServiceHost* recordingServiceHost();
+	static recording::RecordingSessionManager* recordingSessionManager();
 
 	// core
 	static AudioEngine *audioEngine()

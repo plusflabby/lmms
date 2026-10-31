@@ -767,6 +767,7 @@ endif()
 FILE(REMOVE include/lmmsconfig.h)
 
 FILE(GLOB LMMS_INCLUDES "${CMAKE_SOURCE_DIR}/include/*.h")
+LIST(APPEND LMMS_INCLUDES "${CMAKE_SOURCE_DIR}/include/RecordingRecorderView.h")
 LIST(SORT LMMS_INCLUDES)
 
 # Get list of all committers from git history, ordered by number of commits.

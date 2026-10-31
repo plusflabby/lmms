@@ -77,6 +77,7 @@ struct RecordingStatus : Status
  quint64 rawStartObservedMilliseconds=0,framesAtReadiness=0;
  quint64 receivedFrames=0,acceptedFrames=0,writtenFrames=0,durableFrames=0,applicationDroppedFrames=0;
  quint64 intentionallyUnrecordedFrames=0,clippedSamples=0,invalidSamples=0,observationsDropped=0,hardwareLostFrames=0;
+	double inputPeak=0.0;
  bool hardwareLossCountKnown=false;
  InputTimestampQuality inputTimestampQuality=InputTimestampQuality::Unavailable;
 };

@@ -40,7 +40,7 @@
 #include "MainWindow.h"
 #include "MidiSetupWidget.h"
 #include "ProjectJournal.h"
-#include "RecordingServiceHost.h"
+#include "RecordingSessionManager.h"
 #include "SetupDialog.h"
 #include "TabBar.h"
 #include "TabButton.h"
@@ -976,13 +976,12 @@ SetupDialog::~SetupDialog()
 
 void SetupDialog::accept()
 {
-	if(auto* host=Engine::recordingServiceHost())
+	if(auto* manager=Engine::recordingSessionManager())
 	{
-		const auto closed=host->requestBackendChange();
-		if(!closed.ok)
+		if(!MainWindow::stopRecordingAndRequireQuiescence(*manager))
 		{
 			QMessageBox::warning(this,tr("Vocal recording still active"),
-				tr("The input stream has not closed safely. LMMS settings were not applied."));
+				tr("The input stream or take writer has not closed safely. LMMS settings were not applied."));
 			return;
 		}
 	}

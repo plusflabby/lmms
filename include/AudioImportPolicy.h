@@ -7,7 +7,7 @@
 namespace lmms {
 class SampleBuffer;
 class SampleClip;
-namespace recording { class SealedTakeToken; class RecordingAttachment; }
+namespace recording { class SealedTakeToken; class RecordingAttachment; class RecordingTakePreview; }
 class LMMS_EXPORT AudioImportPolicy
 {
 	struct Epoch { bool active = true; };
@@ -26,6 +26,7 @@ public:
 		friend class AudioImportPolicy;
 		friend class SampleClip;
 		friend class recording::RecordingAttachment;
+		friend class recording::RecordingTakePreview;
 		Prepared() = default;
 		std::shared_ptr<Epoch> m_epoch;
 		std::shared_ptr<Slot> m_slot;

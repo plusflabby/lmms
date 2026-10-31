@@ -38,6 +38,7 @@
 #include "Oscillator.h"
 #include "RecordingPortAudioInput.h"
 #include "RecordingServiceHost.h"
+#include "RecordingSessionManager.h"
 
 namespace lmms
 {
@@ -54,6 +55,8 @@ Lv2Manager * Engine::s_lv2Manager = nullptr;
 Ladspa2LMMS * Engine::s_ladspaManager = nullptr;
 void* Engine::s_dndPluginKey = nullptr;
 recording::RecordingServiceHost* s_recordingServiceHost = nullptr;
+std::unique_ptr<recording::RecordingTransportControl> s_recordingTransport;
+std::unique_ptr<recording::RecordingSessionManager> s_recordingSessionManager;
 
 
 
@@ -84,6 +87,15 @@ void Engine::init( bool renderOnly )
 	s_lv2Manager->initPlugins();
 #endif
 	s_ladspaManager = new Ladspa2LMMS;
+	if (!s_recordingTransport)
+	{
+		s_recordingTransport = recording::createNativeRecordingTransport(*s_song);
+	}
+	if (!s_recordingSessionManager && s_recordingTransport)
+	{
+		s_recordingSessionManager = std::make_unique<recording::RecordingSessionManager>(
+			*s_recordingServiceHost, *s_recordingTransport);
+	}
 
 	s_projectJournal->setJournalling( true );
 
@@ -101,9 +113,18 @@ void Engine::init( bool renderOnly )
 
 void Engine::destroy()
 {
+	bool recordingHostClosed = false;
+	if (s_recordingSessionManager)
+	{
+		const auto closing = s_recordingSessionManager->requestShutdown();
+		if (!closing.ok || !s_recordingSessionManager->quiescent()) return;
+		s_recordingSessionManager.reset();
+		s_recordingTransport.reset();
+		recordingHostClosed = true;
+	}
 	if(s_recordingServiceHost)
 	{
-		if(!s_recordingServiceHost->requestShutdown().ok) { return; }
+		if(!recordingHostClosed && !s_recordingServiceHost->requestShutdown().ok) { return; }
 		delete s_recordingServiceHost;
 		s_recordingServiceHost = nullptr;
 	}
@@ -140,6 +161,11 @@ void Engine::destroy()
 recording::RecordingServiceHost* Engine::recordingServiceHost()
 {
 	return s_recordingServiceHost;
+}
+
+recording::RecordingSessionManager* Engine::recordingSessionManager()
+{
+	return s_recordingSessionManager.get();
 }
 
 

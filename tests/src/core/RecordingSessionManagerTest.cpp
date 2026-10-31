@@ -1,4 +1,5 @@
 #include "RecordingSessionManager.h"
+#include "RecordingRecorderView.h"
 #include "RecordingAttachment.h"
 #include "AudioImportPolicy.h"
 #include "ConfigManager.h"
@@ -21,22 +22,6 @@
 #include <tuple>
 using namespace lmms::recording;
 using namespace lmms;
-namespace lmms::recording {
-class RecordingRecorderView
-{
-public:
-	static ManualPlacementApproval approve(const QString& take, quint64 generation, quint64 revision, qint64 sourceIn, qint64 target)
-	{
-		ManualPlacementApproval value;
-		value.takeId = take;
-		value.expectedProjectGeneration = generation;
-		value.placementRevision = revision;
-		value.sourceInTicks = sourceIn;
-		value.targetTick = target;
-		return value;
-	}
-};
-}
 namespace {
 QString uuid(){return QUuid::createUuid().toString(QUuid::WithoutBraces);}
 class SyntheticOutput final : public AudioDevice
@@ -132,6 +117,23 @@ private slots:
   Fixture a,b;QVERIFY(a.host.enumerateInputs(0,64).code=="ok");SelectedInputProfile p;p.deviceId="mic-1";p.hostApiName="WASAPI";p.wasapiShared=true;p.input={48000,1,0,4096,5760000};
   auto ticket=a.host.localArmTicket(p,1);QVERIFY(ticket.ok);QVERIFY(!b.manager.arm(std::move(ticket.ticket)).ok);QCOMPARE(a.input->opens,0);QCOMPARE(b.input->opens,0);
   QVERIFY(a.arm());QCOMPARE(a.input->opens,0);QCOMPARE(a.input->starts,0);
+ }
+
+ void statusPreservesCurrentProjectGenerationAfterArm()
+ {
+  Fixture f;
+  QVERIFY(f.arm());
+  QCOMPARE(f.manager.status().projectGeneration, f.transport.world.projectGeneration);
+ }
+
+ void statusReportsInputPeakForLocalMeter()
+ {
+  Engine::audioEngine()->setAudioDevice(new SyntheticOutput(48000),false);Engine::getSong()->setTempo(120);
+  Fixture f;QVERIFY(f.arm());auto p=f.prepare(0);QVERIFY(p.ok);QVERIFY(f.start(p).ok);
+  f.until([&]{return f.input->starts==1;});
+  const auto status=f.manager.poll(100);
+  QCOMPARE(status.inputPeak,0.25);
+  QVERIFY(status.receivedFrames>0);
  }
  void safeQueriesRetainLabelWithoutAdvancingOrOpeningInput()
  {
@@ -324,6 +326,23 @@ private slots:
   QCOMPARE(status.placementQuality,QString("uncalibrated"));QCOMPARE(status.driftQuality,QString("unmeasured"));QCOMPARE(status.outputContinuity,QString("unobserved"));
   QVERIFY(!status.sampleAccuracyVerified);QVERIFY(!status.placementConfirmed);QCOMPARE(f.manager.confirmPlacement({}).code,QString("manual_approval_required"));
   QCOMPARE(f.manager.takes().takes.size(),std::size_t(1));
+ }
+ void placementReviewRemainsUnattachedUntilExplicitConfirmation()
+ {
+  Engine::audioEngine()->setAudioDevice(new SyntheticOutput(48000),false);Engine::getSong()->setTempo(120);
+  Fixture f;QVERIFY(f.arm());auto p=f.prepare(0);QVERIFY(p.ok);QVERIFY(f.start(p).ok);
+  f.until([&]{return f.transport.plays==1;});std::ignore=f.manager.poll(200);
+  const auto takeId=f.manager.status().takeId;QVERIFY(!takeId.isEmpty());
+  QVERIFY(f.manager.stop(takeId).ok);f.until([&]{return f.manager.quiescent();});
+  QCOMPARE(f.manager.status().captureIntegrity,CaptureIntegrity::Complete);
+  const auto tracksBefore=Engine::getSong()->tracks().size();
+  const auto approval=RecordingRecorderView::approve(takeId,1,1,0,0);
+  const auto review=f.manager.reviewPlacement(approval);
+  QVERIFY2(bool(review.plan),qPrintable(review.code));
+  QVERIFY(review.source.has_value());
+  QVERIFY(review.source->isCurrent());
+  QCOMPARE(Engine::getSong()->tracks().size(),tracksBefore);
+  QCOMPARE(f.manager.status().placementState,PlacementState::AwaitingLocalPlacement);
  }
  void localConfirmationAttachesOneTakeWithoutCalibrating()
  {

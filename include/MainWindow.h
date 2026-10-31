@@ -30,6 +30,7 @@
 #include <QList>
 #include <QMainWindow>
 #include <QMdiArea>
+#include <QPointer>
 
 #include "ConfigManager.h"
 
@@ -39,6 +40,8 @@ class QGridLayout;
 
 namespace lmms
 {
+
+namespace recording { class RecordingSessionManager; class RecordingRecorderView; }
 
 namespace gui
 {
@@ -64,6 +67,7 @@ public:
 
 	int addWidgetToToolBar( QWidget * _w, int _row = -1, int _col = -1 );
 	void addSpacingToToolBar( int _size );
+	static bool stopRecordingAndRequireQuiescence(recording::RecordingSessionManager&);
 
 	// wrap the widget with a window decoration and add it to the workspace
 	LMMS_EXPORT SubWindow* addWindowedWidget(QWidget *w, Qt::WindowFlags windowFlags = QFlag(0));
@@ -214,6 +218,7 @@ private:
 	};
 
 	MovableQMdiArea * m_workspace;
+	QPointer<recording::RecordingRecorderView> m_recordingRecorderView;
 
 	QWidget * m_toolBar;
 	QGridLayout * m_toolBarLayout;

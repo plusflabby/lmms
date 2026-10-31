@@ -34,7 +34,7 @@
 #include "ControllerRackView.h"
 #include "MixerView.h"
 #include "MainWindow.h"
-#include "RecordingServiceHost.h"
+#include "RecordingSessionManager.h"
 #include "RecordingServiceClock.h"
 #include "MicrotunerConfig.h"
 #include "PatternEditor.h"
@@ -157,8 +157,8 @@ GuiApplication::GuiApplication()
 	m_recordingServiceTimer=new QTimer(this);
 	m_recordingServiceTimer->setInterval(20);
 	connect(m_recordingServiceTimer,&QTimer::timeout,this,[this]{
-		if(auto* host=Engine::recordingServiceHost();host && !host->quiescent())
-			host->poll(recording::recordingServiceMilliseconds(m_recordingServiceClock));
+		if(auto* manager=Engine::recordingSessionManager();manager && !manager->quiescent())
+			manager->poll(recording::recordingServiceMilliseconds(m_recordingServiceClock));
 	});
 	m_recordingServiceTimer->start();
 
