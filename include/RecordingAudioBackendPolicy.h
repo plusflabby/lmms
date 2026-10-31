@@ -8,14 +8,7 @@ class LMMS_EXPORT RecordingAudioBackendPolicy
 public:
  static bool independentInputOutputAllowed(const QString& actualBackend,bool supportsCapture,bool qualificationBuild) noexcept;
  static bool legacyInputAllowed(bool qualificationBuild) noexcept;
- static constexpr bool qualificationBuild() noexcept
- {
-#ifdef LMMS_ENABLE_RECORDING_QUALIFICATION
-  return true;
-#else
-  return false;
-#endif
- }
+ static bool qualificationBuild() noexcept;
 };
 }
 #endif

@@ -824,4 +824,7 @@ foreach(LMMS_TEST_SRC IN LISTS LMMS_TESTS)
 
 	target_compile_features(${LMMS_TEST_NAME} PRIVATE cxx_std_20)
 	target_compile_definitions(${LMMS_TEST_NAME} PRIVATE LMMS_TESTING)
+	if(LMMS_TEST_NAME STREQUAL "RecordingAudioBackendPolicyTest" AND LMMS_ENABLE_RECORDING_QUALIFICATION)
+		target_compile_definitions(${LMMS_TEST_NAME} PRIVATE LMMS_EXPECT_RECORDING_QUALIFICATION)
+	endif()
 endforeach()

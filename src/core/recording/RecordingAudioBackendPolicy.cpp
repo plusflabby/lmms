@@ -1,5 +1,13 @@
 #include "RecordingAudioBackendPolicy.h"
 namespace lmms::recording {
+bool RecordingAudioBackendPolicy::qualificationBuild() noexcept
+{
+#ifdef LMMS_ENABLE_RECORDING_QUALIFICATION
+ return true;
+#else
+ return false;
+#endif
+}
 bool RecordingAudioBackendPolicy::independentInputOutputAllowed(const QString& name,bool capture,bool qualification) noexcept
 {
  if(capture)return false;

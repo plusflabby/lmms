@@ -16,6 +16,20 @@ private slots:
  {QVERIFY(RecordingAudioBackendPolicy::legacyInputAllowed(false));}
  void qualificationBuildSuppressesLegacyInputBeforeLocalArm()
  {QVERIFY(!RecordingAudioBackendPolicy::legacyInputAllowed(true));}
+ void compiledBuildModeControlsLegacyInputAndIndependentAdmission()
+ {
+#if defined(LMMS_EXPECT_RECORDING_QUALIFICATION)
+  constexpr bool expectedQualificationBuild=true;
+#else
+  constexpr bool expectedQualificationBuild=false;
+#endif
+  const auto qualificationBuild=RecordingAudioBackendPolicy::qualificationBuild();
+  QCOMPARE(qualificationBuild,expectedQualificationBuild);
+  QCOMPARE(RecordingAudioBackendPolicy::legacyInputAllowed(qualificationBuild),!expectedQualificationBuild);
+  QCOMPARE(RecordingAudioBackendPolicy::independentInputOutputAllowed("SDL (Simple DirectMedia Layer)",false,qualificationBuild),expectedQualificationBuild);
+  QVERIFY(!RecordingAudioBackendPolicy::independentInputOutputAllowed("SDL (Simple DirectMedia Layer)",true,qualificationBuild));
+  QVERIFY(RecordingAudioBackendPolicy::independentInputOutputAllowed("Dummy (no sound output)",false,qualificationBuild));
+ }
 };
 QTEST_GUILESS_MAIN(RecordingAudioBackendPolicyTest)
 #include "RecordingAudioBackendPolicyTest.moc"
