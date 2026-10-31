@@ -20,6 +20,7 @@ target_sources(aibridge PRIVATE AiBridgeAudioPlanner.cpp AiBridgeAudioPlanner.h 
 target_sources(aibridge PRIVATE AiBridgeAudioWire.cpp AiBridgeAudioWire.h)
 
 target_sources(aibridge PRIVATE AiBridgeAudioRangePlanner.cpp AiBridgeAudioRangePlanner.h AiBridgeAudioRangeActions.cpp AiBridgeAudioRangeActions.h)
+target_sources(aibridge PRIVATE AiBridgeRecordingTypes.cpp AiBridgeRecordingTypes.h AiBridgeRecordingActions.cpp AiBridgeRecordingActions.h)
 target_include_directories(aibridge PRIVATE
 	${CMAKE_SOURCE_DIR}/plugins/Amplifier
 	${CMAKE_SOURCE_DIR}/plugins/Compressor

@@ -36,7 +36,7 @@ public:
 std::unique_ptr<RecordingTransportControl> createNativeRecordingTransport(Song&);
 // Control-owner only. Host/transport outlive this coordinator; shutdown must reach
 // quiescence before their owners (or the project engine) may be destroyed.
-class RecordingSessionManager
+class LMMS_EXPORT RecordingSessionManager
 {
 public:
  RecordingSessionManager(RecordingServiceHost&,RecordingTransportControl&);

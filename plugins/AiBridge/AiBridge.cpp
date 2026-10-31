@@ -9,6 +9,7 @@
 #include <QVBoxLayout>
 
 #include "AiBridgeActions.h"
+#include "Engine.h"
 #include "embed.h"
 #include "ToolPluginView.h"
 #include "plugin_export.h"
@@ -78,7 +79,8 @@ private:
 	QPointer<QDialog> m_vocalInspector;
 };
 
-AiBridge::AiBridge() : ToolPlugin(&aibridge_plugin_descriptor, nullptr), m_vocalJobs(this), m_ipcServer(this,QStringLiteral("lmms-aibridge-v2"),&m_vocalJobs)
+AiBridge::AiBridge() : ToolPlugin(&aibridge_plugin_descriptor, nullptr), m_vocalJobs(this),
+	m_ipcServer(this, QStringLiteral("lmms-aibridge-v2"), &m_vocalJobs, Engine::recordingSessionManager())
 {
 	m_ipcServer.start();
 }

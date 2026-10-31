@@ -5,17 +5,21 @@
 #include <QLocalServer>
 #include <QLocalSocket>
 #include <QPointer>
+#include <memory>
 
 #include "AiBridgeProtocol.h"
 
 namespace lmms
 {
 class AiBridgeVocalJobs;
+class AiBridgeRecordingActions;
+namespace recording { class RecordingSessionManager; }
 
 class AiBridgeIpcServer : public QObject
 {
 public:
-	explicit AiBridgeIpcServer(QObject *parent = nullptr, QString endpoint = QStringLiteral("lmms-aibridge-v2"), AiBridgeVocalJobs* jobs = nullptr);
+	explicit AiBridgeIpcServer(QObject *parent = nullptr, QString endpoint = QStringLiteral("lmms-aibridge-v2"),
+		AiBridgeVocalJobs* jobs = nullptr, recording::RecordingSessionManager* recordingManager = nullptr);
 	~AiBridgeIpcServer() override;
 
 	bool start();
@@ -36,6 +40,8 @@ private:
 	bool m_busy = false;
 	QString m_endpoint;
 	QPointer<AiBridgeVocalJobs> m_vocalJobs;
+	// The action adapter borrows the Engine-owned manager; disconnect never owns or cancels a take.
+	std::unique_ptr<AiBridgeRecordingActions> m_recordingActions;
 	quint64 m_connectionRevision = 0;
 };
 
