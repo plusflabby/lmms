@@ -80,6 +80,7 @@ private:
 	QPushButton* m_stopPreviewButton = nullptr;
 	QPushButton* m_confirmButton = nullptr;
 	QTimer* m_refreshTimer = nullptr;
+	QString m_prepareStatusMessage;
 	quint64 m_placementRevision = 1;
 	bool m_hadLocalArm = false;
 	std::optional<ManualPlacementApproval> m_reviewedApproval;

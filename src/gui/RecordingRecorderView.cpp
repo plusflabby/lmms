@@ -382,11 +382,13 @@ void RecordingRecorderView::armLocally()
 
 void RecordingRecorderView::prepareTake()
 {
+	m_prepareStatusMessage.clear();
 	bool tickOk = false;
 	const auto tick = m_startTick->text().toLongLong(&tickOk);
 	if (!tickOk || tick < 0 || tick > std::numeric_limits<int>::max())
 	{
-		m_statusLabel->setText(tr("Enter a valid target tick."));
+		m_prepareStatusMessage = tr("Prepare failed: invalid target tick.");
+		m_statusLabel->setText(m_prepareStatusMessage);
 		return;
 	}
 	const auto status = m_manager.status();
@@ -397,7 +399,8 @@ void RecordingRecorderView::prepareTake()
 	request.metronomeEnabled = m_metronome->isChecked();
 	request.expectedProjectGeneration = status.projectGeneration;
 	const auto prepared = m_manager.prepare(request);
-	m_statusLabel->setText(prepared.ok ? tr("Take prepared. Input remains closed until Start.") : prepared.code);
+	if (!prepared.ok) m_prepareStatusMessage = tr("Prepare failed: %1").arg(prepared.code);
+	m_statusLabel->setText(prepared.ok ? tr("Take prepared. Input remains closed until Start.") : m_prepareStatusMessage);
 	updateControls();
 }
 
@@ -563,6 +566,7 @@ void RecordingRecorderView::refreshView()
 		&& m_project.id == authorizedProject.id && m_host.rootRevision() != 0;
 	if (!rootMatches && (!m_project.id.isEmpty() || !authorizedProject.id.isEmpty()))
 	{
+		m_prepareStatusMessage.clear();
 		clearReviewPreview();
 		m_project = {};
 		m_devices.clear();
@@ -576,6 +580,7 @@ void RecordingRecorderView::refreshView()
 	}
 	else if (!rootMatches)
 	{
+		m_prepareStatusMessage.clear();
 		m_rootLabel->setText(tr("No recording folder selected"));
 	}
 	else if (m_rootLabel->text().isEmpty())
@@ -585,7 +590,16 @@ void RecordingRecorderView::refreshView()
 	const auto baseStatus = status.phase == Phase::Preroll
 		? tr("Musical pre-roll · %1 ticks to target %2").arg(status.countInTicksRemaining).arg(status.intendedTargetTick)
 		: activePhase(status.phase) || status.code.isEmpty() ? phaseText(status.phase) : status.code;
-	m_statusLabel->setText(baseStatus + tr(" · input monitoring off · %1").arg(qualityText(status)));
+	if (status.phase == Phase::Armed && !m_prepareStatusMessage.isEmpty())
+	{
+		m_statusLabel->setText(m_prepareStatusMessage
+			+ tr(" · Armed locally; input remains closed until Start · input monitoring off · %1").arg(qualityText(status)));
+	}
+	else
+	{
+		if (status.phase != Phase::Armed) m_prepareStatusMessage.clear();
+		m_statusLabel->setText(baseStatus + tr(" · input monitoring off · %1").arg(qualityText(status)));
+	}
 	if (status.captureIntegrity != CaptureIntegrity::Pending || status.takeId.size())
 	{
 		m_captureLabel->setText(tr("Received %1 · accepted %2 · written %3 · dropped %4 · over limit %5 · clipped %6 · invalid %7 · hardware loss %8 · observations dropped %9 · peak %10")

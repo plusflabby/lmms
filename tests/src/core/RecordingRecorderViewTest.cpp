@@ -379,6 +379,29 @@ private slots:
 		QVERIFY(fixture.drain());
 	}
 
+	void failedPrepareReasonRemainsVisibleAfterRefresh()
+	{
+		Fixture fixture;
+		RecordingRecorderView view(fixture.host, *fixture.manager, fixture.identity);
+		QTest::mouseClick(button(view, "enumerateRecordingInputs"), Qt::LeftButton);
+		view.findChild<QComboBox*>("recordingInputDevice")->setCurrentIndex(0);
+		view.findChild<QComboBox*>("recordingInputChannel")->setCurrentIndex(0);
+		view.findChild<QComboBox*>("recordingInputRate")->setCurrentIndex(
+			view.findChild<QComboBox*>("recordingInputRate")->findData(48000));
+		QTest::mouseClick(button(view, "armRecordingInput"), Qt::LeftButton);
+		QVERIFY(fixture.manager->status().armed);
+		fixture.transport.world.playing = true;
+
+		QTest::mouseClick(button(view, "prepareRecordingTake"), Qt::LeftButton);
+		QTest::qWait(150);
+
+		auto* status = view.findChild<QLabel*>("recordingInputStatus");
+		QVERIFY(status);
+		QVERIFY2(status->text().contains(QStringLiteral("transport_busy")), qPrintable(status->text()));
+		QCOMPARE(fixture.manager->status().phase, Phase::Armed);
+		QCOMPARE(fixture.observedInput->opens, 0);
+	}
+
 	void noAutomaticSelectionRearmOrReopen()
 	{
 		Fixture fixture;
