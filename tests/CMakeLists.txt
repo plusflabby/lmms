@@ -127,6 +127,11 @@ foreach(LMMS_TEST_SRC IN LISTS LMMS_TESTS)
 	if(LMMS_TEST_NAME STREQUAL "AiBridgeIpcServerTest")
 		# This integration test loads the real instrument modules from build/plugins.
 		set_target_properties(${LMMS_TEST_NAME} PROPERTIES ENABLE_EXPORTS ON)
+		if(WIN32)
+			# Native plugin import tables refer to lmms.exe; use the same module
+			# name for this exported test host so Windows binds plugins to it.
+			set_target_properties(${LMMS_TEST_NAME} PROPERTIES OUTPUT_NAME "lmms")
+		endif()
 		if(UNIX AND NOT APPLE)
 			target_link_options(${LMMS_TEST_NAME} PRIVATE -Wl,--export-dynamic)
 		endif()
