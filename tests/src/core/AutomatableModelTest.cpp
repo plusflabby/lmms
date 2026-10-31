@@ -27,6 +27,9 @@
 #include <QProcess>
 #include <QProcessEnvironment>
 #include <QTemporaryDir>
+#include <QFile>
+#include <QStringList>
+#include <memory>
 #include "AutomatableModel.h"
 #include "ComboBoxModel.h"
 #include "Engine.h"
@@ -120,39 +123,87 @@ private slots: // tests
 		QVERIFY(m1.countLinks() == 2);
 	}
 
-	void LinkedModelUnlinkDuringNotification()
+	void LinkedModelMutationDuringNotification()
 	{
-		if (qEnvironmentVariableIsSet("LMMS_LINKED_MODEL_UNLINK_CHILD"))
+		const auto scenario = qEnvironmentVariable("LMMS_LINKED_MODEL_MUTATION_SCENARIO");
+		if (!scenario.isEmpty())
 		{
 			using namespace lmms;
-			BoolModel first(false), unlinked(false), last(false);
-			first.linkToModel(&unlinked);
-			unlinked.linkToModel(&last);
-			connect(&last, &BoolModel::dataChanged, this, [&] { unlinked.unlink(); }, Qt::DirectConnection);
+			BoolModel first(false), second(false), third(false);
+			auto fourth = std::make_unique<BoolModel>(false);
+			first.linkToModel(&second);
+			second.linkToModel(&third);
+			third.linkToModel(fourth.get());
+
+			if (scenario == "unlink-next")
+			{
+				connect(fourth.get(), &BoolModel::dataChanged, this, [&] { third.unlink(); }, Qt::DirectConnection);
+			}
+			else if (scenario == "unlink-origin")
+			{
+				connect(fourth.get(), &BoolModel::dataChanged, this, [&] { first.unlink(); }, Qt::DirectConnection);
+			}
+			else if (scenario == "delete-predecessor")
+			{
+				connect(&third, &BoolModel::dataChanged, this, [&] { fourth.reset(); }, Qt::DirectConnection);
+			}
+			else
+			{
+				QFAIL("Unknown linked-model mutation scenario");
+			}
 
 			first.setValue(1.0f);
 			QVERIFY(first.value());
-			QVERIFY(last.value());
-			QVERIFY(!unlinked.value());
+			if (scenario == "unlink-next")
+			{
+				QVERIFY(fourth->value());
+				QVERIFY(second.value());
+				QVERIFY(!third.value());
+			}
+			else if (scenario == "unlink-origin")
+			{
+				QVERIFY(fourth->value());
+				QVERIFY(third.value());
+				QVERIFY(second.value());
+			}
+			else
+			{
+				QVERIFY(!fourth);
+				QVERIFY(third.value());
+				QVERIFY(second.value());
+			}
 			return;
 		}
 
 		QTemporaryDir directory;
 		QVERIFY(directory.isValid());
-		QProcess child;
-		auto environment = QProcessEnvironment::systemEnvironment();
-		environment.insert("LMMS_LINKED_MODEL_UNLINK_CHILD", "1");
-		child.setProcessEnvironment(environment);
-		child.start(QCoreApplication::applicationFilePath(),
-			{"LinkedModelUnlinkDuringNotification", "-o", directory.filePath("child.log") + ",txt"});
-		if (!child.waitForFinished(3000))
+		QStringList failures;
+		for (const auto& scenario : {QStringLiteral("unlink-next"), QStringLiteral("unlink-origin"), QStringLiteral("delete-predecessor")})
 		{
-			child.kill();
-			child.waitForFinished();
-			QFAIL("Linked-model propagation did not finish after a direct observer unlinked the next model");
+			QProcess child;
+			auto environment = QProcessEnvironment::systemEnvironment();
+			environment.insert("LMMS_LINKED_MODEL_MUTATION_SCENARIO", scenario);
+			child.setProcessEnvironment(environment);
+			const auto report = directory.filePath(scenario + ".log");
+			child.start(QCoreApplication::applicationFilePath(),
+				{"LinkedModelMutationDuringNotification", "-o", report + ",txt"});
+			if (!child.waitForFinished(10000))
+			{
+				child.kill();
+				child.waitForFinished();
+				failures << scenario + ": child did not finish";
+				continue;
+			}
+			if (child.exitStatus() != QProcess::NormalExit || child.exitCode() != 0)
+			{
+				QFile childLog(report);
+				const auto details = childLog.open(QIODevice::ReadOnly)
+					? QString::fromUtf8(childLog.readAll())
+					: QStringLiteral("child failed without a QtTest report");
+				failures << scenario + ": " + details;
+			}
 		}
-		QCOMPARE(child.exitStatus(), QProcess::NormalExit);
-		QCOMPARE(child.exitCode(), 0);
+		QVERIFY2(failures.isEmpty(), qPrintable(failures.join("\n")));
 	}
 };
 

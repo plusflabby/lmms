@@ -306,6 +306,7 @@ void AutomatableModel::setValue(const float value, const bool isAutomated)
 
 	if (!isAutomated) { addJournalCheckPoint(); }
 	if (!self) { return; }
+	auto remainingLinks = countLinks();
 
 	// A direct observer can synchronously delete the owner of this model while
 	// dataChanged is emitted. Keep a guarded self reference across callbacks.
@@ -314,17 +315,41 @@ void AutomatableModel::setValue(const float value, const bool isAutomated)
 	if (!self) { return; }
 	QPointer<AutomatableModel> previous = self;
 	QPointer<AutomatableModel> model = previous->m_nextLink;
-	while (model && model.data() != self.data())
+	while (remainingLinks && model && model.data() != self.data())
 	{
+		--remainingLinks;
 		QPointer<AutomatableModel> current = model;
+		QPointer<AutomatableModel> successor = current->m_nextLink;
 		model->setValueInternal(value);
-		if (!self || !previous) { return; }
+		if (!self) { return; }
 		// Direct observers can unlink or delete the current model and its next
-		// link. Advance from the surviving predecessor's updated link instead
-		// of following a pointer captured before the signal was emitted.
-		if (previous->m_nextLink == current.data()) { previous = current; }
-		if (!previous || previous->m_nextLink == previous.data()) { return; }
-		model = previous->m_nextLink;
+		// link. Follow the live predecessor link when it survives, or re-anchor
+		// at the surviving current/successor. The original group size bounds
+		// traversal if a callback detaches this model from its ring.
+		if (previous && previous->m_nextLink == current.data())
+		{
+			previous = current;
+			model = current ? current->m_nextLink : nullptr;
+		}
+		else if (previous && previous->m_nextLink != previous.data())
+		{
+			model = previous->m_nextLink;
+		}
+		else if (current)
+		{
+			previous = current;
+			model = current->m_nextLink;
+		}
+		else if (successor)
+		{
+			previous.clear();
+			model = successor;
+		}
+		else
+		{
+			previous = self;
+			model = self->m_nextLink;
+		}
 	}
 }
 
