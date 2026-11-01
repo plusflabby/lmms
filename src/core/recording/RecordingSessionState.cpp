@@ -1,6 +1,13 @@
 #include "RecordingSessionState.h"
 #include <QUuid>
 namespace lmms::recording {
+Result RecordingSessionState::rawCaptureObserved(const QString& take)
+{
+ if(take!=m_status.takeId)return result(false,"stale_take");
+ if(m_status.phase!=Phase::Priming && m_status.phase!=Phase::Preroll && m_status.phase!=Phase::Recording && m_status.phase!=Phase::Quiescing)return result(false,"invalid_state");
+ m_captured=true;return result(true,"raw_capture_observed");
+}
+
 Result RecordingSessionState::quiesced(const QString& take)
 {
  if(take!=m_status.takeId)return result(false,"stale_take");
@@ -80,6 +87,7 @@ void RecordingSessionState::invalidate(const LocalArmContext& context)
 Result RecordingSessionState::prepare(const PreparedTake& take)
 {
  if(busy())return result(false,"recording_busy");
+ if(take.metronome)return result(false,"unsupported_metronome");
  if(take.context!=m_context)return result(false,"stale_project");
  if(!contextValid(take.context) || take.startTick<0 || take.countInBars<0 || take.countInBars>2
   || take.label.trimmed().isEmpty() || take.label.toUtf8().size()>256 || !hash(take.transportHash))return result(false,"invalid_request");

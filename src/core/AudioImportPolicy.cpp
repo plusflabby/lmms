@@ -1,10 +1,13 @@
 #include "AudioImportPolicy.h"
 #include "ConfigManager.h"
+#include "RecordingTakeTypes.h"
 #include "SampleBuffer.h"
+#include "SampleFrame.h"
 #include <QCoreApplication>
 #include <QThread>
 #include <QJsonDocument>
 #include <QJsonArray>
+#include <limits>
 #include <new>
 namespace lmms {
 namespace {
@@ -14,6 +17,19 @@ QStringList settings()
 	auto c = ConfigManager::inst();
 	return {c->value("aibridge", "audio_import_roots"), c->value("aibridge", "audio_import_max_file_bytes"),
 		c->value("aibridge", "audio_import_max_decoded_bytes")};
+}
+SampleDecoder::PcmWaveLimits recordedTakeLimits(std::uint32_t sampleRate, quint64 frames)
+{
+	if ((sampleRate != 44100 && sampleRate != 48000) || !frames
+		|| frames > quint64(sampleRate) * 120)
+		return {};
+	constexpr quint64 wavHeaderBytes = 44;
+	const auto maximum = std::numeric_limits<quint64>::max();
+	if (frames > (maximum - wavHeaderBytes) / sizeof(qint16)
+		|| frames > (maximum - SampleDecoder::PcmWaveScratchBytes) / sizeof(SampleFrame))
+		return {};
+	return {frames * sizeof(qint16) + wavHeaderBytes,
+		frames * sizeof(SampleFrame) + SampleDecoder::PcmWaveScratchBytes};
 }
 }
 AudioImportPolicy::AudioImportPolicy()
@@ -25,6 +41,7 @@ AudioImportPolicy::~AudioImportPolicy() { revoke(); }
 AudioImportPolicy::Prepared::~Prepared() { if (m_slot) m_slot->busy = false; }
 bool AudioImportPolicy::Prepared::isCurrent() const
 {
+	if (m_recordedTake) { return applicationThread() && m_recordedTake->isCurrent(); }
 	return applicationThread() && m_epoch && m_epoch->active && m_snapshot == settings()
 		&& m_revision == ConfigManager::inst()->audioImportPolicyRevision();
 }
@@ -78,6 +95,35 @@ AudioImportPolicy::Result AudioImportPolicy::prepare(const QString& path, const 
 		audio->m_buffer = std::make_shared<const SampleBuffer>(std::move(decoded.sample->data), decoded.sample->sampleRate, path);
 		audio->m_info = decoded.info; audio->m_path = path; audio->m_lease = std::move(lease);
 		audio->m_epoch = m_epoch; audio->m_snapshot = m_snapshot; audio->m_slot = m_slot; audio->m_revision = m_revision;
+		m_slot->busy = true;
+		return {QStringLiteral("ok"), std::move(audio)};
+	}
+	catch (const std::bad_alloc&) { return {QStringLiteral("source_too_large"), {}}; }
+}
+AudioImportPolicy::Result AudioImportPolicy::prepareRecordedTake(recording::SealedTakeToken&& source)
+{
+	if (!applicationThread()) return {QStringLiteral("unsupported_audio_operation"), {}};
+	if (m_slot->busy) return {QStringLiteral("audio_import_busy"), {}};
+	const auto facts = source.facts();
+	if (!source.isCurrent() || facts.projectId.isEmpty() || facts.takeId.isEmpty() || facts.rawFrames == 0
+		|| (facts.sampleRate != 44100 && facts.sampleRate != 48000) || !facts.sourceIdentity.index || facts.sourceDigest.size() != 32)
+		return {QStringLiteral("recorded_source_unavailable"), {}};
+	// A sealed take has an unforgeable local-library capability and a validated 120-second frame cap.
+	// Bound its decode by that exact source length without changing generic audio-import budgets.
+	const auto limits = recordedTakeLimits(facts.sampleRate, facts.rawFrames);
+	if (!limits.maxFileBytes || !limits.maxDecodedBytes) return {QStringLiteral("source_too_large"), {}};
+	const auto decoded = SampleDecoder::decodePcmWave(source.readOnlySource(), limits);
+	if (!decoded.sample) return {decoded.code, {}};
+	if (decoded.info.channels != 1 || decoded.info.sampleRate != int(facts.sampleRate)
+		|| decoded.info.frames != facts.rawFrames || decoded.info.sourceSha256 != facts.sourceDigest)
+		return {QStringLiteral("recorded_source_changed"), {}};
+	try
+	{
+		auto audio = std::unique_ptr<Prepared>(new Prepared);
+		audio->m_buffer = std::make_shared<const SampleBuffer>(std::move(decoded.sample->data), decoded.sample->sampleRate);
+		audio->m_info = decoded.info;
+		audio->m_recordedTake = std::make_shared<recording::SealedTakeToken>(std::move(source));
+		audio->m_slot = m_slot;
 		m_slot->busy = true;
 		return {QStringLiteral("ok"), std::move(audio)};
 	}

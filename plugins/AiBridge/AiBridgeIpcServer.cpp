@@ -1,4 +1,5 @@
 #include "AiBridgeIpcServer.h"
+#include "AiBridgeRecordingActions.h"
 #include "AiBridgeAudioWire.h"
 #include "AiBridgeVocalJobs.h"
 #include "AiBridgeVocalWire.h"
@@ -685,7 +686,11 @@ bool isPhase3GAction(const QString &action)
 }
 }
 
-AiBridgeIpcServer::AiBridgeIpcServer(QObject *parent, QString endpoint, AiBridgeVocalJobs* jobs,AiBridgeMidiExportJobs* midiExportJobs) : QObject(parent), m_server(this), m_endpoint(std::move(endpoint)), m_vocalJobs(jobs),m_midiExportJobs(midiExportJobs)
+AiBridgeIpcServer::AiBridgeIpcServer(QObject *parent, QString endpoint, AiBridgeVocalJobs* jobs,
+	AiBridgeMidiExportJobs* midiExportJobs, recording::RecordingSessionManager* recordingManager)
+	: QObject(parent), m_server(this), m_endpoint(std::move(endpoint)), m_vocalJobs(jobs),
+	  m_midiExportJobs(midiExportJobs),
+	  m_recordingActions(std::make_unique<AiBridgeRecordingActions>(recordingManager))
 {
 	connect(&m_server, &QLocalServer::newConnection, this, &AiBridgeIpcServer::acceptConnection);
 }
@@ -780,6 +785,7 @@ void AiBridgeIpcServer::executeRequest(const AiBridgeProtocolRequest &request)
 	if (AiBridgeMidiExportWire::handles(request.action)) response=AiBridgeMidiExportWire::execute(request,m_midiExportJobs);
 	else if (AiBridgeVocalWire::handles(request.action)) response=AiBridgeVocalWire::execute(request,m_vocalJobs);
 	else if (AiBridgeAudioWire::handles(request.action)) response=AiBridgeAudioWire::execute(request);
+	else if (AiBridgeRecordingTypes::handles(request.action)) response=m_recordingActions->execute(request);
 	else if (request.action == QStringLiteral("get_context"))
 	{
 		const auto snapshot = AiBridgeProjectContext{}.currentContext();

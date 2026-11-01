@@ -6,10 +6,23 @@ set(LMMS_SRCS
 	core/recording/RecordingOutputQueue.cpp
 	core/recording/RecordingTypes.cpp
 	core/recording/RecordingSessionState.cpp
+	core/recording/RecordingSessionManager.cpp
+	core/recording/RecordingPlacement.cpp
+	core/recording/RecordedTakeSource.cpp
+	core/recording/RecordingAttachment.cpp
 	core/recording/RecordingLibrary.cpp
+	core/recording/RecordingRecovery.cpp
 	core/recording/RecordingProjectIdentity.cpp
 	core/recording/RecordingRing.cpp
 	core/recording/RecordingPcm16.cpp
+	core/recording/RecordingInputRuntime.cpp
+	core/recording/RecordingTakeJournal.cpp
+	core/recording/RecordingTakeReceipt.cpp
+	core/recording/RecordingWriter.cpp
+	core/recording/RecordingInputController.cpp
+	core/recording/RecordingPortAudioInput.cpp
+	core/recording/RecordingServiceHost.cpp
+	core/recording/RecordingAudioBackendPolicy.cpp
 	core/AudioFileAuthorization.cpp
 	core/midi/StandardMidiWriter.cpp
 	core/midi/MidiExportService.cpp

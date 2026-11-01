@@ -9,8 +9,13 @@
 #include <QFile>
 #include <QScopeGuard>
 #include <QtEndian>
+#include <array>
 #include <cstring>
 #include "ConfigManager.h"
+#include "RecordingRing.h"
+#include "RecordingProjectIdentity.h"
+#include "RecordingServiceHost.h"
+#include "RecordingSessionManager.h"
 #include "AudioImportPolicy.h"
 #include "SampleTrack.h"
 #include "SampleClip.h"
@@ -30,6 +35,81 @@ public:
 	using SampleClip::SampleClip;
 	mutable int attempts=0;
 	lmms::SampleClip* cloneToTrack(lmms::SampleTrack*) const override {++attempts;return nullptr;}
+};
+
+class IpcSyntheticRecordingInput final : public lmms::recording::RecordingInputDriver
+{
+public:
+	lmms::recording::RecordingDriverResult initialize() noexcept override { ++initializes; return {"ok", true}; }
+	lmms::recording::RecordingInputDevicePage enumerateInputs(std::uint32_t, std::uint32_t) override
+	{
+		++enumerations;
+		return {"ok", {{"ipc-synthetic-mic", "Synthetic input", "WASAPI", 1}}, 1, false};
+	}
+	lmms::recording::RecordingDriverResult openInputOnly(const lmms::recording::SelectedInputProfile&,
+		lmms::recording::RecordingInputCallback callback, void* context) noexcept override
+	{
+		++opens;
+		m_callback = callback;
+		m_context = context;
+		return {"ok", true};
+	}
+	lmms::recording::RecordingDriverResult start() noexcept override
+	{
+		++starts;
+		std::array<float, 64> frames{};
+		frames.fill(0.125f);
+		if (m_callback) std::ignore = m_callback(m_context, {frames.data(), frames.size(), 1, 0, 1.0, 1.0 + frames.size() / 48000.0});
+		return {"ok", false};
+	}
+	lmms::recording::RecordingDriverResult stop() noexcept override { ++stops; return {"ok", true}; }
+	lmms::recording::RecordingDriverResult close() noexcept override { ++closes; return {"ok", true}; }
+	lmms::recording::RecordingDriverResult terminate() noexcept override { ++terminates; return {"ok", true}; }
+	int initializes = 0, enumerations = 0, opens = 0, starts = 0, stops = 0, closes = 0, terminates = 0;
+private:
+	lmms::recording::RecordingInputCallback m_callback = nullptr;
+	void* m_context = nullptr;
+};
+
+class IpcSyntheticRecordingTransport final : public lmms::recording::RecordingTransportControl
+{
+public:
+	lmms::recording::RecordingTransportSnapshot world;
+	quint64 serial = 0;
+	IpcSyntheticRecordingTransport()
+	{
+		world.available = true;
+		world.projectGeneration = 1;
+		world.sampleRate = 48000;
+		world.tempo = 120;
+		world.numerator = 4;
+		world.denominator = 4;
+		world.ticksPerBar = 192;
+	}
+	lmms::recording::RecordingTransportSnapshot snapshot() const override { return world; }
+	lmms::recording::RecordingTransportResult seekSong(qint64 tick) override
+	{
+		world.songTick = tick;
+		++world.seekRevision;
+		return {true, "ok", {}};
+	}
+	lmms::recording::RecordingTransportResult playSong() override
+	{
+		world.playing = true;
+		world.songMode = true;
+		++world.stateRevision;
+		return {true, "ok", {++serial, world.stateRevision}};
+	}
+	lmms::recording::RecordingTransportResult stopOwned(lmms::recording::RecordingPlaybackOwnership owner) override
+	{
+		if (world.playing && owner.serial == serial)
+		{
+			world.playing = false;
+			world.songMode = false;
+			++world.stateRevision;
+		}
+		return {true, "stopped", {}};
+	}
 };
 
 class AiBridgeIpcServerTest : public QObject
@@ -136,6 +216,106 @@ private slots:
 	void cleanupTestCase()
 	{
 		lmms::Engine::destroy();
+	}
+
+	void recordingStartSurvivesClientDisconnectAndDuplicateRequestDoesNotReopenInput()
+	{
+		using namespace lmms;
+		using namespace lmms::recording;
+		QTemporaryDir recordingRoot;
+		QVERIFY(recordingRoot.isValid());
+		auto input = std::make_unique<IpcSyntheticRecordingInput>();
+		auto* observedInput = input.get();
+		RecordingServiceHost host(std::move(input));
+		RecordingProjectIdentity identity(Engine::getSong());
+		const auto root = host.selectRecordingRoot(recordingRoot.path(), identity);
+		QVERIFY(root.ok);
+		IpcSyntheticRecordingTransport transport;
+		transport.world.projectId = root.project.id;
+		transport.world.projectGeneration = identity.revision();
+		RecordingSessionManager manager(host, transport);
+		AiBridgeIpcServer server(nullptr, QStringLiteral("lmms-recording-ipc-disconnect-test"), nullptr, nullptr, &manager);
+		QVERIFY(server.start());
+
+		auto send = [&](QLocalSocket& socket, const QString& requestId, const QString& action, const QJsonObject& parameters) {
+			const auto frame = QJsonDocument(QJsonObject{{"version", 2}, {"request_id", requestId},
+				{"action", action}, {"parameters", parameters}}).toJson(QJsonDocument::Compact) + '\n';
+			if (socket.write(frame) != qint64(frame.size())) return QJsonObject{};
+			socket.flush();
+			QElapsedTimer elapsed;
+			elapsed.start();
+			QByteArray received;
+			while (!received.endsWith('\n') && elapsed.elapsed() < 3000)
+			{
+				QTest::qWait(1);
+				received += socket.readAll();
+			}
+			if (!received.endsWith('\n')) return QJsonObject{};
+			return QJsonDocument::fromJson(received).object();
+		};
+
+		QLocalSocket first;
+		first.connectToServer(server.endpointName());
+		QVERIFY(first.waitForConnected(1000));
+		const auto generation = QString::number(transport.world.projectGeneration);
+		const QJsonObject prepareParameters{{"start_tick", 0}, {"take_label", "IPC synthetic take"},
+			{"count_in_bars", 0}, {"metronome_enabled", false}, {"expected_project_generation", generation}};
+		const auto prepared = send(first, QStringLiteral("prepare"), QStringLiteral("prepare_recording_take"), prepareParameters);
+		QVERIFY2(prepared.value(QStringLiteral("success")).toBool(), qPrintable(prepared.value(QStringLiteral("code")).toString()));
+		const auto preparedId = prepared.value(QStringLiteral("data")).toObject().value(QStringLiteral("prepared_take_id")).toString();
+		QVERIFY(!preparedId.isEmpty());
+		QCOMPARE(observedInput->initializes, 0);
+		QCOMPARE(observedInput->enumerations, 0);
+
+		QCOMPARE(host.enumerateInputs(0, 64).code, QStringLiteral("ok"));
+		SelectedInputProfile profile;
+		profile.deviceId = QStringLiteral("ipc-synthetic-mic");
+		profile.hostApiName = QStringLiteral("WASAPI");
+		profile.wasapiShared = true;
+		profile.input = {48000, 1, 0, RecordingRing::MaximumCallback, std::uint64_t(48000) * 120};
+		auto ticket = host.localArmTicket(profile, transport.world.projectGeneration);
+		QVERIFY(ticket.ok);
+		QVERIFY(manager.arm(std::move(ticket.ticket)).ok);
+		const QJsonObject startParameters{{"prepared_take_id", preparedId}, {"expected_project_generation", generation},
+			{"start_request_id", "00000000-0000-4000-8000-000000000021"}};
+		const auto startFrame = QJsonDocument(QJsonObject{{"version", 2}, {"request_id", "ambiguous-start"},
+			{"action", "start_recording_take"}, {"parameters", startParameters}}).toJson(QJsonDocument::Compact) + '\n';
+		QCOMPARE(first.write(startFrame), qint64(startFrame.size()));
+		first.flush();
+		QElapsedTimer opening;
+		opening.start();
+		while (opening.elapsed() < 5000 && observedInput->opens == 0)
+		{
+			std::ignore = manager.poll(quint64(opening.elapsed()));
+			QTest::qWait(1);
+		}
+		QVERIFY(observedInput->opens == 1);
+		const auto firstTakeId = manager.status().takeId;
+		QVERIFY(!firstTakeId.isEmpty());
+		first.abort();
+		QTRY_VERIFY_WITH_TIMEOUT(first.state() == QLocalSocket::UnconnectedState, 1000);
+
+		QLocalSocket retry;
+		retry.connectToServer(server.endpointName());
+		QVERIFY(retry.waitForConnected(1000));
+		const auto duplicate = send(retry, QStringLiteral("status-after-timeout"),
+			QStringLiteral("start_recording_take"), startParameters);
+		QVERIFY(duplicate.value(QStringLiteral("success")).toBool());
+		QCOMPARE(duplicate.value(QStringLiteral("data")).toObject().value(QStringLiteral("take_id")).toString(), firstTakeId);
+		QCOMPARE(observedInput->opens, 1);
+		const auto stopped = send(retry, QStringLiteral("stop"), QStringLiteral("stop_recording_take"), {{"take_id", firstTakeId}});
+		QVERIFY(stopped.value(QStringLiteral("success")).toBool());
+
+		QElapsedTimer elapsed;
+		elapsed.start();
+		while (elapsed.elapsed() < 5000 && !manager.quiescent())
+		{
+			std::ignore = manager.poll(quint64(elapsed.elapsed()));
+			QTest::qWait(1);
+		}
+		QVERIFY(manager.quiescent());
+		QCOMPARE(observedInput->opens, 1);
+		QCOMPARE(observedInput->stops, 1);
 	}
 
 	void servesContextRequestWithMatchingId()

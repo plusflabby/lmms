@@ -25,6 +25,27 @@ class RecordingSessionStateTest : public QObject
   return state.status().phase==Phase::Quiescing?state.quiesced(take):stopped;
  }
 private slots:
+ void rawCaptureDuringPrimingAndPrerollMustFinalize_data()
+ {QTest::addColumn<bool>("preroll");QTest::newRow("priming")<<false;QTest::newRow("preroll")<<true;}
+ void rawCaptureDuringPrimingAndPrerollMustFinalize()
+ {
+  QFETCH(bool,preroll);RecordingSessionState state(context);const auto take=begin(state);QVERIFY(!take.isEmpty());
+  if(preroll)QVERIFY(state.primed(take).ok);
+  QVERIFY(state.rawCaptureObserved(take).ok);QVERIFY(state.stop(take).ok);QVERIFY(state.quiesced(take).ok);
+  QCOMPARE(state.status().phase,Phase::Finalizing);QVERIFY(state.finish(take,TakeOutcome::SavedUnattached).ok);
+  QCOMPARE(state.status().outcome,TakeOutcome::SavedUnattached);
+ }
+ void rawObservationAfterCancellationMustStillFinalize()
+ {
+  RecordingSessionState state(context);const auto take=begin(state);QVERIFY(!take.isEmpty());QVERIFY(state.stop(take).ok);
+  QVERIFY(state.rawCaptureObserved(take).ok);QVERIFY(state.quiesced(take).ok);QCOMPARE(state.status().phase,Phase::Finalizing);
+  QVERIFY(state.finish(take,TakeOutcome::SavedUnattached).ok);
+ }
+ void deferredMetronomeCannotBeSilentlyPrepared()
+ {
+  RecordingSessionState state(context);auto request=metadata();request.metronome=true;
+  QCOMPARE(state.prepare(request).code,QString("unsupported_metronome"));QCOMPARE(state.status().phase,Phase::Disarmed);
+ }
  void deliberateArmAndFullLifecycle()
  {
   RecordingSessionState s(context);QCOMPARE(s.status().phase,Phase::Disarmed);QVERIFY(!s.status().armed);

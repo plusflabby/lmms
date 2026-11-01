@@ -13,6 +13,7 @@ public:
  ~RecordingProjectIdentity();
  IdentityResult getOrCreateForCurrentProject(RecordingLibrary&);
  ProjectIdentity cachedIdentity() const;
+ bool sourceIdentityTrusted() const noexcept;
  static bool metadataSupported(const QDomElement& head);
  void resetForNewProject();
  void acceptLoad(const QDomElement& head,const QString& source);

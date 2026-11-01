@@ -34,6 +34,7 @@
 #include <QMessageBox>
 #include <QShortcut>
 #include <QSplitter>
+#include <QStatusBar>
 
 #include "AboutDialog.h"
 #include "AutomationEditor.h"
@@ -60,6 +61,8 @@
 #include "ProjectJournal.h"
 #include "ProjectNotes.h"
 #include "ProjectRenderer.h"
+#include "RecordingRecorderView.h"
+#include "RecordingSessionManager.h"
 #include "RecentProjectsMenu.h"
 #include "RemotePluginBase.h"
 #include "SetupDialog.h"
@@ -77,6 +80,12 @@
 
 namespace lmms::gui
 {
+
+bool MainWindow::stopRecordingAndRequireQuiescence(recording::RecordingSessionManager& manager)
+{
+	std::ignore = manager.disarm();
+	return manager.quiescent();
+}
 
 
 MainWindow::MainWindow() :
@@ -248,6 +257,12 @@ MainWindow::~MainWindow()
 		delete view->model();
 		delete view;
 	}
+	if (m_recordingRecorderView)
+	{
+		m_recordingRecorderView->stopPreview();
+		delete m_recordingRecorderView.data();
+		m_recordingRecorderView.clear();
+	}
 	// TODO: Close tools
 	// dependencies are such that the editors must be destroyed BEFORE Song is deletect in Engine::destroy
 	//   see issue #2015 on github
@@ -358,6 +373,36 @@ void MainWindow::finalize()
 		m_tools.push_back( ToolPlugin::instantiate( desc->name, /*this*/nullptr )
 						   ->createView(this) );
 	}
+	auto* recorderAction = m_toolsMenu->addAction(tr("Vocal Recorder"));
+	recorderAction->setObjectName("openVocalRecorder");
+	connect(recorderAction, &QAction::triggered, this, [this] {
+		if (m_recordingRecorderView)
+		{
+			m_recordingRecorderView->showInRecorderWindow();
+			return;
+		}
+		auto* host = Engine::recordingServiceHost();
+		auto* manager = Engine::recordingSessionManager();
+		if (!host || !manager) return;
+		auto* view = new recording::RecordingRecorderView(*host, *manager,
+			Engine::getSong()->recordingProjectIdentity());
+		m_recordingRecorderView = view;
+		auto* window = addWindowedWidget(view);
+		window->setWindowTitle(tr("Vocal Recorder"));
+		view->showInRecorderWindow();
+	});
+	auto* stopRecordingAction = m_toolsMenu->addAction(tr("Stop Vocal Recording"));
+	stopRecordingAction->setObjectName("stopVocalRecording");
+	connect(stopRecordingAction, &QAction::triggered, this, [this] {
+		if (auto* manager = Engine::recordingSessionManager())
+		{
+			const bool quiescent = stopRecordingAndRequireQuiescence(*manager);
+			if (m_recordingRecorderView) m_recordingRecorderView->refreshView();
+			statusBar()->showMessage(quiescent
+				? tr("Recorder disarmed; microphone input is closed.")
+				: tr("Stop requested. Keep LMMS open while the take finalizes."), 5000);
+		}
+	});
 	if( !m_toolsMenu->isEmpty() )
 	{
 		menuBar()->addMenu( m_toolsMenu )->setText( tr( "&Tools" ) );
@@ -597,6 +642,13 @@ void MainWindow::resetWindowTitle()
 
 bool MainWindow::mayChangeProject(bool stopPlayback)
 {
+	if (auto* manager = Engine::recordingSessionManager(); manager && !stopRecordingAndRequireQuiescence(*manager))
+	{
+		QMessageBox::warning(this, tr("Vocal recording still active"),
+			tr("Stop was requested. Wait for input and WAV finalization before changing projects."));
+		return false;
+	}
+	if (m_recordingRecorderView) m_recordingRecorderView->stopPreview();
 	if( stopPlayback )
 	{
 		Engine::getSong()->stop();
@@ -878,7 +930,7 @@ void MainWindow::saveProjectAsDefaultTemplate()
 		}
 	}
 
-	Engine::getSong()->saveProjectFile( defaultTemplate );
+	Engine::getSong()->saveProjectFile(defaultTemplate, false, Song::ProjectSavePurpose::RecoverySnapshot);
 }
 
 
@@ -886,6 +938,13 @@ void MainWindow::saveProjectAsDefaultTemplate()
 
 void MainWindow::showSettingsDialog()
 {
+	if (auto* manager = Engine::recordingSessionManager(); manager && !stopRecordingAndRequireQuiescence(*manager))
+	{
+		QMessageBox::warning(this, tr("Vocal recording still active"),
+			tr("The input stream or take writer has not reached a safe shutdown point. Wait for finalization before changing audio settings."));
+		return;
+	}
+	if (m_recordingRecorderView) m_recordingRecorderView->stopPreview();
 	SetupDialog sd;
 	sd.exec();
 }
@@ -1236,6 +1295,14 @@ void MainWindow::redo()
 
 void MainWindow::closeEvent( QCloseEvent * _ce )
 {
+	if (auto* manager = Engine::recordingSessionManager(); manager && !stopRecordingAndRequireQuiescence(*manager))
+	{
+		QMessageBox::warning(this,tr("Vocal recording still active"),
+			tr("Stop was requested. Keep LMMS open until input and WAV finalization reach a safe shutdown point."));
+		_ce->ignore();
+		return;
+	}
+	if (m_recordingRecorderView) m_recordingRecorderView->stopPreview();
 	if( mayChangeProject(true) )
 	{
 		// delete recovery file
@@ -1373,7 +1440,9 @@ void MainWindow::timerEvent( QTimerEvent * _te)
 
 void MainWindow::showTool( QAction * _idx )
 {
-	PluginView * p = m_tools[m_toolsMenu->actions().indexOf( _idx )];
+	const auto index=m_toolsMenu->actions().indexOf(_idx);
+	if(index<0 || index>=m_tools.size())return;
+	PluginView * p = m_tools[index];
 	p->show();
 	p->parentWidget()->show();
 	p->setFocus();
@@ -1403,7 +1472,8 @@ void MainWindow::autoSave()
 				"enablerunningautosave" ).toInt() ||
 			! Engine::getSong()->isPlaying() ) )
 	{
-		Engine::getSong()->saveProjectFile(ConfigManager::inst()->recoveryFile());
+		Engine::getSong()->saveProjectFile(ConfigManager::inst()->recoveryFile(), false,
+			Song::ProjectSavePurpose::RecoverySnapshot);
 		autoSaveTimerReset();  // Reset timer
 	}
 	else

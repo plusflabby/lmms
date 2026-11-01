@@ -20,6 +20,7 @@ public:
  Result prepare(const PreparedTake&);
  Result start(const QString& preparedId,const QString& startRequestId,quint64 expectedGeneration);
  Result stop(const QString& takeId);
+ Result rawCaptureObserved(const QString& takeId);
  Result primed(const QString& takeId);
  Result captureStarted(const QString& takeId);
  Result failPriming(const QString& takeId);

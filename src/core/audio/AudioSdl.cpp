@@ -33,6 +33,7 @@
 
 #include "AudioEngine.h"
 #include "ConfigManager.h"
+#include "RecordingAudioBackendPolicy.h"
 
 namespace lmms
 {
@@ -88,27 +89,31 @@ AudioSdl::AudioSdl(bool& _success_ful, AudioEngine* _audioEngine)
 	// Workaround for a race condition that causes SDL to segfault
 	SDL_Delay(50);
 
-	m_inputAudioHandle = m_audioHandle;
-	m_inputAudioHandle.callback = sdlInputAudioCallback;
-
-	const auto inputDevice = ConfigManager::inst()->value(SectionSDL, InputDeviceSDL).toStdString();
-	const bool isDefaultInput = inputDevice.empty();
-
-	// Try with the configured device
-	const auto inputDeviceCStr = isDefaultInput ? nullptr : inputDevice.c_str();
-	m_inputDevice = SDL_OpenAudioDevice (inputDeviceCStr, 1, &m_inputAudioHandle, &actual, 0);
-
-	// If we did not get a device ID try again with the default device if we did not try that before
-	if (m_inputDevice == 0 && !isDefaultInput)
+	if (recording::RecordingAudioBackendPolicy::legacyInputAllowed(recording::RecordingAudioBackendPolicy::qualificationBuild()))
 	{
-		m_inputDevice = SDL_OpenAudioDevice(nullptr, 1, &m_inputAudioHandle, &actual, 0);
-	}
+		m_inputAudioHandle = m_audioHandle;
+		m_inputAudioHandle.callback = sdlInputAudioCallback;
 
-	if (m_inputDevice != 0) {
-		m_supportsCapture = true;
-	} else {
-		m_supportsCapture = false;
-		qWarning ( "Couldn't open SDL capture device: %s\n", SDL_GetError ());
+		const auto inputDevice = ConfigManager::inst()->value(SectionSDL, InputDeviceSDL).toStdString();
+		const bool isDefaultInput = inputDevice.empty();
+
+		// Try with the configured device
+		const auto inputDeviceCStr = isDefaultInput ? nullptr : inputDevice.c_str();
+		m_inputDevice = SDL_OpenAudioDevice (inputDeviceCStr, 1, &m_inputAudioHandle, &actual, 0);
+
+		// If we did not get a device ID try again with the default device if we did not try that before
+		if (m_inputDevice == 0 && !isDefaultInput)
+		{
+			m_inputDevice = SDL_OpenAudioDevice(nullptr, 1, &m_inputAudioHandle, &actual, 0);
+		}
+
+		if (m_inputDevice != 0) { m_supportsCapture = true; }
+		else { qWarning("Couldn't open SDL capture device: %s\n", SDL_GetError()); }
+	}
+	else
+	{
+		m_inputDevice=0;
+		m_supportsCapture=false;
 	}
 }
 
@@ -131,7 +136,7 @@ AudioSdl::~AudioSdl()
 void AudioSdl::startProcessingImpl()
 {
 	SDL_PauseAudioDevice (m_outputDevice, 0);
-	SDL_PauseAudioDevice (m_inputDevice, 0);
+	if(m_inputDevice!=0)SDL_PauseAudioDevice (m_inputDevice, 0);
 }
 
 
@@ -141,13 +146,13 @@ void AudioSdl::stopProcessingImpl()
 {
 	if( SDL_GetAudioDeviceStatus(m_outputDevice) == SDL_AUDIO_PLAYING )
 	{
-		SDL_LockAudioDevice (m_inputDevice);
+		if(m_inputDevice!=0)SDL_LockAudioDevice (m_inputDevice);
 		SDL_LockAudioDevice (m_outputDevice);
 
-		SDL_PauseAudioDevice (m_inputDevice,	1);
+		if(m_inputDevice!=0)SDL_PauseAudioDevice (m_inputDevice,1);
 		SDL_PauseAudioDevice (m_outputDevice,	1);
 
-		SDL_UnlockAudioDevice (m_inputDevice);
+		if(m_inputDevice!=0)SDL_UnlockAudioDevice (m_inputDevice);
 		SDL_UnlockAudioDevice (m_outputDevice);
 	}
 }

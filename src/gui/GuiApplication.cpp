@@ -34,6 +34,8 @@
 #include "ControllerRackView.h"
 #include "MixerView.h"
 #include "MainWindow.h"
+#include "RecordingSessionManager.h"
+#include "RecordingServiceClock.h"
 #include "MicrotunerConfig.h"
 #include "PatternEditor.h"
 #include "PianoRoll.h"
@@ -49,6 +51,7 @@
 #include <QMessageBox>
 #include <QSplashScreen>
 #include <QSocketNotifier>
+#include <QTimer>
 
 #ifdef LMMS_BUILD_WIN32
 #include <io.h>
@@ -150,6 +153,14 @@ GuiApplication::GuiApplication()
 
 	// Init central engine which handles all components of LMMS
 	Engine::init(false);
+	m_recordingServiceClock.start();
+	m_recordingServiceTimer=new QTimer(this);
+	m_recordingServiceTimer->setInterval(20);
+	connect(m_recordingServiceTimer,&QTimer::timeout,this,[this]{
+		if(auto* manager=Engine::recordingSessionManager();manager && !manager->quiescent())
+			manager->poll(recording::recordingServiceMilliseconds(m_recordingServiceClock));
+	});
+	m_recordingServiceTimer->start();
 
 	s_instance = this;
 
