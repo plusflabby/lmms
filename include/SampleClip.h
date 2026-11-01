@@ -33,9 +33,12 @@
 #include "Sample.h"
 #include "AudioSourceWindow.h"
 #include "AudioImportPolicy.h"
+#include "RecordedTakeSource.h"
 
 namespace lmms
 {
+
+namespace recording { class RecordingAttachment; }
 
 class SampleBuffer;
 class SampleTrack;
@@ -67,6 +70,8 @@ public:
 	bool hasSampleFileLoaded(const QString & filename) const;
 	const QString& sourceLoadError() const { return m_sourceLoadError; }
 	bool usesBoundedSampleSource() const { return m_boundedSampleSource; }
+	bool isRecordedTake() const { return m_recordedTakeMetadataPresent; }
+	const std::optional<recording::RecordedTakeReference>& recordedTakeReference() const { return m_recordedTakeReference; }
 	bool hasAudioSourceWindow() const { return m_audioWindowStorage.kind != AudioWindowStorageKind::Legacy; }
 	const AudioWindowStorage& audioWindowStorage() const { return m_audioWindowStorage; }
 	QString audioWindowStatus() const;
@@ -119,12 +124,15 @@ protected:
 	SampleClip(const SampleClip& orig, Track* target);
 
 private:
+	friend class recording::RecordingAttachment;
 	void initializeAudioWindowConnections();
 	void refreshAudioWindowPlayback();
 	AudioWindowEligibility audioWindowEligibility() const;
 	std::atomic_bool m_loadingAudioWindow{false};
 	std::shared_ptr<const struct AudioWindowPlaybackView> m_audioWindowView;
 	void setSampleFileImpl(const QString& source, const QByteArray& expectedDigest, const QByteArray& expectedIdentity = {});
+	QString adoptRecordedTakeAudio(std::unique_ptr<AudioImportPolicy::Prepared>, const recording::RecordedTakeReference&, bool notify);
+	void resetRecordedTakeSource();
 	Sample m_sample;
 	// Preserve an intended file link when no file-backed buffer could be loaded.
 	QString m_unavailableSampleFile;
@@ -134,6 +142,10 @@ private:
 	bool m_invalidSourceIdentity = false;
 	std::optional<SampleDecoder::PcmWaveInfo> m_sourceInfo;
 	bool m_boundedSampleSource = false;
+	bool m_recordedTakeMetadataPresent = false;
+	std::optional<recording::RecordedTakeReference> m_recordedTakeReference;
+	std::shared_ptr<recording::SealedTakeToken> m_recordedTakeToken;
+	QDomElement m_unavailableRecordedTake;
 	AudioWindowStorage m_audioWindowStorage;
 	std::shared_ptr<AudioWindowPlaybackGuard> m_audioWindowGuard = std::make_shared<AudioWindowPlaybackGuard>();
 	BoolModel m_recordModel;

@@ -103,6 +103,7 @@ OPTION(WANT_VST		"Include VST support" ON)
 OPTION(WANT_VST_32	"Include 32-bit Windows VST support" ON)
 OPTION(WANT_VST_64	"Include 64-bit Windows VST support" ON)
 OPTION(WANT_WINMM	"Include WinMM MIDI support" OFF)
+option(LMMS_ENABLE_RECORDING_QUALIFICATION "Enable the Arm-gated independent vocal input build profile and suppress legacy backend input" OFF)
 OPTION(WANT_DEBUG_FPE	"Debug floating point exceptions" OFF)
 option(WANT_DEBUG_ASAN	"Enable AddressSanitizer" OFF)
 option(WANT_DEBUG_TSAN	"Enable ThreadSanitizer" OFF)
@@ -766,6 +767,7 @@ endif()
 FILE(REMOVE include/lmmsconfig.h)
 
 FILE(GLOB LMMS_INCLUDES "${CMAKE_SOURCE_DIR}/include/*.h")
+LIST(APPEND LMMS_INCLUDES "${CMAKE_SOURCE_DIR}/include/RecordingRecorderView.h")
 LIST(SORT LMMS_INCLUDES)
 
 # Get list of all committers from git history, ordered by number of commits.

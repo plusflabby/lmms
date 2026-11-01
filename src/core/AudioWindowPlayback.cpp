@@ -22,7 +22,8 @@ bool audioWindowReferenceProfileMatches(qint32 capacity,const QByteArray& digest
 	// Other builds require their own digest and behavior proof, even if the version matches.
 	return capacity==256 &&
 		(digest==QByteArray::fromHex("4f7f9b2ecea84bb8f5b27c8f36e85e8a100663c745ac25e82a512f485b663ac7")
-			|| digest==QByteArray::fromHex("55db2de7aece1fc3f5d6a001e1a824b83dd650fdd0f5d45078cb0f47dceb3881"));
+			|| digest==QByteArray::fromHex("55db2de7aece1fc3f5d6a001e1a824b83dd650fdd0f5d45078cb0f47dceb3881")
+			|| digest==QByteArray::fromHex("bf275a0636dc7dadac8a691842c06b460109efc213c68b5ef6576a216e55d734"));
 }
 namespace {
 bool qualifiedLibraryImage()
@@ -70,8 +71,8 @@ bool qualifyReference()
 	data=SRC_DATA{};data.data_in=input.data()+2;data.input_frames=2;data.data_out=output.data();data.output_frames=2;data.src_ratio=1;
 	if(src_process(state.get(),&data) || data.input_frames_used!=2 || data.output_frames_gen!=2
 		|| output[0]!=historyLeft || output[1]!=historyRight || output[2]!=0.5f || output[3]!=-0.5f) return false;
-	// Never exercise the known singleton issue in production qualification.
-	// Only historical bounded investigation tests characterize that path.
+	// The V2 window eligibility rule independently rejects remainder-one ranges.
+	// The corrected retained-history edge is qualified by the bounded history tests.
 	return true;
 }
 bool validSpan(const AudioSourceWindowV2& window,const SampleBuffer& buffer)

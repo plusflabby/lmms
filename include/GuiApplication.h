@@ -26,12 +26,14 @@
 #define LMMS_GUI_GUI_APPLICATION_H
 
 #include <QObject>
+#include <QElapsedTimer>
 
 #include "lmms_export.h"
 #include "lmmsconfig.h"
 
 class QLabel;
 class QSocketNotifier;
+class QTimer;
 
 namespace lmms::gui
 {
@@ -96,6 +98,8 @@ private:
 	ControllerRackView* m_controllerRackView;
 	QLabel* m_loadingProgressLabel;
 	QSocketNotifier* m_sigintNotifier;
+	QElapsedTimer m_recordingServiceClock;
+	QTimer* m_recordingServiceTimer=nullptr;
 };
 
 // Short-hand function

@@ -33,6 +33,7 @@
 #include "AudioPortAudio.h"
 #include "ConfigManager.h"
 #include "LcdSpinBox.h"
+#include "RecordingAudioBackendPolicy.h"
 
 namespace {
 enum class Direction
@@ -105,9 +106,12 @@ AudioPortAudio::AudioPortAudio(bool& successful, AudioEngine* engine)
 	}
 
 	const auto backend = ConfigManager::inst()->value(tag(), backendAttribute());
-	
-	const auto inputDeviceName = ConfigManager::inst()->value(tag(), deviceNameAttribute(Direction::Input));
-	const auto inputDeviceChannels = ConfigManager::inst()->value(tag(), channelsAttribute(Direction::Input)).toInt();
+	const auto legacyInputAllowed = recording::RecordingAudioBackendPolicy::legacyInputAllowed(
+		recording::RecordingAudioBackendPolicy::qualificationBuild());
+	const auto inputDeviceName = legacyInputAllowed
+		? ConfigManager::inst()->value(tag(), deviceNameAttribute(Direction::Input)) : QString{};
+	const auto inputDeviceChannels = legacyInputAllowed
+		? ConfigManager::inst()->value(tag(), channelsAttribute(Direction::Input)).toInt() : 0;
 
 	const auto outputDeviceName = ConfigManager::inst()->value(tag(), deviceNameAttribute(Direction::Output));
 	const auto outputDeviceChannels = ConfigManager::inst()->value(tag(), channelsAttribute(Direction::Output)).toInt();
@@ -115,18 +119,18 @@ AudioPortAudio::AudioPortAudio(bool& successful, AudioEngine* engine)
 	auto inputDeviceIndex = paNoDevice;
 	auto outputDeviceIndex = paNoDevice;
 
-	for (auto i = 0; i < numDevices && (inputDeviceIndex == paNoDevice || outputDeviceIndex == paNoDevice); ++i)
+	for (auto i = 0; i < numDevices && ((legacyInputAllowed && inputDeviceIndex == paNoDevice) || outputDeviceIndex == paNoDevice); ++i)
 	{
 		const auto deviceInfo = Pa_GetDeviceInfo(i);
 		const auto hostApiInfo = Pa_GetHostApiInfo(deviceInfo->hostApi);
-		if (deviceInfo->name == inputDeviceName && hostApiInfo->name == backend) { inputDeviceIndex = i; }
+		if (legacyInputAllowed && deviceInfo->name == inputDeviceName && hostApiInfo->name == backend) { inputDeviceIndex = i; }
 		if (deviceInfo->name == outputDeviceName && hostApiInfo->name == backend) { outputDeviceIndex = i; }
 	}
 
 	const auto sampleRate = engine->baseSampleRate();
 	const auto framesPerBuffer = engine->framesPerPeriod();
 	const auto inputLatency
-		= inputDeviceIndex == paNoDevice ? 0. : Pa_GetDeviceInfo(inputDeviceIndex)->defaultLowInputLatency;
+		= !legacyInputAllowed || inputDeviceIndex == paNoDevice ? 0. : Pa_GetDeviceInfo(inputDeviceIndex)->defaultLowInputLatency;
 	const auto outputLatency
 		= outputDeviceIndex == paNoDevice ? 0. : Pa_GetDeviceInfo(outputDeviceIndex)->defaultLowOutputLatency;
 
@@ -146,7 +150,7 @@ AudioPortAudio::AudioPortAudio(bool& successful, AudioEngine* engine)
 		.hostApiSpecificStreamInfo = nullptr
 	};
 
-	const auto inputParametersPtr = inputDeviceIndex == paNoDevice ? nullptr : &inputParameters; 
+	const auto inputParametersPtr = !legacyInputAllowed || inputDeviceIndex == paNoDevice ? nullptr : &inputParameters;
 	const auto outputParametersPtr = outputDeviceIndex == paNoDevice ? nullptr : &outputParameters;
 	auto err = Pa_IsFormatSupported(inputParametersPtr, outputParametersPtr, sampleRate);
 

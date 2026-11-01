@@ -28,6 +28,7 @@
 #include <QCryptographicHash>
 #include <QDebug>
 #include <QFile>
+#include <QFileInfo>
 #include <QMessageBox>
 #include <QScopeGuard>
 #include <QThread>
@@ -1263,7 +1264,6 @@ void Song::loadProject( const QString & fileName )
 void Song::populateProjectDataFile(DataFile & dataFile)
 {
 	using gui::getGUI;
-
 	m_tempoModel.saveSettings( dataFile, dataFile.head(), "bpm" );
 	m_timeSigModel.saveSettings( dataFile, dataFile.head(), "timesig" );
 	m_masterVolumeModel.saveSettings( dataFile, dataFile.head(), "mastervol" );
@@ -1320,19 +1320,26 @@ QByteArray Song::projectObjectStateHash(SerializingObject &object)
 	return QCryptographicHash::hash(document.toByteArray(-1), QCryptographicHash::Sha256).toHex();
 }
 
-bool Song::saveProjectFile(const QString & filename, bool withResources)
+bool Song::saveProjectFile(const QString & filename, bool withResources, ProjectSavePurpose purpose)
 {
 	warnAudioWindowCompatibility();
+	const auto destinationPath = QFileInfo(filename).canonicalFilePath();
+	const auto currentPath = QFileInfo(m_fileName).canonicalFilePath();
+	const bool recoverySnapshotOfCurrentProject = purpose == ProjectSavePurpose::RecoverySnapshot
+		&& !destinationPath.isEmpty() && !currentPath.isEmpty()
+		&& destinationPath.compare(currentPath, Qt::CaseInsensitive) == 0;
+	const bool updateRecordingIdentity = purpose == ProjectSavePurpose::UserProject || recoverySnapshotOfCurrentProject;
 	DataFile dataFile(DataFile::Type::SongProject);
 	m_savingProject = true;
 	populateProjectDataFile(dataFile);
 	m_savingProject = false;
 
-	if (!m_recordingProjectIdentity.beginSave(dataFile,filename,withResources)) { return false; }
+	if (updateRecordingIdentity && !m_recordingProjectIdentity.beginSave(dataFile,filename,withResources)) { return false; }
 	const auto recordingRevision=m_recordingProjectIdentity.revision();
 	QPointer<Song> saveOwner(this);
 	const bool nativeSaved=dataFile.writeFile(filename,withResources);
 	if (!saveOwner || m_recordingProjectIdentity.revision()!=recordingRevision) { return false; }
+	if (!updateRecordingIdentity) return nativeSaved;
 	return m_recordingProjectIdentity.finishSave(dataFile.nameWithExtension(filename),nativeSaved);
 }
 
@@ -1355,7 +1362,7 @@ bool Song::guiSaveProjectAs(const QString & filename)
 
 	bool withResources = m_saveOptions.saveAsProjectBundle.value();
 
-	bool const saveResult = saveProjectFile(fileNameWithExtension, withResources);
+	bool const saveResult = saveProjectFile(fileNameWithExtension, withResources, ProjectSavePurpose::UserProject);
 
 	// After saving, restore default save options.
 	m_saveOptions.setDefaultOptions();

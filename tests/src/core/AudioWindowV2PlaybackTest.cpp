@@ -6,9 +6,11 @@
 #include <QDir>
 #include <QDomDocument>
 #include <QFile>
+#include <QFileInfo>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QUuid>
+#include <array>
 #include <cstring>
 #include <future>
 #include "AudioImportPolicy.h"
@@ -23,6 +25,12 @@
 #include "ProjectJournal.h"
 #include "SampleTrack.h"
 #include "Song.h"
+#ifdef Q_OS_WIN
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#endif
 
 class WindowProbeDevice final : public lmms::AudioDevice
 {
@@ -96,14 +104,49 @@ private slots:
         using namespace lmms;
         const auto digest=QByteArray::fromHex("4f7f9b2ecea84bb8f5b27c8f36e85e8a100663c745ac25e82a512f485b663ac7");
         const auto msvcDigest=QByteArray::fromHex("55db2de7aece1fc3f5d6a001e1a824b83dd650fdd0f5d45078cb0f47dceb3881");
+        const auto correctedDigest=QByteArray::fromHex("bf275a0636dc7dadac8a691842c06b460109efc213c68b5ef6576a216e55d734");
+        const auto earlierNonDeterministicDigest=QByteArray::fromHex("c5352152de5b39b0538a6cafc1092ae2d3e8b45be130b21147f57a2d523cea54");
         QVERIFY(audioWindowReferenceProfileMatches(256,digest));
         QVERIFY(audioWindowReferenceProfileMatches(256,msvcDigest));
+        QVERIFY(audioWindowReferenceProfileMatches(256,correctedDigest));
+        QVERIFY(!audioWindowReferenceProfileMatches(256,earlierNonDeterministicDigest));
         QVERIFY(!audioWindowReferenceProfileMatches(128,msvcDigest));
         QVERIFY(!audioWindowReferenceProfileMatches(128,digest));
+        QVERIFY(!audioWindowReferenceProfileMatches(128,correctedDigest));
         QVERIFY(!audioWindowReferenceProfileMatches(256,QByteArray(32,'x')));
         QVERIFY(!audioWindowReferenceProfileMatches(256,{}));
         auto worker=std::async(std::launch::async,[]{return verifyAudioWindowReferenceProfile();});
         QVERIFY(!worker.get()); // Qualification must not do dependency I/O off the control thread.
+    }
+    void loadedLibraryImageIdentity_data(){rates();}
+    void loadedLibraryImageIdentity()
+    {
+#ifdef Q_OS_WIN
+        const auto expectedHash=QByteArray::fromHex(qgetenv("LMMS_EXPECTED_SAMPLERATE_SHA256"));
+        const auto expectedDirectory=qEnvironmentVariable("LMMS_EXPECTED_SAMPLERATE_DIR");
+        QVERIFY2(!expectedHash.isEmpty(),"Expected libsamplerate hash must be supplied by the isolated build runner");
+        QVERIFY2(!expectedDirectory.isEmpty(),"Expected libsamplerate directory must be supplied by the isolated build runner");
+        HMODULE module=nullptr;
+        QVERIFY(GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS|GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+            reinterpret_cast<LPCWSTR>(src_get_version()),&module));
+        std::array<wchar_t,32768> modulePath{};
+        const auto length=GetModuleFileNameW(module,modulePath.data(),DWORD(modulePath.size()));
+        QVERIFY(length>0 && length<modulePath.size());
+        const QString loadedPath=QString::fromWCharArray(modulePath.data(),int(length));
+        QFile loadedFile(loadedPath);
+        QVERIFY(loadedFile.open(QIODevice::ReadOnly));
+        QCryptographicHash hash(QCryptographicHash::Sha256);
+        QVERIFY(hash.addData(&loadedFile));
+        QCOMPARE(hash.result(),expectedHash);
+        const auto expectedPath=QFileInfo(QDir(expectedDirectory).filePath("libsamplerate-0.dll")).canonicalFilePath();
+        const auto actualPath=QFileInfo(loadedPath).canonicalFilePath();
+        QVERIFY(!expectedPath.isEmpty());
+        QCOMPARE(actualPath.toLower(),expectedPath.toLower());
+        QVERIFY(lmms::audioWindowReferenceProfileMatches(256,hash.result()));
+        qInfo()<<"LOADED_SAMPLERATE_DLL"<<loadedPath<<hash.result().toHex();
+#else
+        QSKIP("This loaded-image identity test qualifies the Windows UCRT64 DLL path");
+#endif
     }
     void wholeReference_data(){rates();}
     void wholeReference()

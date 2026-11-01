@@ -3,6 +3,7 @@
 #include "Song.h"
 #include "DataFile.h"
 #include "ProjectJournal.h"
+#include "ConfigManager.h"
 #include <QtTest>
 #include <QTemporaryDir>
 #include <QFile>
@@ -44,6 +45,37 @@ private slots:
   const auto oldTake=temp.filePath("library/"+first.identity.id+"/take-"+takeId+".partial");const auto digest=QCryptographicHash::hash(contents(oldTake),QCryptographicHash::Sha256);
   QVERIFY(song->guiSaveProjectAs(temp.filePath("distinct.mmp")));const auto second=song->recordingProjectIdentity().getOrCreateForCurrentProject(*library.library);
   QCOMPARE(second.code,QString("ok"));QVERIFY(second.identity.id!=first.identity.id);QCOMPARE(contents(original),originalBytes);QCOMPARE(QCryptographicHash::hash(contents(oldTake),QCryptographicHash::Sha256),digest);
+ }
+ void recoveryAutosaveDoesNotRebindTheLiveProjectIdentity()
+ {
+  QTemporaryDir temp;QVERIFY(temp.isValid());const auto libraryPath=temp.filePath("library");QVERIFY(QDir().mkpath(libraryPath));
+  auto library=RecordingLibrary::authorizeLocalRoot(libraryPath);QVERIFY(library.library);auto* song=Engine::getSong();
+  const auto initial=song->recordingProjectIdentity().getOrCreateForCurrentProject(*library.library);QCOMPARE(initial.code,QString("ok"));
+  const auto source=temp.filePath("disposable.mmp");QVERIFY(song->guiSaveProjectAs(source));
+  const auto sourceBytes=contents(source);const auto activeIdentity=song->recordingProjectIdentity().cachedIdentity();
+  const auto activeRevision=song->recordingProjectIdentity().revision();const auto activeFileName=song->projectFileName();
+  auto* config=ConfigManager::inst();const auto oldWorkingDir=config->workingDir();
+  const auto temporaryWorkingDir=temp.filePath("working");QVERIFY(QDir().mkpath(temporaryWorkingDir));config->setWorkingDir(temporaryWorkingDir);
+  const auto recoveryPath=config->recoveryFile();const bool recoverySaved=song->saveProjectFile(recoveryPath,false,Song::ProjectSavePurpose::RecoverySnapshot);config->setWorkingDir(oldWorkingDir);
+  QVERIFY(recoverySaved);QCOMPARE(song->projectFileName(),activeFileName);
+  QCOMPARE(song->recordingProjectIdentity().cachedIdentity().id,activeIdentity.id);
+  QCOMPARE(song->recordingProjectIdentity().revision(),activeRevision);
+  QCOMPARE(contents(source),sourceBytes);
+  DataFile recovery(recoveryPath);QVERIFY(recovery.head().firstChildElement("recording_project").isNull());
+ }
+ void recoverySnapshotAtActiveRecoveryPathKeepsItsIdentityTrusted()
+ {
+  QTemporaryDir temp;QVERIFY(temp.isValid());const auto libraryPath=temp.filePath("library");QVERIFY(QDir().mkpath(libraryPath));
+  auto library=RecordingLibrary::authorizeLocalRoot(libraryPath);QVERIFY(library.library);auto* song=Engine::getSong();
+  const auto initial=song->recordingProjectIdentity().getOrCreateForCurrentProject(*library.library);QCOMPARE(initial.code,QString("ok"));
+  const auto recoveryPath=temp.filePath("recover.mmp");QVERIFY(song->guiSaveProjectAs(recoveryPath));
+  const auto activeIdentity=song->recordingProjectIdentity().cachedIdentity();const auto activeRevision=song->recordingProjectIdentity().revision();
+  QVERIFY(song->recordingProjectIdentity().sourceIdentityTrusted());
+  QVERIFY(song->saveProjectFile(recoveryPath,false,Song::ProjectSavePurpose::RecoverySnapshot));
+  QCOMPARE(song->projectFileName(),recoveryPath);QCOMPARE(song->recordingProjectIdentity().revision(),activeRevision);
+  const auto rebound=song->recordingProjectIdentity().getOrCreateForCurrentProject(*library.library);
+  QCOMPARE(rebound.code,QString("ok"));QCOMPARE(rebound.identity.id,activeIdentity.id);
+  QVERIFY(song->recordingProjectIdentity().sourceIdentityTrusted());
  }
  void duplicatedSerializedUuidGetsSeparateFolder()
  {
