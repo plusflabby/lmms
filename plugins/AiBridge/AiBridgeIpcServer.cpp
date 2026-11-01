@@ -3,6 +3,7 @@
 #include "AiBridgeAudioWire.h"
 #include "AiBridgeVocalJobs.h"
 #include "AiBridgeVocalWire.h"
+#include "AiBridgeMidiExportWire.h"
 
 #include <QLocalSocket>
 #include <QCoreApplication>
@@ -686,9 +687,10 @@ bool isPhase3GAction(const QString &action)
 }
 
 AiBridgeIpcServer::AiBridgeIpcServer(QObject *parent, QString endpoint, AiBridgeVocalJobs* jobs,
-	recording::RecordingSessionManager* recordingManager) : QObject(parent), m_server(this),
-	m_endpoint(std::move(endpoint)), m_vocalJobs(jobs),
-	m_recordingActions(std::make_unique<AiBridgeRecordingActions>(recordingManager))
+	AiBridgeMidiExportJobs* midiExportJobs, recording::RecordingSessionManager* recordingManager)
+	: QObject(parent), m_server(this), m_endpoint(std::move(endpoint)), m_vocalJobs(jobs),
+	  m_midiExportJobs(midiExportJobs),
+	  m_recordingActions(std::make_unique<AiBridgeRecordingActions>(recordingManager))
 {
 	connect(&m_server, &QLocalServer::newConnection, this, &AiBridgeIpcServer::acceptConnection);
 }
@@ -780,7 +782,8 @@ void AiBridgeIpcServer::executeRequest(const AiBridgeProtocolRequest &request)
 {
 	const QPointer<AiBridgeIpcServer> self(this);const auto client=m_client;const auto revision=m_connectionRevision;
 	AiBridgeProtocolResponse response{2, request.requestId, false, QStringLiteral("internal_error"), QStringLiteral("Request did not execute")};
-	if (AiBridgeVocalWire::handles(request.action)) response=AiBridgeVocalWire::execute(request,m_vocalJobs);
+	if (AiBridgeMidiExportWire::handles(request.action)) response=AiBridgeMidiExportWire::execute(request,m_midiExportJobs);
+	else if (AiBridgeVocalWire::handles(request.action)) response=AiBridgeVocalWire::execute(request,m_vocalJobs);
 	else if (AiBridgeAudioWire::handles(request.action)) response=AiBridgeAudioWire::execute(request);
 	else if (AiBridgeRecordingTypes::handles(request.action)) response=m_recordingActions->execute(request);
 	else if (request.action == QStringLiteral("get_context"))

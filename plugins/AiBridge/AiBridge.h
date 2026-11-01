@@ -4,6 +4,7 @@
 #include "ToolPlugin.h"
 #include "AiBridgeIpcServer.h"
 #include "AiBridgeVocalJobs.h"
+#include "AiBridgeMidiExportJobs.h"
 
 namespace lmms
 {
@@ -21,6 +22,7 @@ public:
 
 private:
 	AiBridgeVocalJobs m_vocalJobs;
+	AiBridgeMidiExportJobs m_midiExportJobs;
 	AiBridgeIpcServer m_ipcServer;
 };
 

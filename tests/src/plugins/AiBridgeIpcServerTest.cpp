@@ -234,7 +234,7 @@ private slots:
 		transport.world.projectId = root.project.id;
 		transport.world.projectGeneration = identity.revision();
 		RecordingSessionManager manager(host, transport);
-		AiBridgeIpcServer server(nullptr, QStringLiteral("lmms-recording-ipc-disconnect-test"), nullptr, &manager);
+		AiBridgeIpcServer server(nullptr, QStringLiteral("lmms-recording-ipc-disconnect-test"), nullptr, nullptr, &manager);
 		QVERIFY(server.start());
 
 		auto send = [&](QLocalSocket& socket, const QString& requestId, const QString& action, const QJsonObject& parameters) {
