@@ -92,6 +92,45 @@ private slots:
  }
  void recoveredCopyHasNewIdOriginalPartialUnchanged()
  {
+  const auto externalRoot=qEnvironmentVariable("LMMS_PHASE3JR_H4_RECOVERY_ROOT");
+  const auto externalTake=qEnvironmentVariable("LMMS_PHASE3JR_H4_RECOVERY_TAKE_ID");
+  if(!externalRoot.isEmpty() || !externalTake.isEmpty())
+  {
+   QVERIFY(!externalRoot.isEmpty());QVERIFY(!externalTake.isEmpty());
+   auto approval=RecordingLibrary::authorizeLocalRoot(externalRoot);QVERIFY2(approval.library,qPrintable(approval.code));
+   RecordingRecovery recovery([id=uuid()]{return id;});
+   const auto page=recovery.scan(*approval.library,{},100);QCOMPARE(page.code,QStringLiteral("ok"));
+   const auto found=std::find_if(page.takes.begin(),page.takes.end(),[&](const auto& value){return value.source.takeId==externalTake;});
+   QVERIFY(found!=page.takes.end());
+   QCOMPARE(found->state,QStringLiteral("recoverable"));
+   QCOMPARE(found->originalFault,InputFault::HardwareDiscontinuity);
+   const auto projectId=found->source.projectId;
+   const auto originalStem=QDir::cleanPath(externalRoot+QLatin1Char('/')+projectId+QStringLiteral("/take-")+externalTake);
+   const auto originalPartial=contents(originalStem+QStringLiteral(".partial"));
+   const auto originalJournal=contents(originalStem+QStringLiteral(".journal"));
+   const auto originalDiagnostics=contents(originalStem+QStringLiteral(".diagnostics.jsonl"));
+   QVERIFY(!originalPartial.isEmpty());QVERIFY(!originalJournal.isEmpty());
+   const auto durableFrames=found->durableFrames;
+   QVERIFY(durableFrames>0);QVERIFY(found->unknownTailBytes>0);
+   const auto recovered=recovery.recover(externalTake);
+   QCOMPARE(recovered.code,QStringLiteral("recovered"));QVERIFY(recovered.token);
+   QVERIFY(recovered.token->facts().takeId!=externalTake);
+   QCOMPARE(recovered.token->facts().projectId,projectId);
+   QCOMPARE(recovered.token->facts().rawFrames,durableFrames);
+   QCOMPARE(recovered.manifest.recoveredFromTakeId,externalTake);
+   QCOMPARE(recovered.manifest.recoveredFromDurableFrames,durableFrames);
+   QCOMPARE(recovered.manifest.recoveredFromUnknownTailBytes,found->unknownTailBytes);
+   const auto recoveredStem=QDir::cleanPath(externalRoot+QLatin1Char('/')+projectId+QStringLiteral("/take-")+recovered.token->facts().takeId);
+   const auto recoveredAudio=contents(recoveredStem+QStringLiteral(".wav"));
+   QCOMPARE(recoveredAudio.size(),qint64(44+durableFrames*2));
+   QCOMPARE(QCryptographicHash::hash(recoveredAudio,QCryptographicHash::Sha256),recovered.token->facts().sourceDigest);
+   QCOMPARE(contents(originalStem+QStringLiteral(".partial")),originalPartial);
+   QCOMPARE(contents(originalStem+QStringLiteral(".journal")),originalJournal);
+   QCOMPARE(contents(originalStem+QStringLiteral(".diagnostics.jsonl")),originalDiagnostics);
+   QVERIFY(QFile::exists(recoveredStem+QStringLiteral(".recovery.json")));
+   QVERIFY(QFile::exists(recoveredStem+QStringLiteral(".journal")));
+   return;
+  }
   Fixture f;QVERIFY(f.partial());const auto original=contents(f.stem()+".partial"),journal=contents(f.stem()+".journal");
   const auto newId=uuid();RecordingRecovery recovery([newId]{return newId;});QVERIFY(recovery.scan(*f.approval.library).code=="ok");
   const auto result=recovery.recover(f.take.id);QCOMPARE(result.code,QString("recovered"));QVERIFY(result.token);
