@@ -231,7 +231,7 @@ private slots:
  {
   Fixture f;f.transport.world.numerator=3;f.transport.world.denominator=4;f.transport.world.ticksPerBar=144;QVERIFY(f.arm());auto p=f.prepare(2);QVERIFY(p.ok);QVERIFY(f.start(p).ok);
   f.until([&]{return f.transport.plays==1;});QCOMPARE(f.transport.world.songTick,qint64(480));
-  f.transport.world.songTick=600;std::ignore=f.manager.poll(100000);QCOMPARE(f.manager.status().phase,Phase::Preroll);QCOMPARE(f.manager.status().countInTicksRemaining,qint64(168));
+   f.transport.world.songTick=600;f.input->send(4);std::ignore=f.manager.poll(100000);QCOMPARE(f.manager.status().phase,Phase::Preroll);QCOMPARE(f.manager.status().countInTicksRemaining,qint64(168));
   f.transport.world.songTick=768;std::ignore=f.manager.poll(100001);QCOMPARE(f.manager.status().phase,Phase::Recording);QVERIFY(f.manager.status().performanceReached);
  }
  void insufficientPrerollRefused()
@@ -327,7 +327,30 @@ private slots:
   QVERIFY(!status.sampleAccuracyVerified);QVERIFY(!status.placementConfirmed);QCOMPARE(f.manager.confirmPlacement({}).code,QString("manual_approval_required"));
   QCOMPARE(f.manager.takes().takes.size(),std::size_t(1));
  }
- void placementReviewRemainsUnattachedUntilExplicitConfirmation()
+  void callbackProgressStallFinalizesFaultedPartialInsteadOfHealthyTake()
+  {
+   Engine::audioEngine()->setAudioDevice(new SyntheticOutput(48000),false);Engine::getSong()->setTempo(120);
+   Fixture f;QVERIFY(f.arm());auto p=f.prepare(0);QVERIFY(p.ok);QVERIFY(f.start(p).ok);
+   f.until([&]{return f.transport.plays==1;});
+   const auto takeId=f.manager.status().takeId;QVERIFY(!takeId.isEmpty());
+   QCOMPARE(f.manager.status().receivedFrames,quint64(4));
+   QCOMPARE(f.manager.poll(2099).phase,Phase::Recording);
+   const auto atDeadline=f.manager.poll(2100);
+   QVERIFY(atDeadline.phase!=Phase::Recording);
+   QCOMPARE(atDeadline.captureCode,QStringLiteral("input_callback_stalled"));
+   f.until([&]{return f.manager.quiescent();},2101);
+   const auto final=f.manager.status();
+   QCOMPARE(final.captureIntegrity,CaptureIntegrity::Incomplete);
+   QCOMPARE(final.captureCode,QStringLiteral("input_callback_stalled"));
+   QCOMPARE(final.receivedFrames,quint64(4));QCOMPARE(final.acceptedFrames,quint64(4));
+   QCOMPARE(final.writtenFrames,quint64(4));QCOMPARE(final.applicationDroppedFrames,quint64(0));
+   QVERIFY(!final.armed);QVERIFY(f.manager.quiescent());
+   const auto files=f.files();
+   QVERIFY(files.contains(QStringLiteral("take-%1.partial").arg(takeId)));
+   QVERIFY(files.contains(QStringLiteral("take-%1.journal").arg(takeId)));
+   QVERIFY(!files.contains(QStringLiteral("take-%1.wav").arg(takeId)));
+  }
+  void placementReviewRemainsUnattachedUntilExplicitConfirmation()
  {
   Engine::audioEngine()->setAudioDevice(new SyntheticOutput(48000),false);Engine::getSong()->setTempo(120);
   Fixture f;QVERIFY(f.arm());auto p=f.prepare(0);QVERIFY(p.ok);QVERIFY(f.start(p).ok);
@@ -368,6 +391,9 @@ private slots:
   const auto attached=f.manager.confirmPlacement(approval);QVERIFY(attached.ok);QCOMPARE(attached.code,QStringLiteral("take_attached"));
   const auto status=f.manager.status();QCOMPARE(status.placementState,PlacementState::Attached);QVERIFY(status.placementConfirmed);
   QCOMPARE(status.placementQuality,QStringLiteral("uncalibrated"));QCOMPARE(status.driftQuality,QStringLiteral("unmeasured"));QVERIFY(!status.sampleAccuracyVerified);
+   const auto page=f.manager.takes();QCOMPARE(page.code,QStringLiteral("ok"));QCOMPARE(page.takes.size(),std::size_t(1));
+   QCOMPARE(page.takes[0].placementState,PlacementState::Attached);QVERIFY(page.takes[0].placementConfirmed);
+   QCOMPARE(page.takes[0].code,QStringLiteral("take_attached"));
   QCOMPARE(Engine::getSong()->tracks().size(),tracksBefore+1);const auto clipCount=Engine::getSong()->tracks().back()->numOfClips();QCOMPARE(clipCount,1);
   const auto repeated=f.manager.confirmPlacement(approval);QVERIFY(repeated.ok);QCOMPARE(repeated.code,QStringLiteral("already_attached"));
   QCOMPARE(Engine::getSong()->tracks().size(),tracksBefore+1);

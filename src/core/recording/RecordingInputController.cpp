@@ -20,6 +20,7 @@ const char* recordingInputStageName(InputDiagnosticStage stage) noexcept
   case InputDiagnosticStage::OpenStream:return "open_stream";
   case InputDiagnosticStage::StartStream:return "start_stream";
   case InputDiagnosticStage::FirstCallback:return "first_callback";
+  case InputDiagnosticStage::CallbackProgress:return "callback_progress";
   case InputDiagnosticStage::StopStream:return "stop_stream";
   case InputDiagnosticStage::CloseStream:return "close_stream";
   case InputDiagnosticStage::Terminate:return "terminate";
@@ -53,6 +54,7 @@ QString RecordingInputDiagnostic::localSummary() const
  return text.join(QStringLiteral(" · ")).left(2048);
 }
 namespace {
+constexpr std::uint64_t CallbackProgressTimeoutMilliseconds=2000;
 bool validProfile(const SelectedInputProfile& selected) noexcept
 {
  const auto& profile=selected.input;
@@ -132,6 +134,7 @@ struct RecordingInputController::Impl
  std::atomic<RecordingInputRuntimeStorage*> activeStorage{nullptr};
  InputEpoch epoch;
  std::uint64_t startedAtMilliseconds=0;
+ std::uint64_t lastProgressAtMilliseconds=0,lastProgressFrames=0;
  std::atomic<std::uint32_t> callbacksInFlight{0};
  std::atomic_bool firstCallbackSeen{false},acceptingCallbacks{false};
  void observeCleanup(const RecordingDriverResult& result)
@@ -254,7 +257,8 @@ RecordingControllerResult RecordingInputController::beginCapture(InputEpoch epoc
 {
  if(m_impl->state!=RecordingControllerState::Ready || epoch!=m_impl->epoch || !m_impl->storage)return {"stale_or_not_ready",m_impl->state,false};
  if(!m_impl->storage->runtime.enableCapture(epoch))return {"capture_enable_failed",m_impl->state,false};
- m_impl->startedAtMilliseconds=now;m_impl->firstCallbackSeen.store(false,std::memory_order_release);
+ m_impl->startedAtMilliseconds=now;m_impl->lastProgressAtMilliseconds=now;m_impl->lastProgressFrames=0;
+ m_impl->firstCallbackSeen.store(false,std::memory_order_release);
  m_impl->acceptingCallbacks.store(true,std::memory_order_release);
  const auto result=m_impl->driver.start();
  m_impl->diagnostic=result.diagnostic;
@@ -290,16 +294,43 @@ RecordingControllerResult RecordingInputController::requestStop(InputEpoch epoch
 RecordingControllerSnapshot RecordingInputController::poll(std::uint64_t now) noexcept
 {
  m_impl->drainObservations();
- if(m_impl->state==RecordingControllerState::Capturing && !m_impl->firstCallbackSeen.load(std::memory_order_acquire)
-  && now>=m_impl->startedAtMilliseconds && now-m_impl->startedAtMilliseconds>=2000)
+ if(m_impl->state==RecordingControllerState::Capturing && m_impl->storage)
  {
-  m_impl->errorCode=QStringLiteral("first_callback_timeout");
-  m_impl->diagnostic.failedStage=InputDiagnosticStage::FirstCallback;
-  m_impl->diagnostic.description=QStringLiteral("No input callback within 2000 ms after stream start");
-  m_impl->diagnostic.hasPortAudioError=false;m_impl->diagnostic.portAudioError=0;
-  m_impl->diagnostic.outcomes[std::size_t(InputDiagnosticStage::FirstCallback)]=InputDiagnosticOutcome::Failed;
-  const auto stopped=requestStop(m_impl->epoch);
-  if(!stopped.ok)m_impl->state=RecordingControllerState::FailedRetained;
+  if(!m_impl->firstCallbackSeen.load(std::memory_order_acquire))
+  {
+   if(now>=m_impl->startedAtMilliseconds && now-m_impl->startedAtMilliseconds>=2000)
+   {
+    m_impl->errorCode=QStringLiteral("first_callback_timeout");
+    m_impl->diagnostic.failedStage=InputDiagnosticStage::FirstCallback;
+    m_impl->diagnostic.description=QStringLiteral("No input callback within 2000 ms after stream start");
+    m_impl->diagnostic.hasPortAudioError=false;m_impl->diagnostic.portAudioError=0;
+    m_impl->diagnostic.outcomes[std::size_t(InputDiagnosticStage::FirstCallback)]=InputDiagnosticOutcome::Failed;
+    const auto stopped=requestStop(m_impl->epoch);
+    if(!stopped.ok)m_impl->state=RecordingControllerState::FailedRetained;
+   }
+  }
+  else
+  {
+   const auto input=m_impl->storage->runtime.snapshot();
+   if(input.receivedFrames>m_impl->lastProgressFrames)
+   {
+    m_impl->lastProgressFrames=input.receivedFrames;
+    m_impl->lastProgressAtMilliseconds=now;
+   }
+   else if(input.fault==InputFault::None && input.stopReason==InputStopReason::None
+    && now>=m_impl->lastProgressAtMilliseconds
+    && now-m_impl->lastProgressAtMilliseconds>=CallbackProgressTimeoutMilliseconds)
+   {
+    m_impl->errorCode=QStringLiteral("input_callback_stalled");
+    m_impl->diagnostic.failedStage=InputDiagnosticStage::CallbackProgress;
+    m_impl->diagnostic.description=QStringLiteral("No input callback progress within 2000 ms after the first callback");
+    m_impl->diagnostic.hasPortAudioError=false;m_impl->diagnostic.portAudioError=0;
+    m_impl->diagnostic.outcomes[std::size_t(InputDiagnosticStage::CallbackProgress)]=InputDiagnosticOutcome::Failed;
+    m_impl->storage->runtime.reportFault(InputFault::HardwareDiscontinuity);
+    const auto stopped=requestStop(m_impl->epoch);
+    if(!stopped.ok)m_impl->state=RecordingControllerState::FailedRetained;
+   }
+  }
  }
  return m_impl->snapshot();
 }

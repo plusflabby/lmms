@@ -60,6 +60,7 @@ quint64 countinFrames(qint64 ticks,const RecordingTransportSnapshot& s)
 QString inputFailure(const RecordingHostSnapshot& h)
 {
  if(h.input.diagnostic.failedStage==InputDiagnosticStage::FirstCallback)return "input_not_ready";
+ if(h.input.diagnostic.failedStage==InputDiagnosticStage::CallbackProgress)return "input_callback_stalled";
  if(!h.errorCode.isEmpty())return publicCode(h.errorCode);
  if(!h.input.errorCode.isEmpty())return publicCode(h.input.errorCode);
  switch(h.input.input.fault)
@@ -354,12 +355,19 @@ RecordingReply RecordingSessionManager::confirmPlacement(const ManualPlacementAp
 		if(found!=s.history.end())takeStatus=&*found;
 	}
 	if(!takeStatus)return s.reply(false,"stale_take");
+	const auto updateCurrentHistory=[&]
+	{
+		if(takeStatus!=&s.current)return;
+		const auto found=std::find_if(s.history.begin(),s.history.end(),[&](const auto& value){return value.takeId==approval.takeId;});
+		if(found!=s.history.end())*found=s.current;
+	};
 	const bool wasAttached=takeStatus->placementState==PlacementState::Attached;
 	if(takeStatus->projectGeneration!=approval.expectedProjectGeneration)return s.reply(false,"stale_project");
 	if(takeStatus->captureIntegrity!=CaptureIntegrity::Complete || takeStatus->cancelled || !takeStatus->performanceReached)
 	{
 		if(!wasAttached)takeStatus->placementState=PlacementState::SavedUnattached;
 		takeStatus->code="take_saved_unattached";
+		updateCurrentHistory();
 		return {false,takeStatus->code,*takeStatus};
 	}
 	if(takeStatus->placementState==PlacementState::Attached && !takeStatus->placementConfirmed)
@@ -371,6 +379,7 @@ RecordingReply RecordingSessionManager::confirmPlacement(const ManualPlacementAp
 	{
 		if(!wasAttached) takeStatus->placementState=PlacementState::SavedUnattached;
 		takeStatus->code=wasAttached?opened.code:"take_saved_unattached";
+		updateCurrentHistory();
 		return {false,takeStatus->code,*takeStatus};
 	}
 	const auto geometry=RecordingPlacement::captureGeometry(s.transport,opened.source->facts(),world,approval.placementRevision);
@@ -379,6 +388,7 @@ RecordingReply RecordingSessionManager::confirmPlacement(const ManualPlacementAp
 	{
 		if(!wasAttached) takeStatus->placementState=PlacementState::SavedUnattached;
 		takeStatus->code=wasAttached?placement.code:"take_saved_unattached";
+		updateCurrentHistory();
 		return {false,takeStatus->code,*takeStatus};
 	}
 	const auto attached=s.attachment.attach(*opened.source,*placement.plan,approval.expectedProjectGeneration);
@@ -387,6 +397,7 @@ RecordingReply RecordingSessionManager::confirmPlacement(const ManualPlacementAp
 		if(!wasAttached)takeStatus->placementState=PlacementState::SavedUnattached;
 		takeStatus->placementConfirmed=wasAttached;
 		takeStatus->code=attached.code=="saved_unattached" && !wasAttached?"take_saved_unattached":publicCode(attached.code);
+		updateCurrentHistory();
 		return {false,takeStatus->code,*takeStatus};
 	}
 	takeStatus->placementState=PlacementState::Attached;
@@ -395,6 +406,7 @@ RecordingReply RecordingSessionManager::confirmPlacement(const ManualPlacementAp
 	takeStatus->driftQuality="unmeasured";
 	takeStatus->sampleAccuracyVerified=false;
 	takeStatus->code=attached.code=="already_attached"?"already_attached":"take_attached";
+	updateCurrentHistory();
 	return {true,takeStatus->code,*takeStatus};
 }
 TakePage RecordingSessionManager::takes(PageRequest request) const

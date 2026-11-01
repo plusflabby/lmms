@@ -26,6 +26,10 @@ void RecordingInputRuntime::latchFault(InputFault fault) noexcept
  m_stopReason.compare_exchange_strong(reason,InputStopReason::Fault,std::memory_order_acq_rel);
  m_stopRequested.store(true,std::memory_order_release);
 }
+void RecordingInputRuntime::reportFault(InputFault fault) noexcept
+{
+ if(fault!=InputFault::None)latchFault(fault);
+}
 void RecordingInputRuntime::outside(std::uint64_t frames) noexcept
 {
  if(!add(m_intentionallyUnrecordedFrames,frames)){latchFault(InputFault::CounterOverflow);}

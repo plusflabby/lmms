@@ -190,7 +190,56 @@ private slots:
   QCOMPARE(driver.callback(driver.callbackContext,late),InputDecision::Stop);QCOMPARE(controller.snapshot().callbacksInFlight,0u);
   driver.stopResult={"ok",true};QVERIFY(controller.requestStop({9,1}).ok);QVERIFY(controller.closeAfterQuiescence().ok);
  }
- void initializationFailureIsVisibleAndNeverOpensInput()
+  void callbackProgressStallAfterFirstBlockStopsAndReportsFault()
+  {
+   FakeInputDriver driver;RecordingInputController controller(driver);controller.enumerateInputs(0,64);
+   const InputEpoch epoch{36,1};auto ticket=controller.arm(profile(),epoch,1);QVERIFY(ticket.ok);
+   auto lease=controller.createRuntimeLease(profile());QVERIFY(controller.open(std::move(ticket.ticket),std::move(lease)).ok);
+   QVERIFY(controller.beginCapture(epoch,100).ok);
+   const float samples[]{.1f,.2f};
+   QCOMPARE(driver.callback(driver.callbackContext,{samples,1,2,0,1.,1.01}),InputDecision::Continue);
+   const auto firstProgress=controller.poll(100);
+   QCOMPARE(firstProgress.state,RecordingControllerState::Capturing);
+   QCOMPARE(firstProgress.input.receivedFrames,std::uint64_t(1));
+   QCOMPARE(controller.poll(2099).state,RecordingControllerState::Capturing);
+   const auto stalled=controller.poll(2100);
+   const auto stopsBeforeCleanup=driver.stopCalls;
+   if(controller.snapshot().state==RecordingControllerState::Capturing) std::ignore=controller.requestStop(epoch);
+   QVERIFY(controller.closeAfterQuiescence().ok);
+   QCOMPARE(stalled.state,RecordingControllerState::Quiescent);
+   QCOMPARE(stopsBeforeCleanup,1);
+   QCOMPARE(stalled.errorCode,QStringLiteral("input_callback_stalled"));
+  QCOMPARE(stalled.diagnostic.failedStage,InputDiagnosticStage::CallbackProgress);
+  QCOMPARE(stalled.diagnostic.outcome(InputDiagnosticStage::CallbackProgress),InputDiagnosticOutcome::Failed);
+  QVERIFY(!stalled.diagnostic.hasPortAudioError);
+   QCOMPARE(stalled.input.fault,InputFault::HardwareDiscontinuity);
+   QCOMPARE(stalled.input.stopReason,InputStopReason::Fault);
+   QCOMPARE(stalled.input.receivedFrames,std::uint64_t(1));
+   QCOMPARE(driver.closeCalls,1);QCOMPARE(driver.terminateCalls,1);
+  }
+  void callbackProgressRestartsStallDeadlineAfterEachBlock()
+  {
+   FakeInputDriver driver;RecordingInputController controller(driver);controller.enumerateInputs(0,64);
+   const InputEpoch epoch{37,1};auto ticket=controller.arm(profile(),epoch,1);QVERIFY(ticket.ok);
+   auto lease=controller.createRuntimeLease(profile());QVERIFY(controller.open(std::move(ticket.ticket),std::move(lease)).ok);
+   QVERIFY(controller.beginCapture(epoch,100).ok);
+   const float samples[]{.1f,.2f};
+   QCOMPARE(driver.callback(driver.callbackContext,{samples,1,2,0,1.,1.01}),InputDecision::Continue);
+   QCOMPARE(controller.poll(100).state,RecordingControllerState::Capturing);
+   QCOMPARE(driver.callback(driver.callbackContext,{samples,1,2,0,1.1,1.11}),InputDecision::Continue);
+   QCOMPARE(controller.poll(1100).input.receivedFrames,std::uint64_t(2));
+   QCOMPARE(controller.poll(3099).state,RecordingControllerState::Capturing);
+   const auto stalled=controller.poll(3100);
+   const auto stopsBeforeCleanup=driver.stopCalls;
+   if(controller.snapshot().state==RecordingControllerState::Capturing) std::ignore=controller.requestStop(epoch);
+   QVERIFY(controller.closeAfterQuiescence().ok);
+   QCOMPARE(stalled.state,RecordingControllerState::Quiescent);
+   QCOMPARE(stopsBeforeCleanup,1);
+   QCOMPARE(stalled.errorCode,QStringLiteral("input_callback_stalled"));
+   QCOMPARE(stalled.input.fault,InputFault::HardwareDiscontinuity);
+   QCOMPARE(stalled.input.receivedFrames,std::uint64_t(2));
+  }
+  void initializationFailureIsVisibleAndNeverOpensInput()
  {
   FakeInputDriver driver;driver.initializeResult={"wasapi_unavailable",true};RecordingInputController controller(driver);
   const auto page=controller.enumerateInputs(0,64);QCOMPARE(page.code,QString("wasapi_unavailable"));

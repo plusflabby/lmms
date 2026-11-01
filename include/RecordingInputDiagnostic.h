@@ -5,7 +5,7 @@
 #include <cstdint>
 namespace lmms::recording {
 enum class InputDiagnosticStage : std::uint32_t
-{Initialize,ResolveEndpoint,ValidateChannels,ValidateFormat,FormatSupport,OpenStream,StartStream,FirstCallback,
+{Initialize,ResolveEndpoint,ValidateChannels,ValidateFormat,FormatSupport,OpenStream,StartStream,FirstCallback,CallbackProgress,
  StopStream,CloseStream,Terminate,Count,None};
 enum class InputDiagnosticOutcome : std::uint32_t {NotAttempted,Succeeded,Failed};
 const char* recordingInputStageName(InputDiagnosticStage) noexcept;

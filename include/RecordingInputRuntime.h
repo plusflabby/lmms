@@ -58,6 +58,8 @@ public:
  bool enableCapture(InputEpoch) noexcept;
  InputDecision process(const InputBlock&) noexcept;
  void requestStop(InputEpoch) noexcept;
+ // Control-thread supervision may latch a fault when the backend stops delivering callbacks.
+ void reportFault(InputFault) noexcept;
  InputSnapshot snapshot() const noexcept;
  bool popObservation(InputObservation&) noexcept;
 private:
