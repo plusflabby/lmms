@@ -1,6 +1,7 @@
 #include "AudioWindowPlayback.h"
 #include "AudioEngine.h"
 #include <QCoreApplication>
+#include <QDebug>
 #include <QThread>
 #include <QCryptographicHash>
 #include <QFile>
@@ -17,10 +18,12 @@
 namespace lmms {
 bool audioWindowReferenceProfileMatches(qint32 capacity,const QByteArray& digest)
 {
-	// Initial qualified Windows runtime only. Other builds require independent
-	// qualification, not automatic approval because they reuse a version string.
-	return capacity==256 && (digest==QByteArray::fromHex("4f7f9b2ecea84bb8f5b27c8f36e85e8a100663c745ac25e82a512f485b663ac7")
-		|| digest==QByteArray::fromHex("bf275a0636dc7dadac8a691842c06b460109efc213c68b5ef6576a216e55d734"));
+	// Only known Windows runtime images are admitted to the behavior probe below.
+	// Other builds require their own digest and behavior proof, even if the version matches.
+	return capacity==256 &&
+		(digest==QByteArray::fromHex("4f7f9b2ecea84bb8f5b27c8f36e85e8a100663c745ac25e82a512f485b663ac7")
+			|| digest==QByteArray::fromHex("55db2de7aece1fc3f5d6a001e1a824b83dd650fdd0f5d45078cb0f47dceb3881")
+			|| digest==QByteArray::fromHex("bf275a0636dc7dadac8a691842c06b460109efc213c68b5ef6576a216e55d734"));
 }
 namespace {
 bool qualifiedLibraryImage()
@@ -38,7 +41,10 @@ bool qualifiedLibraryImage()
 	if(!file.open(QIODevice::ReadOnly) || file.size()<=0 || file.size()>8*1024*1024) return false;
 	QCryptographicHash hash(QCryptographicHash::Sha256);
 	if(!hash.addData(&file)) return false;
-	return audioWindowReferenceProfileMatches(DEFAULT_BUFFER_SIZE,hash.result());
+	const auto digest=hash.result();
+	if(qEnvironmentVariableIsSet("LMMS_DIAG_AUDIO_WINDOW_PROFILE"))
+		qInfo().noquote()<<"AUDIO_WINDOW_PROFILE_IMAGE"<<file.fileName()<<file.size()<<digest.toHex();
+	return audioWindowReferenceProfileMatches(DEFAULT_BUFFER_SIZE,digest);
 #else
 	return false;
 #endif
@@ -75,7 +81,8 @@ bool validSpan(const AudioSourceWindowV2& window,const SampleBuffer& buffer)
 	return w.phaseOriginFrame>=0 && w.phaseOriginFrame<=w.inFrame && w.inFrame<w.outFrame
 		&& w.outFrame<=window.referenceEndFrame && window.referenceEndFrame<=w.sourceFrameCount
 		&& w.sourceFrameCount<=INT_MAX && size_t(w.sourceFrameCount)==buffer.size()
-		&& w.sourceRate==buffer.sampleRate() && (w.sourceRate==44100 || w.sourceRate==48000)
+		&& (w.sourceRate==44100 || w.sourceRate==48000)
+		&& static_cast<sample_rate_t>(w.sourceRate)==buffer.sampleRate()
 		&& DEFAULT_BUFFER_SIZE==256 && (window.referenceEndFrame-w.phaseOriginFrame)%DEFAULT_BUFFER_SIZE!=1;
 }
 }

@@ -12,12 +12,21 @@ namespace {
 thread_local bool trackAllocation=false;
 thread_local unsigned allocations=0,frees=0;
 }
+#if defined(__GNUC__) && !defined(__clang__)
+// GCC misdiagnoses this valid replacement new/delete pair when it inlines
+// vector allocation through the test's global allocation counter.
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wmismatched-new-delete"
+#endif
 void* operator new(std::size_t size){if(trackAllocation)++allocations;if(auto* p=std::malloc(size?size:1))return p;throw std::bad_alloc();}
-void* operator new[](std::size_t size){return ::operator new(size);}
+void* operator new[](std::size_t size){if(trackAllocation)++allocations;if(auto* p=std::malloc(size?size:1))return p;throw std::bad_alloc();}
 void operator delete(void* ptr) noexcept{if(trackAllocation && ptr)++frees;std::free(ptr);}
-void operator delete[](void* ptr) noexcept{::operator delete(ptr);}
+void operator delete[](void* ptr) noexcept{if(trackAllocation && ptr)++frees;std::free(ptr);}
 void operator delete(void* ptr,std::size_t) noexcept{::operator delete(ptr);}
-void operator delete[](void* ptr,std::size_t) noexcept{::operator delete(ptr);}
+void operator delete[](void* ptr,std::size_t) noexcept{::operator delete[](ptr);}
+#if defined(__GNUC__) && !defined(__clang__)
+#pragma GCC diagnostic pop
+#endif
 using namespace lmms::recording;
 class RecordingRingTest : public QObject
 {

@@ -88,6 +88,7 @@ bool MidiExport::tryExport(const TrackContainer::TrackList& tracks,
 				auto* clip=dynamic_cast<MidiClip*>(baseClip);if(!clip)continue;
 				MidiExportClipSource copied;copied.id=QStringLiteral("%1:%2").arg(source.id).arg(clip->startPosition().getTicks());
 				copied.start=clip->startPosition().getTicks();copied.length=clip->length().getTicks();copied.offset=clip->startTimeOffset().getTicks();copied.muted=clip->isMuted();
+				copied.notes.resize(clip->notes().size());int noteIndex=0;
 				for(const auto* note:clip->notes())
 				{
 					int key=note->key();
@@ -96,7 +97,7 @@ bool MidiExport::tryExport(const TrackContainer::TrackList& tracks,
 					const int volume=qBound(0,qRound(note->getVolume()*instrument->getVolume()/100.0),200);
 					MidiExportNoteSource value{note->pos().getTicks(),note->length().getTicks(),qBound(0,key,127),volume,
 						note->type()==Note::Type::Step?MidiExportNoteType::Step:MidiExportNoteType::Regular};
-					value.panning=note->getPanning();value.hasDetuning=note->hasDetuningInfo();copied.notes.append(value);
+					value.panning=note->getPanning();value.hasDetuning=note->hasDetuningInfo();copied.notes[noteIndex++]=value;
 				}
 				source.clips.append(copied);
 			}
@@ -130,6 +131,7 @@ bool MidiExport::tryExport(const TrackContainer::TrackList& tracks,
 					if(instrument->midiPort()->outputProgram()>1)lane.program=instrument->midiPort()->outputProgram()-1;
 				}
 				lane.clipLength=clip->length().getTicks();lane.clipOffset=clip->startTimeOffset().getTicks();
+				lane.notes.resize(clip->notes().size());int noteIndex=0;
 				for(const auto* note:clip->notes())
 				{
 					int key=note->key();int volume=note->getVolume();
@@ -141,7 +143,7 @@ bool MidiExport::tryExport(const TrackContainer::TrackList& tracks,
 					}
 					MidiExportNoteSource value{note->pos().getTicks(),note->length().getTicks(),qBound(0,key,127),volume,
 						note->type()==Note::Type::Step?MidiExportNoteType::Step:MidiExportNoteType::Regular};
-					value.panning=note->getPanning();value.hasDetuning=note->hasDetuningInfo();lane.notes.append(value);
+					value.panning=note->getPanning();value.hasDetuning=note->hasDetuningInfo();lane.notes[noteIndex++]=value;
 				}
 				snapshot.patternLanes.append(lane);
 			}

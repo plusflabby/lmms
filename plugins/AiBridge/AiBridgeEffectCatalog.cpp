@@ -12,6 +12,6 @@ AiBridgeEffectPage AiBridgeEffectCatalog::list(int offset, int limit, const QStr
 		if (present && (filter.isEmpty() || QString::fromUtf8(key).contains(filter, Qt::CaseInsensitive))) result.items.append({QString::fromUtf8(key), QString::fromUtf8(key), {}});
 	}
 	std::sort(result.items.begin(), result.items.end(), [](const auto& a, const auto& b) { return a.id < b.id; });
-	result.page = {result.items.size(), offset, limit, false}; auto all = result.items; result.items = all.mid(offset, limit); result.page.total = all.size(); result.page.hasMore = offset + limit < all.size(); return result;
+	result.page = {static_cast<int>(result.items.size()), offset, limit, false}; auto all = result.items; result.items = all.mid(offset, limit); result.page.total = static_cast<int>(all.size()); result.page.hasMore = offset + limit < all.size(); return result;
 }
 }

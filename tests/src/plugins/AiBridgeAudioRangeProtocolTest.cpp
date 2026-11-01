@@ -113,7 +113,7 @@ private slots:
 			QTest::newRow(qPrintable(action+"-valid"))<<action<<p<<true;auto dry=p;dry.insert("dry_run",true);QTest::newRow(qPrintable(action+"-dry"))<<action<<dry<<true;
 			for(const QString key:{"clip_id","expected_audio_state_hash",action=="trim_audio_clip"?"new_edge_tick":"split_tick"}){auto bad=p;bad.remove(key);QTest::newRow(qPrintable(action+"-missing-"+key))<<action<<bad<<false;}
 			for(const QString key:{"path","frames","source_window","reference_end","operations","unknown"}){auto bad=p;bad.insert(key,1);QTest::newRow(qPrintable(action+"-extra-"+key))<<action<<bad<<false;}
-			for(const QJsonValue tick:{QJsonValue(-1),QJsonValue(.5),QJsonValue(2147483648.0),QJsonValue("140"),QJsonValue(QJsonValue::Null)}){auto bad=p;bad.insert(action=="trim_audio_clip"?"new_edge_tick":"split_tick",tick);QTest::newRow(qPrintable(action+"-tick-"+QString::number(tick.type())+"-"+tick.toVariant().toString()))<<action<<bad<<false;}
+			for(const QJsonValue& tick:{QJsonValue(-1),QJsonValue(.5),QJsonValue(2147483648.0),QJsonValue("140"),QJsonValue(QJsonValue::Null)}){auto bad=p;bad.insert(action=="trim_audio_clip"?"new_edge_tick":"split_tick",tick);QTest::newRow(qPrintable(action+"-tick-"+QString::number(tick.type())+"-"+tick.toVariant().toString()))<<action<<bad<<false;}
 			auto bad=p;bad.insert("dry_run","true");QTest::newRow(qPrintable(action+"-bool"))<<action<<bad<<false;bad=p;bad.insert("expected_audio_state_hash",QString(64,'A'));QTest::newRow(qPrintable(action+"-hash"))<<action<<bad<<false;
 		}
 		for(const QString edge:{"both","Left","","split"}){auto p=base;p.insert("edge",edge);p.insert("new_edge_tick",140);QTest::newRow(qPrintable("edge-"+edge))<<"trim_audio_clip"<<p<<false;}
@@ -150,8 +150,20 @@ private slots:
 	void socketSemanticErrors()
 	{
 		QFETCH(int,mode);QFETCH(QString,code);using namespace lmms;SampleTrack track(Engine::getSong());SampleClip clip(&track);auto n=state();
-		if(mode==2)n.setAttribute("len",79);if(mode==3)n.firstChildElement("audio_source_window").setAttribute("version",9);if(mode==4)n.firstChildElement("audio_source_window").setAttribute("reference_end",1);clip.loadSettings(n);
-		if(mode==0)Engine::getSong()->setTempo(123);if(mode==1)Engine::audioEngine()->setAudioDevice(new RangeProbeDevice(48000),false);if(mode==5){auto* neighbor=new SampleClip(&track);neighbor->setAutoResize(false);neighbor->movePosition(150);neighbor->changeLength(10);}if(mode==6)QVERIFY(QFile::rename(source,source+".retained"));
+		if(mode==2) { n.setAttribute("len",79); }
+		if(mode==3) { n.firstChildElement("audio_source_window").setAttribute("version",9); }
+		if(mode==4) { n.firstChildElement("audio_source_window").setAttribute("reference_end",1); }
+		clip.loadSettings(n);
+		if(mode==0) { Engine::getSong()->setTempo(123); }
+		if(mode==1) { Engine::audioEngine()->setAudioDevice(new RangeProbeDevice(48000),false); }
+		if(mode==5)
+		{
+			auto* neighbor=new SampleClip(&track);
+			neighbor->setAutoResize(false);
+			neighbor->movePosition(150);
+			neighbor->changeLength(10);
+		}
+		if(mode==6) { QVERIFY(QFile::rename(source,source+".retained")); }
 		const auto restore=qScopeGuard([&]{if(mode==6)QFile::rename(source+".retained",source);});
 		AiBridgeProjectContext ids;const auto id=ids.idForClip(&clip);AiBridgeIpcServer server(nullptr,"range-errors-"+QUuid::createUuid().toString());QVERIFY(server.start());QLocalSocket socket;socket.connectToServer(server.endpointName());QVERIFY(socket.waitForConnected(1000));const auto read=call(socket,"get_audio_clip",{{"clip_id",id}}).value("data").toObject();Engine::projectJournal()->clearJournal();
 		const auto response=call(socket,"split_audio_clip",{{"clip_id",id},{"expected_audio_state_hash",read.value("audio_state_hash")},{"split_tick",mode==7?110:140}});QCOMPARE(response.value("code").toString(),code);QVERIFY(!response.value("success").toBool());QVERIFY(!Engine::projectJournal()->canUndo());

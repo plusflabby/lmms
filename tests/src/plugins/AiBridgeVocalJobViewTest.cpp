@@ -8,6 +8,7 @@
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QtEndian>
+#include <array>
 #include <cstring>
 #include "AiBridgeVocalJobView.h"
 #include "AiBridgeVocalWire.h"
@@ -36,10 +37,10 @@ private slots:
 	{
 		for(const auto& key:keys)old<<ConfigManager::inst()->value("aibridge",key,"view-absent");
 		dir=std::make_unique<QTemporaryDir>(QCoreApplication::applicationDirPath()+"/vocal-view-XXXXXX");QVERIFY(dir->isValid());
-		QByteArray bytes(4044,0);std::memcpy(bytes.data(),"RIFF",4);std::memcpy(bytes.data()+8,"WAVEfmt ",8);std::memcpy(bytes.data()+36,"data",4);
+		std::array<char,4044> bytes{};std::memcpy(bytes.data(),"RIFF",4);std::memcpy(bytes.data()+8,"WAVEfmt ",8);std::memcpy(bytes.data()+36,"data",4);
 		qToLittleEndian<quint32>(4036,bytes.data()+4);qToLittleEndian<quint32>(16,bytes.data()+16);qToLittleEndian<quint16>(1,bytes.data()+20);qToLittleEndian<quint16>(1,bytes.data()+22);
 		qToLittleEndian<quint32>(1000,bytes.data()+24);qToLittleEndian<quint32>(2000,bytes.data()+28);qToLittleEndian<quint16>(2,bytes.data()+32);qToLittleEndian<quint16>(16,bytes.data()+34);qToLittleEndian<quint32>(4000,bytes.data()+40);
-		const auto path=dir->filePath("original.wav");{QFile f(path);QVERIFY(f.open(QIODevice::WriteOnly|QIODevice::NewOnly));QCOMPARE(f.write(bytes),qint64(bytes.size()));}
+		const auto path=dir->filePath("original.wav");{QFile f(path);QVERIFY(f.open(QIODevice::WriteOnly|QIODevice::NewOnly));QCOMPARE(f.write(bytes.data(),qint64(bytes.size())),qint64(bytes.size()));}
 		ConfigManager::inst()->setValue("aibridge",keys[0],QString::fromUtf8(QJsonDocument(QJsonArray{dir->path()}).toJson(QJsonDocument::Compact)));
 		// 2000*sizeof(SampleFrame)+4172 scratch =20172 bytes; keep fixture admission above that bound.
 		ConfigManager::inst()->setValue("aibridge",keys[1],"20000");ConfigManager::inst()->setValue("aibridge",keys[2],"32768");

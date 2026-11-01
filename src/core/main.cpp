@@ -73,6 +73,9 @@
 
 #ifdef LMMS_DEBUG_FPE
 #include <fenv.h> // For feenableexcept
+#if defined(__APPLE__) && defined(__MACH__)
+#include "fenv_compat.h"
+#endif
 #include <execinfo.h> // For backtrace and backtrace_symbols_fd
 #include <unistd.h> // For STDERR_FILENO
 #endif

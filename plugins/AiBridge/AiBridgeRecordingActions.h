@@ -14,6 +14,7 @@ class AiBridgeRecordingActions
 public:
 	explicit AiBridgeRecordingActions(recording::RecordingSessionManager* manager);
 	AiBridgeProtocolResponse execute(const AiBridgeProtocolRequest&) const;
+	bool blocksProjectMutation() const;
 
 private:
 	recording::RecordingSessionManager* m_manager;

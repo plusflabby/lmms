@@ -25,10 +25,12 @@
 #include "Song.h"
 #include <QTextStream>
 #include <QCoreApplication>
+#include <QCryptographicHash>
 #include <QDebug>
 #include <QFile>
 #include <QFileInfo>
 #include <QMessageBox>
+#include <QScopeGuard>
 #include <QThread>
 #include "SampleClip.h"
 #include "MainWindow.h"
@@ -39,6 +41,7 @@
 #include "AutomationTrack.h"
 #include "AutomationEditor.h"
 #include "ConfigManager.h"
+#include "DataFile.h"
 #include "ControllerRackView.h"
 #include "ControllerConnection.h"
 #include "EnvelopeAndLfoParameters.h"
@@ -1257,21 +1260,10 @@ void Song::loadProject( const QString & fileName )
 }
 
 
-// only save current song as filename and do nothing else
-bool Song::saveProjectFile(const QString & filename, bool withResources, ProjectSavePurpose purpose)
+// Populate the project document shared by saving and in-memory identity hashing.
+void Song::populateProjectDataFile(DataFile & dataFile)
 {
-	warnAudioWindowCompatibility();
 	using gui::getGUI;
-	const auto destinationPath = QFileInfo(filename).canonicalFilePath();
-	const auto currentPath = QFileInfo(m_fileName).canonicalFilePath();
-	const bool recoverySnapshotOfCurrentProject = purpose == ProjectSavePurpose::RecoverySnapshot
-		&& !destinationPath.isEmpty() && !currentPath.isEmpty()
-		&& destinationPath.compare(currentPath, Qt::CaseInsensitive) == 0;
-	const bool updateRecordingIdentity = purpose == ProjectSavePurpose::UserProject || recoverySnapshotOfCurrentProject;
-
-	DataFile dataFile( DataFile::Type::SongProject );
-	m_savingProject = true;
-
 	m_tempoModel.saveSettings( dataFile, dataFile.head(), "bpm" );
 	m_timeSigModel.saveSettings( dataFile, dataFile.head(), "timesig" );
 	m_masterVolumeModel.saveSettings( dataFile, dataFile.head(), "mastervol" );
@@ -1293,7 +1285,53 @@ bool Song::saveProjectFile(const QString & filename, bool withResources, Project
 
 	saveScaleStates(dataFile, dataFile.content());
 	saveKeymapStates(dataFile, dataFile.content());
+}
 
+QByteArray Song::projectDocumentHash()
+{
+	DataFile dataFile(DataFile::Type::SongProject);
+	const bool wasSavingProject = m_savingProject;
+	const bool wasDiscardingMidiConnections = m_saveOptions.discardMIDIConnections.value();
+	m_savingProject = true;
+	m_saveOptions.discardMIDIConnections.setValue(true);
+	const auto restoreOptions = qScopeGuard([this, wasSavingProject, wasDiscardingMidiConnections] {
+		m_saveOptions.discardMIDIConnections.setValue(wasDiscardingMidiConnections);
+		m_savingProject = wasSavingProject;
+	});
+	populateProjectDataFile(dataFile);
+	return QCryptographicHash::hash(dataFile.toByteArray(-1), QCryptographicHash::Sha256).toHex();
+}
+
+QByteArray Song::projectObjectStateHash(SerializingObject &object)
+{
+	const bool wasSavingProject = m_savingProject;
+	const bool wasDiscardingMidiConnections = m_saveOptions.discardMIDIConnections.value();
+	m_savingProject = true;
+	m_saveOptions.discardMIDIConnections.setValue(true);
+	const auto restoreOptions = qScopeGuard([this, wasSavingProject, wasDiscardingMidiConnections] {
+		m_saveOptions.discardMIDIConnections.setValue(wasDiscardingMidiConnections);
+		m_savingProject = wasSavingProject;
+	});
+
+	QDomDocument document;
+	auto root = document.createElement(QStringLiteral("target"));
+	document.appendChild(root);
+	object.saveState(document, root);
+	return QCryptographicHash::hash(document.toByteArray(-1), QCryptographicHash::Sha256).toHex();
+}
+
+bool Song::saveProjectFile(const QString & filename, bool withResources, ProjectSavePurpose purpose)
+{
+	warnAudioWindowCompatibility();
+	const auto destinationPath = QFileInfo(filename).canonicalFilePath();
+	const auto currentPath = QFileInfo(m_fileName).canonicalFilePath();
+	const bool recoverySnapshotOfCurrentProject = purpose == ProjectSavePurpose::RecoverySnapshot
+		&& !destinationPath.isEmpty() && !currentPath.isEmpty()
+		&& destinationPath.compare(currentPath, Qt::CaseInsensitive) == 0;
+	const bool updateRecordingIdentity = purpose == ProjectSavePurpose::UserProject || recoverySnapshotOfCurrentProject;
+	DataFile dataFile(DataFile::Type::SongProject);
+	m_savingProject = true;
+	populateProjectDataFile(dataFile);
 	m_savingProject = false;
 
 	if (updateRecordingIdentity && !m_recordingProjectIdentity.beginSave(dataFile,filename,withResources)) { return false; }

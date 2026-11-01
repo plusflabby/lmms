@@ -32,6 +32,7 @@
 #define LB302_H
 
 #include <array>
+#include <bit>
 #include <atomic>
 #include <memory>
 

@@ -1,6 +1,7 @@
 #include "AiBridgeVocalTypes.h"
 #include <QCryptographicHash>
 #include <QDataStream>
+#include <QIODevice>
 #include <QSet>
 #include <cmath>
 #include <limits>

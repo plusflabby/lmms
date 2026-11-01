@@ -39,8 +39,14 @@ namespace lmms::gui
 ToolPluginView::ToolPluginView( ToolPlugin * _toolPlugin ) :
 	PluginView( _toolPlugin, nullptr )
 {
-	getGUI()->mainWindow()->addWindowedWidget( this );
-	parentWidget()->setAttribute( Qt::WA_DeleteOnClose, false );
+	if (auto* gui = getGUI(); gui && gui->mainWindow())
+	{
+		gui->mainWindow()->addWindowedWidget(this);
+		if (auto* subWindow = parentWidget())
+		{
+			subWindow->setAttribute(Qt::WA_DeleteOnClose, false);
+		}
+	}
 
 	setWindowTitle( _toolPlugin->displayName() );
 	setWindowIcon( _toolPlugin->descriptor()->logo->pixmap() );

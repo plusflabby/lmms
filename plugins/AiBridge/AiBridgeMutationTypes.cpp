@@ -1,6 +1,7 @@
 #include "AiBridgeMutationTypes.h"
 
 #include <QCryptographicHash>
+#include <QIODevice>
 #include <QTextStream>
 #include <algorithm>
 #include <cstdint>

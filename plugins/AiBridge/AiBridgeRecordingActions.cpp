@@ -8,6 +8,15 @@ AiBridgeRecordingActions::AiBridgeRecordingActions(recording::RecordingSessionMa
 {
 }
 
+bool AiBridgeRecordingActions::blocksProjectMutation() const
+{
+	if (QThread::currentThread() != m_owner) return true;
+	if (!m_manager) return false;
+	const auto status = m_manager->status();
+	return status.phase != recording::Phase::Disarmed || status.armed
+		|| !status.quiescent || !m_manager->quiescent();
+}
+
 AiBridgeProtocolResponse AiBridgeRecordingActions::execute(const AiBridgeProtocolRequest& request) const
 {
 	if (QThread::currentThread() != m_owner)
