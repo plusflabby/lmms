@@ -1,11 +1,16 @@
 #include <QtTest>
 #include <QCryptographicHash>
 #include <QDomDocument>
+#include <QFile>
+#include <QFileInfo>
+#include <QProcess>
 #include <QTemporaryDir>
 #include <QDir>
+#include <QtEndian>
 #include <QUuid>
 #include <array>
 #include <cmath>
+#include <cstring>
 #include <memory>
 #include <numeric>
 #include <vector>
@@ -245,6 +250,88 @@ private slots:
 #endif
 	}
 
+	void fullProjectRelocationRendersManagedVariantInFreshProcess()
+	{
+#ifndef Q_OS_WIN
+		QSKIP("Managed asset root authorization is Windows-only");
+#else
+		QTemporaryDir workspace;QVERIFY(workspace.isValid());
+		const auto managedRootPath=workspace.filePath(QStringLiteral("managed-assets"));
+		QVERIFY(QDir().mkpath(managedRootPath));
+		ConfigManager::inst()->setValue(QStringLiteral("vocal_assets"),QStringLiteral("managed_root"),
+			QDir::fromNativeSeparators(managedRootPath));
+		auto authorizedRoot=ManagedVocalAssetRoot::authorizeConfiguredRoot();QVERIFY(authorizedRoot.root);
+		authorizedRoot.root.reset();
+
+		const int sampleRate=int(Engine::audioEngine()->outputSampleRate());
+		QVERIFY(sampleRate==44100 || sampleRate==48000);
+		SampleTrack track(Engine::getSong());SampleClip source(&track);
+		source.setSampleBuffer(std::make_shared<const SampleBuffer>(
+			std::vector<SampleFrame>(8,SampleFrame(0.25f)),sampleRate));
+		source.changeLength(TimePos(8));
+		const auto variant=createVariant(QStringLiteral("embedded:fresh-process-source"),sampleRate);
+		QVERIFY(!variant.assetId.isEmpty());
+		auto preload=source.preloadManagedVocalVariant(variant);
+		if(preload==QStringLiteral("asset_loading"))QTRY_VERIFY_WITH_TIMEOUT(
+			(preload=source.preloadManagedVocalVariant(variant))==QStringLiteral("ok"),5000);
+		QCOMPARE(preload,QStringLiteral("ok"));
+		QCOMPARE(source.applyManagedVocalVariantAssociation(
+			association(variant,*Engine::getSong(),sampleRate,variant.frames)),QStringLiteral("ok"));
+
+		const auto originalProject=workspace.filePath(QStringLiteral("original.mmp"));
+		QVERIFY(Engine::getSong()->saveProjectFile(originalProject));
+		const auto movedProjectDirectory=workspace.filePath(QStringLiteral("moved-project"));
+		QVERIFY(QDir().mkpath(movedProjectDirectory));
+		const auto movedProject=QDir(movedProjectDirectory).filePath(QStringLiteral("project.mmp"));
+		QVERIFY(QFile::copy(originalProject,movedProject));
+		QDomDocument configuration;
+		auto configRoot=configuration.createElement(QStringLiteral("lmmsrc"));
+		configRoot.setAttribute(QStringLiteral("version"),QStringLiteral("1.3.0-alpha"));
+		configuration.appendChild(configRoot);
+		auto vocalAssets=configuration.createElement(QStringLiteral("vocal_assets"));
+		vocalAssets.setAttribute(QStringLiteral("managed_root"),QDir::fromNativeSeparators(managedRootPath));
+		configRoot.appendChild(vocalAssets);
+		const auto childConfig=workspace.filePath(QStringLiteral("fresh-process-lmmsrc.xml"));
+		QFile configFile(childConfig);QVERIFY(configFile.open(QIODevice::WriteOnly|QIODevice::NewOnly));
+		QCOMPARE(configFile.write(configuration.toByteArray()),qint64(configuration.toByteArray().size()));
+		configFile.close();
+
+		const auto executable=QFileInfo(QDir(QCoreApplication::applicationDirPath())
+			.filePath(QStringLiteral("../lmms.exe"))).canonicalFilePath();
+		QVERIFY2(!executable.isEmpty(),qPrintable(executable));
+		const auto renderedPath=workspace.filePath(QStringLiteral("fresh-process-render.wav"));
+		QProcess child;
+		child.setWorkingDirectory(QFileInfo(executable).absolutePath());
+		child.start(executable,{QStringLiteral("--config"),childConfig,QStringLiteral("render"),movedProject,
+			QStringLiteral("--output"),renderedPath,QStringLiteral("--format"),QStringLiteral("wav"),
+			QStringLiteral("--float"),QStringLiteral("--samplerate"),QStringLiteral("44100")});
+		QVERIFY2(child.waitForStarted(5000),qPrintable(child.errorString()));
+		const bool finished=child.waitForFinished(30000);
+		if(!finished){child.kill();child.waitForFinished(5000);}
+		QVERIFY2(finished,qPrintable(QString::fromLocal8Bit(child.readAllStandardError())));
+		QVERIFY2(child.exitStatus()==QProcess::NormalExit && child.exitCode()==0,
+			qPrintable(QString::fromLocal8Bit(child.readAllStandardError()+child.readAllStandardOutput())));
+		QFile rendered(renderedPath);QVERIFY(rendered.open(QIODevice::ReadOnly));
+		const auto wave=rendered.readAll();QVERIFY(wave.size()>44);QCOMPARE(wave.left(4),QByteArrayLiteral("RIFF"));
+		QCOMPARE(qFromLittleEndian<quint16>(reinterpret_cast<const uchar*>(wave.constData()+20)),quint16(3));
+		QCOMPARE(qFromLittleEndian<quint16>(reinterpret_cast<const uchar*>(wave.constData()+22)),quint16(2));
+		QCOMPARE(qFromLittleEndian<quint32>(reinterpret_cast<const uchar*>(wave.constData()+24)),quint32(sampleRate));
+		qint64 dataOffset=12;quint32 dataSize=0;
+		while(dataOffset+8<=wave.size())
+		{
+			const auto chunkSize=qFromLittleEndian<quint32>(reinterpret_cast<const uchar*>(wave.constData()+dataOffset+4));
+			if(wave.mid(dataOffset,4)==QByteArrayLiteral("data"))
+			{dataOffset+=8;dataSize=chunkSize;break;}
+			dataOffset+=8+chunkSize+(chunkSize&1);
+		}
+		QVERIFY(dataSize>=8 && dataOffset+dataSize<=wave.size());
+		quint32 firstBits=qFromLittleEndian<quint32>(reinterpret_cast<const uchar*>(wave.constData()+dataOffset));
+		float firstSample=0.0f;std::memcpy(&firstSample,&firstBits,sizeof(firstSample));
+		QVERIFY(std::isfinite(firstSample));
+		QVERIFY2(std::abs(firstSample-0.1f)<0.02f,qPrintable(QString::number(firstSample,'g',9)));
+#endif
+	}
+
 	void explicitRevertRestoresOriginalAfterMultipleVariantReplacements()
 	{
 #ifndef Q_OS_WIN
@@ -262,15 +349,26 @@ private slots:
 		const auto first=createVariant(QStringLiteral("embedded:source-a"),sampleRate);
 		const auto second=createVariant(QStringLiteral("embedded:source-b"),sampleRate);
 		QVERIFY(!first.assetId.isEmpty());QVERIFY(!second.assetId.isEmpty());
+		Engine::projectJournal()->clearJournal();Engine::projectJournal()->setJournalling(true);
 		auto attach=[&](const ManagedVocalVariantReference& variant){
 			const auto planned=association(variant,*Engine::getSong(),sampleRate,variant.frames);
-			auto code=source.applyManagedVocalVariantAssociation(planned);
-			if(code!=QStringLiteral("ok"))QTRY_VERIFY_WITH_TIMEOUT(
-				(code=source.applyManagedVocalVariantAssociation(planned))==QStringLiteral("ok"),5000);
-			QCOMPARE(code,QStringLiteral("ok"));
+			auto preload=source.preloadManagedVocalVariant(variant);
+			if(preload==QStringLiteral("asset_loading"))QTRY_VERIFY_WITH_TIMEOUT(
+				(preload=source.preloadManagedVocalVariant(variant))==QStringLiteral("ok"),5000);
+			QCOMPARE(preload,QStringLiteral("ok"));
+			QCOMPARE(source.applyManagedVocalVariantAssociation(planned),QStringLiteral("ok"));
 		};
 		attach(first);attach(second);
 		QVERIFY(source.managedVocalVariantAssociation()->previousVariant.has_value());
+		QCOMPARE(source.managedVocalVariantAssociation()->active.assetId,second.assetId);
+		QVERIFY(Engine::projectJournal()->canUndo());
+		Engine::projectJournal()->undo();
+		QVERIFY(source.hasManagedVocalVariant());
+		QCOMPARE(source.managedVocalVariantAssociation()->active.assetId,first.assetId);
+		QVERIFY(!source.managedVocalVariantAssociation()->previousVariant.has_value());
+		QVERIFY(Engine::projectJournal()->canRedo());
+		Engine::projectJournal()->redo();
+		QVERIFY(source.hasManagedVocalVariant());
 		QCOMPARE(source.managedVocalVariantAssociation()->active.assetId,second.assetId);
 		QCOMPARE(source.revertManagedVocalVariant(),QStringLiteral("ok"));
 		QVERIFY(!source.hasManagedVocalVariant());
@@ -278,6 +376,7 @@ private slots:
 		QVERIFY(source.getAutoResize());
 		QCOMPARE(source.sample().sampleSize(),size_t(8));
 		QCOMPARE(source.sample().data()[0].left(),0.25f);
+		Engine::projectJournal()->setJournalling(false);Engine::projectJournal()->clearJournal();
 #endif
 	}
 

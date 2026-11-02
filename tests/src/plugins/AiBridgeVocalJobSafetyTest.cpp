@@ -273,7 +273,24 @@ private slots:
 		const auto* copied=dynamic_cast<SampleClip*>(ids.resolveClip(comparisonClipId));QVERIFY(copied);
 		QCOMPARE(copied->managedVocalVariantAssociation()->active.assetId,variantId);
 		const auto replaceParameters=applyParameters(QStringLiteral("replace"),false);QVERIFY(!replaceParameters.isEmpty());
+		struct JournalStateGuard
+		{
+			ProjectJournal& journal;bool wasJournalling;
+			~JournalStateGuard(){journal.clearJournal();journal.setJournalling(wasJournalling);}
+		};
+		JournalStateGuard journalGuard{*Engine::projectJournal(),Engine::projectJournal()->isJournalling()};
+		Engine::projectJournal()->clearJournal();Engine::projectJournal()->setJournalling(true);
 		const auto replaced=sendApply(replaceParameters);QCOMPARE(replaced.code,QStringLiteral("ok"));
+		QVERIFY(Engine::projectJournal()->canUndo());
+		Engine::projectJournal()->undo();
+		QVERIFY(!sourceClip->hasManagedVocalVariant());
+		QCOMPARE(sourceClip->length().getTicks(),originalClip.value->state.length);
+		QCOMPARE(sourceClip->sampleFile(),originalPath);
+		QVERIFY(Engine::projectJournal()->canRedo());
+		Engine::projectJournal()->redo();
+		QVERIFY(sourceClip->hasManagedVocalVariant());
+		QCOMPARE(sourceClip->managedVocalVariantAssociation()->active.assetId,variantId);
+		QTRY_COMPARE_WITH_TIMEOUT(sourceClip->managedVocalVariantStatus(),QStringLiteral("ok"),5000);
 		QVERIFY(sourceClip->managedVocalVariantAssociation());
 		QCOMPARE(sourceClip->managedVocalVariantAssociation()->active.assetId,variantId);
 		const auto revertParameters=applyParameters(QStringLiteral("revert"),false);QVERIFY(!revertParameters.isEmpty());
@@ -313,6 +330,40 @@ private slots:
 		QTRY_VERIFY(cancelJobs.job(cancelStart.jobId).value->state==VocalJobState::Cancelled);
 		QCOMPARE(cancelJobs.chargedWorkerBytes(),quint64(0));QCOMPARE(cancelJobs.chargedStagedBytes(),quint64(0));
 		QCOMPARE(cancelJobs.release(cancelStart.jobId).code,QStringLiteral("ok"));
+
+		std::atomic_bool admissionCancellationObserved=false;
+		VocalRenderRunner admissionRenderer=[&](const VocalEditRenderInput&,const std::atomic_bool& cancelled,const VocalPhaseCallback&){
+			for(int wait=0;wait<1000 && !cancelled.load();++wait)QThread::msleep(1);
+			admissionCancellationObserved=cancelled.load();
+			return VocalVariantRenderResult{QStringLiteral("cancelled"),{},{},0};
+		};
+		auto admissionOwner=std::make_unique<AiBridgeVocalJobs>(nullptr,runVocalAnalysis,VocalThreadStarter{},admissionRenderer);
+		connect(admissionOwner.get(),&AiBridgeVocalJobs::jobsChanged,this,[&]{admissionOwner.reset();});
+		const auto invalidatedAdmission=admissionOwner->startRender(*cancelInput.value);
+		QVERIFY(!admissionOwner);QCOMPARE(invalidatedAdmission.code,QStringLiteral("job_invalidated"));
+		QVERIFY(invalidatedAdmission.jobId.isEmpty());QVERIFY(admissionCancellationObserved.load());
+
+		struct CompletionGate {std::mutex mutex;std::condition_variable condition;bool release=false;std::atomic_bool entered=false;};
+		CompletionGate completionGate;
+		VocalRenderRunner completionRenderer=[&](const VocalEditRenderInput&,const std::atomic_bool&,const VocalPhaseCallback& phase){
+			completionGate.entered=true;if(phase)phase(VocalJobPhase::Rendering);
+			std::unique_lock lock(completionGate.mutex);
+			completionGate.condition.wait(lock,[&]{return completionGate.release;});
+			return VocalVariantRenderResult{QStringLiteral("cancelled"),{},{},0};
+		};
+		auto completionOwner=std::make_unique<AiBridgeVocalJobs>(nullptr,runVocalAnalysis,VocalThreadStarter{},completionRenderer);
+		const auto completionStart=completionOwner->startRender(*cancelInput.value);QCOMPARE(completionStart.code,QStringLiteral("ok"));
+		QTRY_VERIFY(completionGate.entered.load());
+		bool completionDestroyedOwner=false;
+		connect(completionOwner.get(),&AiBridgeVocalJobs::jobsChanged,this,[&]{
+			if(!completionOwner)return;
+			const auto state=completionOwner->job(completionStart.jobId);
+			if(state.value && state.value->state==VocalJobState::Cancelled)
+			{completionOwner.reset();completionDestroyedOwner=true;}
+		});
+		{std::lock_guard lock(completionGate.mutex);completionGate.release=true;}
+		completionGate.condition.notify_all();
+		QTRY_VERIFY(completionDestroyedOwner);QVERIFY(!completionOwner);
 	}
 	void shutdownDuringAdmissionCannotReportSuccess()
 	{
