@@ -20,8 +20,11 @@ class ManagedVocalAssetTypesTest : public QObject
 	{
 		ManagedVocalManifest value;
 		value.assetId = QUuid::createUuid().toString(QUuid::WithoutBraces);
+		value.projectId = QStringLiteral("11111111-1111-4111-8111-111111111111");
 		value.assetRootId = digest('e');
 		value.media = {48000, 48000, 1, digest('a')};
+		value.media.rms = 0.25;
+		value.media.rmsKnown = true;
 		value.recipeHash = digest('b');
 		value.rendererId = QStringLiteral("native-float-renderer");
 		value.rendererVersion = QStringLiteral("1");
@@ -81,6 +84,43 @@ private slots:
 		value = manifest();
 		value.sources.front().sourceFrames = {48000, 0};
 		QVERIFY(encodeManagedVocalManifest(value).isEmpty());
+	}
+
+	void requiresAndPersistsStableProjectIdentity()
+	{
+		auto value = manifest();
+		QVERIFY(!value.projectId.isEmpty());
+		QVERIFY(!encodeManagedVocalManifest(value).isEmpty());
+		auto missingProject = value;
+		missingProject.projectId.clear();
+		QCOMPARE(validateManagedVocalManifest(missingProject), QStringLiteral("invalid_manifest"));
+		const auto encoded = encodeManagedVocalManifest(value);
+		const auto object = QJsonDocument::fromJson(encoded).object();
+		QCOMPARE(object.value(QStringLiteral("project_id")).toString(), value.projectId);
+		QVERIFY(value.media.rmsKnown);
+		auto missingRms = value;
+		missingRms.media.rmsKnown = false;
+		QVERIFY(encodeManagedVocalManifest(missingRms).isEmpty());
+		const auto decoded = decodeManagedVocalManifest(encoded);
+		QCOMPARE(decoded.value->media.rms, value.media.rms);
+	}
+
+	void readsLegacyVersionOneManifestWithoutProjectIdentity()
+	{
+		auto legacy = manifest();
+		legacy.schemaVersion = 1;
+		legacy.projectId.clear();
+		legacy.media.rms = 0.0;
+		legacy.media.rmsKnown = false;
+		const auto encoded = encodeManagedVocalManifest(legacy);
+		QVERIFY(!encoded.isEmpty());
+		const auto object = QJsonDocument::fromJson(encoded).object();
+		QVERIFY(!object.contains(QStringLiteral("project_id")));
+		const auto decoded = decodeManagedVocalManifest(encoded);
+		QCOMPARE(decoded.code, QStringLiteral("ok"));
+		QVERIFY(decoded.value);
+		QCOMPARE(decoded.value->schemaVersion, quint32(1));
+		QVERIFY(decoded.value->projectId.isEmpty());
 	}
 
 	void roundTripsNativeAssociationWithoutPersistingSourcePaths()

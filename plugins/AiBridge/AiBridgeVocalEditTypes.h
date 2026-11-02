@@ -54,6 +54,12 @@ struct VocalFade
 	VocalFadeCurve curve = VocalFadeCurve::LinearAmplitude;
 };
 
+enum class VocalCrossfadeLaw : quint8
+{
+	LinearAmplitude = 0,
+	EqualPower = 1
+};
+
 // Each anchor names a frame in the assembled render-input space and either an
 // output frame or a musical tick. Tick conversion is performed later against
 // the captured constant-tempo world and its hash.
@@ -62,21 +68,20 @@ struct VocalTimingAnchor
 	qint64 renderInputFrame = 0;
 	std::optional<qint64> outputFrame;
 	std::optional<qint64> targetTick;
+	qint64 preAnchorCrossfadeFrames = 0;
+	VocalCrossfadeLaw crossfadeLaw = VocalCrossfadeLaw::LinearAmplitude;
 };
 
 struct VocalTimingMap
 {
 	std::vector<VocalTimingAnchor> anchors;
 	std::vector<VocalEditFrameRange> protectedRenderInputFrames;
+	double strength = 1.0;
+	double minimumLocalStretchRatio = 0.80;
+	double maximumLocalStretchRatio = 1.25;
 };
 
 using VocalEditOperation = std::variant<VocalGainEnvelope, VocalFade, VocalTimingMap>;
-
-enum class VocalCrossfadeLaw : quint8
-{
-	LinearAmplitude = 0,
-	EqualPower = 1
-};
 
 struct VocalCompSegment
 {

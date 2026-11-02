@@ -345,7 +345,8 @@ ManagedVocalAssetPublishResult ManagedVocalAssetStore::publish(
 	if (verified.code != QStringLiteral("ok") || verified.info.frames != state.expected
 		|| verified.info.sampleRate != state.rate || verified.info.channels != state.channels
 		|| verified.info.pcmSha256 != pcmSha256 || verified.info.peak != state.peak
-		|| verified.info.overrange != state.overrange)
+		|| verified.info.overrange != state.overrange
+		|| (manifest.media.rmsKnown && std::abs(verified.info.rms - manifest.media.rms) > 1e-12))
 	{
 		return {QStringLiteral("asset_integrity_failed"), {}};
 	}
@@ -483,7 +484,8 @@ ManagedVocalAssetOpenResult ManagedVocalAssetStore::readVariant(
 	const auto readResult = ManagedVocalWaveReader::read(audio, limits, retainSamples);
 	if (readResult.code != QStringLiteral("ok") || readResult.info.frames != reference.frames
 		|| readResult.info.sampleRate != reference.sampleRate || readResult.info.channels != reference.channels
-		|| readResult.info.pcmSha256 != reference.mediaSha256)
+		|| readResult.info.pcmSha256 != reference.mediaSha256
+		|| (manifest.media.rmsKnown && std::abs(readResult.info.rms - manifest.media.rms) > 1e-12))
 	{
 		return failedOpen(readResult.code == QStringLiteral("resource_limit")
 			? QStringLiteral("resource_limit") : QStringLiteral("asset_integrity_failed"));
@@ -501,6 +503,7 @@ ManagedVocalAssetInspectResult ManagedVocalAssetStore::inspect(
 	}
 	ManagedVocalAssetInspectResult summary;
 	summary.code = QStringLiteral("ok");
+	summary.projectId = result.manifest->projectId;
 	summary.assetId = reference.assetId;
 	summary.mediaSha256 = reference.mediaSha256;
 	summary.manifestSha256 = reference.manifestSha256;
@@ -512,7 +515,38 @@ ManagedVocalAssetInspectResult ManagedVocalAssetStore::inspect(
 	summary.rendererId = result.manifest->rendererId;
 	summary.rendererVersion = result.manifest->rendererVersion;
 	summary.sourceCount = result.manifest->sources.size();
+	summary.reference = reference;
+	summary.sources = result.manifest->sources;
 	return summary;
+}
+
+ManagedVocalAssetInspectResult ManagedVocalAssetStore::inspectById(
+	const QString& assetId,
+	const QString& expectedProjectId) const
+{
+	if (!m_root) return {QStringLiteral("asset_root_not_configured")};
+	if (!m_root->isAuthorized()) return {QStringLiteral("asset_root_revoked")};
+	const auto parsedId = QUuid(assetId);
+	if (parsedId.isNull() || parsedId.toString(QUuid::WithoutBraces) != assetId)
+		return {QStringLiteral("invalid_parameter")};
+	QByteArray manifestBytes;
+	std::shared_ptr<managed_vocal_detail::FileState> manifestFile;
+	const auto openCode = managed_vocal_detail::openReadFile(m_root->m_state,
+		assetStem(assetId) + QStringLiteral(".json"), manifestFile);
+	if (openCode != QStringLiteral("ok"))
+		return {openCode == QStringLiteral("asset_missing") ? openCode : QStringLiteral("asset_integrity_failed")};
+	if (readBoundedFile(manifestFile, DefaultMaximumManifestBytes, manifestBytes) != QStringLiteral("ok"))
+		return {QStringLiteral("asset_integrity_failed")};
+	const auto parsedManifest = decodeManagedVocalManifest(manifestBytes);
+	if (parsedManifest.code != QStringLiteral("ok") || !parsedManifest.value
+		|| parsedManifest.value->assetId != assetId
+		|| parsedManifest.value->assetRootId != m_root->rootId())
+		return {QStringLiteral("asset_integrity_failed")};
+	if (!expectedProjectId.isEmpty() && parsedManifest.value->projectId != expectedProjectId)
+		return {QStringLiteral("asset_project_mismatch")};
+	const auto reference = makeManagedVocalVariantReference(*parsedManifest.value, manifestBytes);
+	if (!reference.value) return {QStringLiteral("asset_integrity_failed")};
+	return inspect(*reference.value);
 }
 
 ManagedVocalAssetOpenResult ManagedVocalAssetStore::openVerified(

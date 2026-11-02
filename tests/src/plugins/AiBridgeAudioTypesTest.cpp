@@ -35,6 +35,20 @@ private slots:
 	{
 		auto s=state(); QVERIFY(lmms::audioStateHash({s,s}).isEmpty()); s.id.clear(); QVERIFY(lmms::audioStateHash({s}).isEmpty());
 	}
+	void managedVariantIdentityParticipatesWithoutChangingOrdinaryClipHashes()
+	{
+		const auto ordinary=state();const auto originalHash=lmms::audioStateHash({ordinary});
+		auto active=ordinary;
+		active.managedVariantAssetId="00000000-0000-4000-8000-000000000001";
+		active.managedVariantStateDigest=QByteArray(32,'a');
+		QVERIFY(!lmms::audioStateHash({active}).isEmpty());
+		QVERIFY(lmms::audioStateHash({active})!=originalHash);
+		active.managedVariantStateDigest.clear();
+		QVERIFY(lmms::audioStateHash({active}).isEmpty());
+		active.managedVariantAssetId.clear();
+		active.managedVariantStateDigest=QByteArray(32,'b');
+		QVERIFY(lmms::audioStateHash({active})!=originalHash);
+	}
 };
 QTEST_GUILESS_MAIN(AiBridgeAudioTypesTest)
 #include "AiBridgeAudioTypesTest.moc"

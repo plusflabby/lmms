@@ -1,4 +1,5 @@
 #include "AiBridgeVocalTypes.h"
+#include "SampleBuffer.h"
 #include <QCryptographicHash>
 #include <QDataStream>
 #include <QIODevice>
@@ -94,7 +95,7 @@ VocalBudget estimateVocalBudget(const VocalInputSnapshot& s)
 	auto fail=[&](const char* code){return VocalBudget{0,0,0,code};};
 	if(!s.generation || s.sources.size()!=s.request.selections.size())return fail("invalid_parameter");
 	// Fixed bookkeeping allowance includes job/thread/queued completion descriptors.
-	quint64 bytes=65536,numerator=0,denominator=1;
+	quint64 bytes=65536,retainedSourceBytes=0,numerator=0,denominator=1;
 	for(size_t i=0;i<s.sources.size();++i)
 	{
 		const auto& t=s.sources[i];const auto& sel=s.request.selections[i];const auto& info=t.expectedInfo;
@@ -104,7 +105,22 @@ VocalBudget estimateVocalBudget(const VocalInputSnapshot& s)
 			|| t.policyRevision!=s.policyRevision)return fail("invalid_parameter");
 		if(!t.limits.maxFileBytes || !t.limits.maxDecodedBytes)return fail("audio_resource_limits_not_configured");
 		if(info.fileBytes>t.limits.maxFileBytes || info.decodedBytes>t.limits.maxDecodedBytes)return fail("source_too_large");
-		if(t.roots.isEmpty())return fail("import_root_not_configured");
+		const bool recordedSource = bool(t.authorizedSourceBuffer) || !t.recordedTakeProjectId.isEmpty()
+			|| !t.recordedTakeId.isEmpty();
+		if(t.recordedTakeProjectId.isEmpty()!=t.recordedTakeId.isEmpty())return fail("invalid_parameter");
+		if(recordedSource)
+		{
+			if(!t.authorizedSourceBuffer || t.recordedTakeProjectId.isEmpty() || !t.roots.isEmpty()
+				|| t.authorizedSourceBufferRevision!=t.authorizedSourceBuffer->contentRevision()
+				|| t.authorizedSourceBuffer->sampleRate()!=quint32(info.sampleRate)
+				|| t.authorizedSourceBuffer->size()!=size_t(info.frames)
+				|| t.reference!=QStringLiteral("recorded_take:")+t.recordedTakeProjectId+QLatin1Char('/')+t.recordedTakeId)
+				return fail("invalid_parameter");
+			quint64 retainedBytes=0;
+			if(!multiply(info.frames,sizeof(SampleFrame),retainedBytes) || !add(retainedSourceBytes,retainedBytes))
+				return fail("resource_limit");
+		}
+		else if(t.roots.isEmpty())return fail("import_root_not_configured");
 		if(t.roots.size()>VocalLimits::rootCount || t.reference.isEmpty() || t.reference.size()>VocalLimits::pathChars
 			|| !bounded(t.sourceRevision,VocalLimits::idBytes) || !bounded(t.sourceStatus,64))return fail("resource_limit");
 		quint64 rootChars=0;
@@ -121,7 +137,9 @@ VocalBudget estimateVocalBudget(const VocalInputSnapshot& s)
 		if(records>VocalLimits::selectionRecords || !add(result.recordCapacity,records)
 			|| result.recordCapacity>VocalLimits::jobRecords)return fail("resource_limit");
 		// Reserve copied strings/root tickets, metadata and full vector capacities before any worker allocation.
-		quint64 chars=rootChars+quint64(t.reference.size())+quint64(t.geometry.nativeName.size())+quint64(t.geometry.color.size());
+		quint64 chars=rootChars+quint64(t.reference.size())+quint64(t.geometry.nativeName.size())
+			+quint64(t.geometry.color.size())+quint64(t.recordedTakeProjectId.size())
+			+quint64(t.recordedTakeId.size());
 		if(t.geometry.nativeName.size()>4096 || t.geometry.color.size()>64)return fail("resource_limit");
 		if(!add(bytes,chars*2+8192+sizeof(VocalSourceTicket)+sizeof(VocalSelectionSummary)))return fail("resource_limit");
 	}
@@ -130,7 +148,7 @@ VocalBudget estimateVocalBudget(const VocalInputSnapshot& s)
 		|| bytes>VocalLimits::sessionBytes)return fail("resource_limit");
 	result.sessionBytes=bytes;
 	// Allow registry + worker + queued-result copies, fixed input/output conversion scratch and hash context.
-	if(!multiply(bytes,3,result.jobBytes) || !add(result.jobBytes,65536)
+	if(!multiply(bytes,3,result.jobBytes) || !add(result.jobBytes,retainedSourceBytes) || !add(result.jobBytes,65536)
 		|| result.jobBytes>VocalLimits::jobBytes)return fail("resource_limit");
 	result.code="ok";return result;
 }
@@ -153,6 +171,10 @@ QString vocalInputHash(const VocalInputSnapshot& s)
 			<<t.geometry.positionTicks<<t.geometry.lengthTicks<<t.geometry.offsetTicks
 			<<t.geometry.autoResize<<t.geometry.reversed<<t.geometry.solo<<t.geometry.nativeName<<t.geometry.color
 			<<canonical(t.geometry.frequency)<<canonical(t.geometry.amplification);
+		// Keep legacy imported-source hashes byte-for-byte stable. A recorded take is
+		// bound to its immutable authorized decode and opaque library identity.
+		if(t.authorizedSourceBuffer)
+			out<<t.recordedTakeProjectId<<t.recordedTakeId<<t.authorizedSourceBufferRevision;
 	}
 	return finishHash(data);
 }

@@ -76,6 +76,7 @@ public:
 	const QString& sourceLoadError() const { return m_sourceLoadError; }
 	bool usesBoundedSampleSource() const { return m_boundedSampleSource; }
 	bool isRecordedTake() const { return m_recordedTakeMetadataPresent; }
+	bool recordedTakeSourceCurrent() const;
 	const std::optional<recording::RecordedTakeReference>& recordedTakeReference() const { return m_recordedTakeReference; }
 	bool hasAudioSourceWindow() const { return m_audioWindowStorage.kind != AudioWindowStorageKind::Legacy; }
 	const AudioWindowStorage& audioWindowStorage() const { return m_audioWindowStorage; }
@@ -87,11 +88,14 @@ public:
 		return m_managedVocalAssociation.has_value() || !m_unavailableManagedVocalVariants.isNull();
 	}
 	QString managedVocalVariantStatus() const { return m_managedVocalVariantStatus; }
+	QString managedVocalVariantAssetId() const;
+	QByteArray managedVocalVariantStateDigest() const;
 	const std::optional<ManagedVocalVariantAssociation>& managedVocalVariantAssociation() const
 	{
 		return m_managedVocalAssociation;
 	}
 	std::shared_ptr<const ManagedVocalPlaybackView> managedVocalPlaybackView() const;
+	QString preloadManagedVocalVariant(const ManagedVocalVariantReference& reference);
 	QString applyManagedVocalVariantAssociation(const ManagedVocalVariantAssociation& association);
 	QString revertManagedVocalVariant();
 	QString adoptAuthorizedAudio(std::unique_ptr<AudioImportPolicy::Prepared> audio);

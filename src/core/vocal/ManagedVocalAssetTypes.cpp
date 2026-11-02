@@ -157,18 +157,24 @@ QJsonObject manifestToJson(const ManagedVocalManifest& manifest)
 	{
 		sources.push_back(sourceToJson(source));
 	}
-	return {
+	QJsonObject media{
+		{"frames", QString::number(manifest.media.frames)},
+		{"sample_rate", manifest.media.sampleRate},
+		{"channels", manifest.media.channels},
+		{"pcm_sha256", manifest.media.pcmSha256},
+		{"peak", manifest.media.peak},
+		{"overrange", manifest.media.overrange}
+	};
+	if (manifest.schemaVersion >= 2)
+	{
+		media.insert(QStringLiteral("rms"), manifest.media.rmsKnown
+			? QJsonValue(manifest.media.rms) : QJsonValue(QJsonValue::Null));
+	}
+	QJsonObject result{
 		{"schema_version", int(manifest.schemaVersion)},
 		{"asset_id", manifest.assetId},
 		{"asset_root_id", manifest.assetRootId},
-		{"media", QJsonObject{
-			{"frames", QString::number(manifest.media.frames)},
-			{"sample_rate", manifest.media.sampleRate},
-			{"channels", manifest.media.channels},
-			{"pcm_sha256", manifest.media.pcmSha256},
-			{"peak", manifest.media.peak},
-			{"overrange", manifest.media.overrange}
-		}},
+		{"media", media},
 		{"recipe_hash", manifest.recipeHash},
 		{"renderer_id", manifest.rendererId},
 		{"renderer_version", manifest.rendererVersion},
@@ -177,6 +183,11 @@ QJsonObject manifestToJson(const ManagedVocalManifest& manifest)
 		{"realized_frame_maps", manifest.realizedFrameMaps},
 		{"sources", sources}
 	};
+	if (manifest.schemaVersion >= 2)
+	{
+		result.insert(QStringLiteral("project_id"), manifest.projectId);
+	}
+	return result;
 }
 
 bool readSource(const QJsonObject& object, ManagedVocalSourceProvenance& source)
@@ -381,7 +392,14 @@ bool readPlaybackAttributes(const QDomElement& element, ManagedVocalPlaybackCont
 
 QString validateManagedVocalManifest(const ManagedVocalManifest& manifest)
 {
-	if (manifest.schemaVersion != 1 || !uuid(manifest.assetId) || !digest(manifest.assetRootId)
+	if ((manifest.schemaVersion != 1 && manifest.schemaVersion != 2)
+		|| !uuid(manifest.assetId)
+		|| (manifest.schemaVersion == 1 && !manifest.projectId.isEmpty())
+		|| (manifest.schemaVersion == 2 && !uuid(manifest.projectId))
+		|| (manifest.schemaVersion == 1 && manifest.media.rmsKnown)
+		|| (manifest.schemaVersion == 2 && (!manifest.media.rmsKnown
+			|| !std::isfinite(manifest.media.rms) || manifest.media.rms < 0.0))
+		|| !digest(manifest.assetRootId)
 		|| !digest(manifest.media.pcmSha256)
 		|| !digest(manifest.recipeHash) || !identifier(manifest.rendererId, 128)
 		|| !identifier(manifest.rendererVersion, 64) || !std::isfinite(manifest.media.peak)
@@ -451,15 +469,26 @@ ManagedVocalManifestResult decodeManagedVocalManifest(const QByteArray& bytes)
 		return {QStringLiteral("invalid_manifest"), {}};
 	}
 	const auto object = document.object();
-	if (!exactKeys(object, {"schema_version", "asset_id", "asset_root_id", "media", "recipe_hash", "renderer_id",
-			"renderer_version", "renderer_options", "recipe", "realized_frame_maps", "sources"}))
+	int schemaVersion = 0;
+	if (!integer(object.value(QStringLiteral("schema_version")), schemaVersion)
+		|| (schemaVersion != 1 && schemaVersion != 2))
+	{
+		return {QStringLiteral("invalid_manifest"), {}};
+	}
+	const QStringList expectedKeys{
+		QStringLiteral("schema_version"), QStringLiteral("asset_id"), QStringLiteral("asset_root_id"),
+		QStringLiteral("media"), QStringLiteral("recipe_hash"), QStringLiteral("renderer_id"),
+		QStringLiteral("renderer_version"), QStringLiteral("renderer_options"), QStringLiteral("recipe"),
+		QStringLiteral("realized_frame_maps"), QStringLiteral("sources")};
+	auto keys = expectedKeys;
+	if (schemaVersion == 2) keys.push_back(QStringLiteral("project_id"));
+	if (!exactKeys(object, keys))
 	{
 		return {QStringLiteral("invalid_manifest"), {}};
 	}
 	ManagedVocalManifest manifest;
-	int schemaVersion = 0;
-	if (!integer(object["schema_version"], schemaVersion) || schemaVersion < 0
-		|| !object["asset_id"].isString() || !object["asset_root_id"].isString()
+	if (!object["asset_id"].isString() || !object["asset_root_id"].isString()
+		|| (schemaVersion == 2 && !object["project_id"].isString())
 		|| !object["media"].isObject()
 		|| !object["recipe_hash"].isString() || !object["renderer_id"].isString()
 		|| !object["renderer_version"].isString() || !object["renderer_options"].isObject()
@@ -470,6 +499,7 @@ ManagedVocalManifestResult decodeManagedVocalManifest(const QByteArray& bytes)
 	}
 	manifest.schemaVersion = quint32(schemaVersion);
 	manifest.assetId = object["asset_id"].toString();
+	manifest.projectId = schemaVersion == 2 ? object["project_id"].toString() : QString{};
 	manifest.assetRootId = object["asset_root_id"].toString();
 	manifest.recipeHash = object["recipe_hash"].toString();
 	manifest.rendererId = object["renderer_id"].toString();
@@ -479,9 +509,14 @@ ManagedVocalManifestResult decodeManagedVocalManifest(const QByteArray& bytes)
 	manifest.realizedFrameMaps = object["realized_frame_maps"].toArray();
 
 	const auto media = object["media"].toObject();
-	if (!exactKeys(media, {"frames", "sample_rate", "channels", "pcm_sha256", "peak", "overrange"})
+	QStringList expectedMediaKeys{QStringLiteral("frames"), QStringLiteral("sample_rate"),
+		QStringLiteral("channels"), QStringLiteral("pcm_sha256"), QStringLiteral("peak"),
+		QStringLiteral("overrange")};
+	if (schemaVersion == 2) expectedMediaKeys.push_back(QStringLiteral("rms"));
+	if (!exactKeys(media, expectedMediaKeys)
 		|| !media["frames"].isString() || !media["pcm_sha256"].isString()
 		|| !media["peak"].isDouble() || !media["overrange"].isBool()
+		|| (schemaVersion == 2 && !media["rms"].isDouble())
 		|| !parseUnsigned(media["frames"].toString(), manifest.media.frames)
 		|| !integer(media["sample_rate"], manifest.media.sampleRate)
 		|| !integer(media["channels"], manifest.media.channels))
@@ -491,6 +526,11 @@ ManagedVocalManifestResult decodeManagedVocalManifest(const QByteArray& bytes)
 	manifest.media.pcmSha256 = media["pcm_sha256"].toString();
 	manifest.media.peak = media["peak"].toDouble();
 	manifest.media.overrange = media["overrange"].toBool();
+	if (schemaVersion == 2)
+	{
+		manifest.media.rms = media["rms"].toDouble();
+		manifest.media.rmsKnown = true;
+	}
 
 	const auto sourceValues = object["sources"].toArray();
 	if (sourceValues.size() > 8)

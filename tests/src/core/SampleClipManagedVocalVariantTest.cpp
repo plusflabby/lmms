@@ -5,6 +5,7 @@
 #include <QDir>
 #include <QUuid>
 #include <array>
+#include <cmath>
 #include <memory>
 #include <numeric>
 #include <vector>
@@ -89,8 +90,13 @@ class SampleClipManagedVocalVariantTest : public QObject
 		if (created.writer->appendFrames(output) != QStringLiteral("ok")) return {};
 
 		ManagedVocalManifest manifest;
+		manifest.projectId = QStringLiteral("11111111-1111-4111-8111-111111111111");
 		manifest.assetRootId = approval.root->rootId();
 		manifest.media = {3, rate, 2, digest('0'), 0.0, false};
+		long double sumSquares = 0.0L;
+		for (const auto sample : output) sumSquares += static_cast<long double>(sample) * sample;
+		manifest.media.rms = std::sqrt(double(sumSquares / output.size()));
+		manifest.media.rmsKnown = true;
 		manifest.recipeHash = digest('a');
 		manifest.rendererId = QStringLiteral("native-float-renderer");
 		manifest.rendererVersion = QStringLiteral("1");
@@ -236,6 +242,42 @@ private slots:
 		QVERIFY(!restored.hasManagedVocalVariant());
 		QCOMPARE(restored.length().getTicks(), qint64(8));
 		QVERIFY(restored.getAutoResize());
+#endif
+	}
+
+	void explicitRevertRestoresOriginalAfterMultipleVariantReplacements()
+	{
+#ifndef Q_OS_WIN
+		QSKIP("Managed asset root authorization is Windows-only");
+#else
+		QTemporaryDir rootDirectory;
+		QVERIFY(rootDirectory.isValid());
+		ConfigManager::inst()->setValue(QStringLiteral("vocal_assets"),QStringLiteral("managed_root"),
+			QDir::fromNativeSeparators(rootDirectory.path()));
+		SampleTrack sourceTrack(Engine::getSong());SampleClip source(&sourceTrack);
+		const auto sampleRate=int(Engine::audioEngine()->outputSampleRate());
+		source.setSampleBuffer(std::make_shared<const SampleBuffer>(
+			std::vector<SampleFrame>(8,SampleFrame(0.25f)),sampleRate));
+		source.changeLength(TimePos(8));source.setAutoResize(true);
+		const auto first=createVariant(QStringLiteral("embedded:source-a"),sampleRate);
+		const auto second=createVariant(QStringLiteral("embedded:source-b"),sampleRate);
+		QVERIFY(!first.assetId.isEmpty());QVERIFY(!second.assetId.isEmpty());
+		auto attach=[&](const ManagedVocalVariantReference& variant){
+			const auto planned=association(variant,*Engine::getSong(),sampleRate,variant.frames);
+			auto code=source.applyManagedVocalVariantAssociation(planned);
+			if(code!=QStringLiteral("ok"))QTRY_VERIFY_WITH_TIMEOUT(
+				(code=source.applyManagedVocalVariantAssociation(planned))==QStringLiteral("ok"),5000);
+			QCOMPARE(code,QStringLiteral("ok"));
+		};
+		attach(first);attach(second);
+		QVERIFY(source.managedVocalVariantAssociation()->previousVariant.has_value());
+		QCOMPARE(source.managedVocalVariantAssociation()->active.assetId,second.assetId);
+		QCOMPARE(source.revertManagedVocalVariant(),QStringLiteral("ok"));
+		QVERIFY(!source.hasManagedVocalVariant());
+		QCOMPARE(source.length().getTicks(),qint64(8));
+		QVERIFY(source.getAutoResize());
+		QCOMPARE(source.sample().sampleSize(),size_t(8));
+		QCOMPARE(source.sample().data()[0].left(),0.25f);
 #endif
 	}
 
@@ -413,6 +455,8 @@ private slots:
 		restored.loadSettings(settings);
 		QVERIFY(restored.hasManagedVocalVariant());
 		QCOMPARE(restored.managedVocalVariantStatus(), QStringLiteral("invalid_managed_variant"));
+		QVERIFY(restored.managedVocalVariantAssetId().isEmpty());
+		QCOMPARE(restored.managedVocalVariantStateDigest().size(),32);
 		QVERIFY(!restored.managedVocalPlaybackView());
 		QVERIFY(!restoredTrack.play(TimePos(0), Engine::audioEngine()->framesPerPeriod(), 0, -1));
 

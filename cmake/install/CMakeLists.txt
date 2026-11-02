@@ -50,3 +50,11 @@ if(LMMS_HAVE_STK AND (LMMS_BUILD_WIN32 OR LMMS_BUILD_APPLE))
 	endif()
 endif()
 
+# Ship licenses for the header-only Signalsmith backend with binary installers.
+install(FILES "${CMAKE_SOURCE_DIR}/src/3rdparty/signalsmith/stretch/LICENSE.txt"
+	DESTINATION "${DATA_DIR}/licenses/signalsmith" RENAME "SignalsmithStretch-LICENSE.txt")
+install(FILES "${CMAKE_SOURCE_DIR}/src/3rdparty/signalsmith/linear/LICENSE.txt"
+	DESTINATION "${DATA_DIR}/licenses/signalsmith" RENAME "SignalsmithLinear-LICENSE.txt")
+install(FILES "${CMAKE_SOURCE_DIR}/src/3rdparty/signalsmith/README.md"
+	DESTINATION "${DATA_DIR}/licenses/signalsmith" RENAME "README.txt")
+

@@ -23,6 +23,7 @@ struct ManagedVocalWaveInfo
 	int channels = 0;
 	QString pcmSha256;
 	double peak = 0.0;
+	double rms = 0.0;
 	bool overrange = false;
 };
 

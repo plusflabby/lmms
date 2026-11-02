@@ -2,6 +2,7 @@
 #include <QTemporaryDir>
 #include <QDir>
 #include <array>
+#include <cmath>
 #include "ConfigManager.h"
 #include "ManagedVocalAssetRoot.h"
 #include "ManagedVocalAssetStore.h"
@@ -26,8 +27,13 @@ class ManagedVocalPlaybackCacheTest : public QObject
 		const std::array<float, 6> samples{0.1f, -0.1f, 0.2f, -0.2f, 0.3f, -0.3f};
 		if (created.writer->appendFrames(samples) != QStringLiteral("ok")) return {};
 		ManagedVocalManifest manifest;
+		manifest.projectId = QStringLiteral("11111111-1111-4111-8111-111111111111");
 		manifest.assetRootId = approval.root->rootId();
 		manifest.media = {3, rate, 2, digest('0'), 0.0, false};
+		long double sumSquares = 0.0L;
+		for (const auto sample : samples) sumSquares += static_cast<long double>(sample) * sample;
+		manifest.media.rms = std::sqrt(double(sumSquares / samples.size()));
+		manifest.media.rmsKnown = true;
 		manifest.recipeHash = digest('a');
 		manifest.rendererId = QStringLiteral("native-float-renderer");
 		manifest.rendererVersion = QStringLiteral("1");

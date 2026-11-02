@@ -40,10 +40,16 @@ struct VocalEditAnchorPreview
 {
 	qint64 renderInputFrame = 0;
 	qint64 outputFrame = 0;
+	qint64 requestedOutputFrame = 0;
 	std::optional<qint64> targetTick;
 	double roundingErrorFrames = 0.0;
 	qint64 roundingErrorNumerator = 0;
 	qint64 roundingErrorDenominator = 1;
+	double strengthRoundingErrorFrames = 0.0;
+	qint64 preAnchorCrossfadeFrames = 0;
+	VocalCrossfadeLaw crossfadeLaw = VocalCrossfadeLaw::LinearAmplitude;
+	bool copyProtectedInterval = false;
+	bool syntheticProtectedBoundary = false;
 };
 
 enum class VocalTickFrameRoundingPolicy : quint8
@@ -55,9 +61,12 @@ struct VocalEditPlan
 {
 	QString recipeHash;
 	QString planHash;
+	QString rendererId;
+	QString rendererVersion;
 	quint64 projectGeneration = 0;
 	QString worldHash;
 	VocalTickFrameRoundingPolicy roundingPolicy = VocalTickFrameRoundingPolicy::NearestTiesUp;
+	std::vector<VocalEditAnchorPreview> resolvedAnchors;
 	std::vector<VocalEditAnchorPreview> anchorPreviews;
 	bool anchorPreviewTruncated = false;
 	size_t omittedAnchorCount = 0;
@@ -68,6 +77,9 @@ struct VocalEditPlanResult
 	QString code;
 	std::optional<VocalEditPlan> value;
 };
+
+QString vocalEditWorldHash(const VocalEditWorld& world);
+VocalEditWorld captureVocalEditWorld();
 
 class AiBridgeVocalEditPlanner
 {

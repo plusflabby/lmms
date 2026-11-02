@@ -71,6 +71,7 @@ private slots:
 			QString::fromLatin1(QCryptographicHash::hash(bytes.mid(56), QCryptographicHash::Sha256).toHex()));
 		QCOMPARE(result.samples, samples);
 		QCOMPARE(result.info.peak, 1.25);
+		QVERIFY(std::abs(result.info.rms - std::sqrt(1.8125 / 3.0)) < 1e-12);
 		QVERIFY(result.info.overrange);
 	}
 
@@ -83,6 +84,10 @@ private slots:
 		QCOMPARE(result.code, QStringLiteral("ok"));
 		QCOMPARE(result.info.channels, 2);
 		QCOMPARE(result.info.frames, quint64(2));
+		long double sumSquares = 0.0L;
+		for (const auto sample : {0.1f, -0.2f, 0.3f, 0.4f})
+			sumSquares += static_cast<long double>(sample) * sample;
+		QVERIFY(std::abs(result.info.rms - std::sqrt(double(sumSquares / 4.0L))) < 1e-12);
 		QVERIFY(result.samples.empty());
 	}
 

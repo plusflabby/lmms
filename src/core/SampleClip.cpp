@@ -25,6 +25,7 @@
 #include "SampleClip.h"
 
 #include <QDomElement>
+#include <QCryptographicHash>
 #include <QFileInfo>
 #include <QThread>
 #include <QScopeGuard>
@@ -229,6 +230,12 @@ void SampleClip::changeLength( const TimePos & _length )
 const QString& SampleClip::sampleFile() const
 {
 	return m_unavailableSampleFile.isEmpty() ? m_sample.sampleFile() : m_unavailableSampleFile;
+}
+
+bool SampleClip::recordedTakeSourceCurrent() const
+{
+	if (QThread::currentThread() != thread() || !m_recordedTakeReference || !m_recordedTakeToken) return false;
+	return m_recordedTakeToken->isCurrent();
 }
 
 QString SampleClip::applyAudioWindow(const AudioSourceWindowV2& window,const AudioWindowGeometry& geometry)
@@ -735,6 +742,44 @@ QString SampleClip::applyManagedVocalVariantAssociation(
 	return applyManagedVocalVariantAssociationInternal(requested, true);
 }
 
+QString SampleClip::managedVocalVariantAssetId() const
+{
+	if(m_managedVocalAssociation)return m_managedVocalAssociation->active.assetId;
+	if(m_unavailableManagedVocalVariants.isNull())return {};
+	const auto wrapper=m_unavailableManagedVocalVariants.documentElement();
+	for(auto child=wrapper.firstChild();!child.isNull();child=child.nextSibling())
+		if(child.isElement() && child.nodeName()==QStringLiteral("managed_vocal_variant"))
+			return child.toElement().attribute(QStringLiteral("asset_id"));
+	return {};
+}
+
+QByteArray SampleClip::managedVocalVariantStateDigest() const
+{
+	if(!m_managedVocalAssociation && m_unavailableManagedVocalVariants.isNull())return {};
+	QDomDocument document;
+	auto wrapper=document.createElement(QStringLiteral("managed_variant_state"));document.appendChild(wrapper);
+	if(m_managedVocalAssociation)
+	{
+		const auto association=writeManagedVocalVariantAssociation(document,*m_managedVocalAssociation);
+		if(association.isNull())return {};
+		wrapper.appendChild(association);
+	}
+	else
+	{
+		const auto original=m_unavailableManagedVocalVariants.documentElement();
+		for(auto child=original.firstChild();!child.isNull();child=child.nextSibling())
+			wrapper.appendChild(document.importNode(child,true));
+	}
+	return QCryptographicHash::hash(document.toByteArray(-1),QCryptographicHash::Sha256);
+}
+
+QString SampleClip::preloadManagedVocalVariant(const ManagedVocalVariantReference& reference)
+{
+	if (QThread::currentThread() != thread()) return QStringLiteral("wrong_thread");
+	std::shared_ptr<const std::vector<float>> samples;
+	return requestManagedVocalAsset(reference,samples);
+}
+
 QString SampleClip::applyManagedVocalVariantAssociationInternal(
 	const ManagedVocalVariantAssociation& requested,
 	bool retainCurrentForRevert)
@@ -849,6 +894,7 @@ QString SampleClip::applyManagedVocalVariantAssociationInternal(
 
 QString SampleClip::revertManagedVocalVariant()
 {
+	if (QThread::currentThread() != thread()) return QStringLiteral("wrong_thread");
 	if (!m_managedVocalAssociation)
 	{
 		if (m_unavailableManagedVocalVariants.isNull())
@@ -859,15 +905,7 @@ QString SampleClip::revertManagedVocalVariant()
 		return QStringLiteral("ok");
 	}
 	const auto current = *m_managedVocalAssociation;
-	if (current.previousVariant && current.previousPlayback)
-	{
-		auto previous = current;
-		previous.active = *current.previousVariant;
-		previous.playback = *current.previousPlayback;
-		previous.previousVariant.reset();
-		previous.previousPlayback.reset();
-		return applyManagedVocalVariantAssociationInternal(previous, false);
-	}
+	const QPointer<SampleClip> self(this);
 	{
 		const auto changes = Engine::audioEngine()->requestChangesGuard();
 		addJournalCheckPoint();
@@ -884,8 +922,10 @@ QString SampleClip::revertManagedVocalVariant()
 	}
 	Engine::audioEngine()->removePlayHandlesOfTypes(getTrack(), PlayHandle::Type::SamplePlayHandle);
 	setManagedVocalVariantStatus(QStringLiteral("ok"));
-	emit sampleChanged();
 	Engine::getSong()->setModified();
+	emit sampleChanged();
+	if (!self) return QStringLiteral("ok");
+	refreshManagedVocalPlayback();
 	return QStringLiteral("ok");
 }
 

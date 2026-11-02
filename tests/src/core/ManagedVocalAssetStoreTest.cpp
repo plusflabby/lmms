@@ -6,6 +6,7 @@
 #include <QDir>
 #include <QUuid>
 #include <array>
+#include <cmath>
 #include <limits>
 #include <cstring>
 #include <vector>
@@ -88,12 +89,16 @@ class ManagedVocalAssetStoreTest : public QObject
 		return file.open(QIODevice::ReadOnly) ? file.readAll() : QByteArray{};
 	}
 
-	static ManagedVocalManifest manifest(const QString& assetId, const QString& sourcePath)
+	static ManagedVocalManifest manifest(const QString& assetId, const QString& sourcePath,
+		double outputRms = std::sqrt(1.8125 / 3.0))
 	{
 		ManagedVocalManifest value;
 		value.assetId = assetId;
+		value.projectId = QStringLiteral("11111111-1111-4111-8111-111111111111");
 		value.assetRootId = digest('e');
 		value.media = {3, 48000, 1, digest('0'), 0.0, false};
+		value.media.rms = outputRms;
+		value.media.rmsKnown = true;
 		value.recipeHash = digest('a');
 		value.rendererId = QStringLiteral("native-float-renderer");
 		value.rendererVersion = QStringLiteral("1");
@@ -181,6 +186,37 @@ private slots:
 		QVERIFY(!QFileInfo::exists(temp.filePath(partialName)));
 	}
 
+	void inspectsAStoredVariantByStableIdWithinTheExpectedProject()
+	{
+#ifndef Q_OS_WIN
+		QSKIP("Managed asset root authorization is Windows-only");
+#else
+		QTemporaryDir temp;
+		QVERIFY(temp.isValid());
+		auto approval=ManagedVocalAssetRoot::authorizeLocalRoot(temp.path());
+		QVERIFY(approval.root);
+		ManagedVocalAssetStore store(approval.root);
+		auto created=store.beginCreate(3,48000,1);
+		QVERIFY(created.writer);
+		const std::array<float,3> samples{0.0f,0.25f,-0.5f};
+		QCOMPARE(created.writer->appendFrames(samples),QStringLiteral("ok"));
+		const auto projectId=QStringLiteral("11111111-1111-4111-8111-111111111111");
+		auto source=manifest(created.assetId,temp.filePath(QStringLiteral("lead.wav")),std::sqrt(0.3125/3.0));
+		auto published=store.publish(std::move(created.writer),std::move(source));
+		QVERIFY(published.value);
+
+		const auto inspected=store.inspectById(published.value->assetId,projectId);
+		QCOMPARE(inspected.code,QStringLiteral("ok"));
+		QCOMPARE(inspected.projectId,projectId);
+		QCOMPARE(inspected.reference.assetId,published.value->assetId);
+		QCOMPARE(inspected.sources.size(),size_t(1));
+		QCOMPARE(store.inspectById(published.value->assetId,QStringLiteral("22222222-2222-4222-8222-222222222222")).code,
+			QStringLiteral("asset_project_mismatch"));
+		QCOMPARE(store.inspectById(QStringLiteral("00000000-0000-4000-8000-000000000001"),projectId).code,
+			QStringLiteral("asset_missing"));
+#endif
+	}
+
 	void rejectsManifestChangedAfterPublication()
 	{
 #ifndef Q_OS_WIN
@@ -195,7 +231,8 @@ private slots:
 		QVERIFY(created.writer);
 		const std::array<float, 3> samples{0.0f, 0.25f, -0.5f};
 		QCOMPARE(created.writer->appendFrames(samples), QStringLiteral("ok"));
-		auto published = store.publish(std::move(created.writer), manifest(created.assetId, temp.filePath("source.wav")));
+		auto published = store.publish(std::move(created.writer), manifest(created.assetId,
+			temp.filePath("source.wav"), std::sqrt(0.3125 / 3.0)));
 		QVERIFY(published.value);
 
 		const auto manifestPath = temp.filePath(QStringLiteral("vocal-asset-") + published.value->assetId
@@ -234,7 +271,7 @@ private slots:
 			QCOMPARE(collision.write(preserved), qint64(preserved.size()));
 		}
 		const auto published = store.publish(std::move(created.writer),
-			manifest(assetId, temp.filePath(QStringLiteral("source.wav"))));
+			manifest(assetId, temp.filePath(QStringLiteral("source.wav")), std::sqrt(0.3125 / 3.0)));
 		QCOMPARE(published.code, QStringLiteral("asset_exists"));
 		QCOMPARE(contents(collisionPath), preserved);
 		QVERIFY(!QFileInfo::exists(temp.filePath(QStringLiteral("vocal-asset-") + assetId

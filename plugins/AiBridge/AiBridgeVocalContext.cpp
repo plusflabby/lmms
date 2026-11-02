@@ -9,6 +9,7 @@
 #include "Engine.h"
 #include "PathUtil.h"
 #include "SampleClip.h"
+#include "SampleBuffer.h"
 #include "SampleTrack.h"
 #include "Song.h"
 #include <QCoreApplication>
@@ -32,7 +33,28 @@ CopiedSource copySource(const QString& id,bool requireAuthorized=true)
 	t.clipId=id;t.expectedIdentity=clip->sourceFileIdentity();
 	if(clip->authorizedSourceInfo())t.expectedInfo=*clip->authorizedSourceInfo();
 	t.expectedInfo.sourceSha256=clip->expectedSourceDigest();
-	t.reference=PathUtil::toAbsolute(clip->sampleFile());
+	if (clip->isRecordedTake())
+	{
+		const auto& recorded = clip->recordedTakeReference();
+		if (!recorded || !clip->recordedTakeSourceCurrent()) return {"recorded_source_unavailable",{}, {}};
+		t.recordedTakeProjectId = recorded->projectId;
+		t.recordedTakeId = recorded->takeId;
+		t.expectedIdentity = QByteArrayLiteral("recorded-take-identity-v1:")
+			+ QByteArray::number(recorded->sourceIdentity.volume) + ':'
+			+ QByteArray::number(recorded->sourceIdentity.index);
+		t.authorizedSourceBuffer = clip->sample().buffer();
+		if (!t.authorizedSourceBuffer || t.authorizedSourceBuffer->sampleRate() != quint32(t.expectedInfo.sampleRate)
+			|| t.authorizedSourceBuffer->size() != t.expectedInfo.frames)
+		{
+			return {"recorded_source_changed",{}, {}};
+		}
+		t.authorizedSourceBufferRevision = t.authorizedSourceBuffer->contentRevision();
+		t.reference = QStringLiteral("recorded_take:") + recorded->projectId + QLatin1Char('/') + recorded->takeId;
+	}
+	else
+	{
+		t.reference=PathUtil::toAbsolute(clip->sampleFile());
+	}
 	t.sourceStatus=clip->sample().sampleSize() ? "available" : "available_unloaded";
 	t.geometry={clip->startPosition().getTicks(),clip->length().getTicks(),clip->startTimeOffset().getTicks(),
 		clip->getAutoResize(),clip->sample().reversed(),clip->isSolo(),clip->name(),
@@ -55,8 +77,10 @@ CopiedSource copySource(const QString& id,bool requireAuthorized=true)
 	s.trackMuted=track->isMuted();s.fxChannel=track->mixerChannelModel()->value();
 	s.playbackFrequency=t.geometry.frequency;s.amplification=t.geometry.amplification;
 	s.sourceReferenceHash=QCryptographicHash::hash(clip->sampleFile().toUtf8(),QCryptographicHash::Sha256);
-	s.sourceIdentity=t.expectedIdentity;s.sourceDigest=t.expectedInfo.sourceSha256;
+	s.sourceIdentity=clip->sourceFileIdentity();s.sourceDigest=t.expectedInfo.sourceSha256;
 	s.sourceFrames=t.expectedInfo.frames;s.sampleRate=t.expectedInfo.sampleRate;s.sourceChannels=t.expectedInfo.channels;s.sourceStatus=t.sourceStatus;
+	if (clip->sampleFile().isEmpty())
+		s.sourceStatus = clip->sample().sampleSize() ? QStringLiteral("embedded") : QStringLiteral("empty");
 	if(!requireAuthorized && !clip->usesBoundedSampleSource())
 	{
 		s.sourceFrames=clip->sample().sampleSize();s.sampleRate=clip->sample().sampleRate();s.sourceChannels.reset();
@@ -105,17 +129,27 @@ VocalSnapshotResult captureVocalInputs(const VocalAnalyzeRequest& request)
 	VocalInputSnapshot s;AiBridgeProjectContext ids;s.generation=ids.projectGeneration();s.request=request;
 	auto* config=ConfigManager::inst();s.policyRevision=config->audioImportPolicyRevision();
 	const auto text=config->value("aibridge","audio_import_roots");
-	if(text.isEmpty())return {"import_root_not_configured",{}};
-	if(text.size()>65536)return {"resource_limit",{}};
-	const auto document=QJsonDocument::fromJson(text.toUtf8());
-	if(!document.isArray() || document.array().isEmpty())return {"import_root_not_configured",{}};
-	if(document.array().size()>VocalLimits::rootCount)return {"resource_limit",{}};
 	QStringList roots;
-	for(const auto& value:document.array())
+	QString rootCode=text.isEmpty()?QStringLiteral("import_root_not_configured"):QStringLiteral("ok");
+	if(text.size()>VocalLimits::rootChars)rootCode=QStringLiteral("resource_limit");
+	else if(!text.isEmpty())
 	{
-		if(!value.isString() || value.toString().isEmpty() || value.toString().size()>VocalLimits::pathChars)
-			return {"import_path_denied",{}};
-		roots.append(value.toString());
+		const auto document=QJsonDocument::fromJson(text.toUtf8());
+		if(!document.isArray() || document.array().isEmpty())rootCode=QStringLiteral("import_root_not_configured");
+		else if(document.array().size()>VocalLimits::rootCount)rootCode=QStringLiteral("resource_limit");
+		else
+		{
+			for(const auto& value:document.array())
+			{
+				if(!value.isString() || value.toString().isEmpty() || value.toString().size()>VocalLimits::pathChars)
+				{
+					rootCode=QStringLiteral("import_path_denied");
+					roots.clear();
+					break;
+				}
+				roots.append(value.toString());
+			}
+		}
 	}
 	const auto limits=SampleDecoder::configuredImportLimits();
 	s.sources.reserve(request.selections.size());
@@ -125,7 +159,18 @@ VocalSnapshotResult captureVocalInputs(const VocalAnalyzeRequest& request)
 		if(audioStateHash({copy.state})!=selection.expectedAudioHash)return {"clip_state_mismatch",{}};
 		if(copy.ticket.window && (selection.frames.inFrame<copy.ticket.window->base.inFrame
 			|| selection.frames.outFrame>copy.ticket.window->base.outFrame))return {"invalid_parameter",{}};
-		copy.ticket.roots=roots;copy.ticket.limits=limits;copy.ticket.policyRevision=s.policyRevision;
+		if(copy.ticket.authorizedSourceBuffer)
+		{
+			copy.ticket.roots.clear();
+			copy.ticket.limits.maxFileBytes=std::max<quint64>(1,copy.ticket.expectedInfo.fileBytes);
+			copy.ticket.limits.maxDecodedBytes=std::max<quint64>(1,copy.ticket.expectedInfo.decodedBytes);
+		}
+		else
+		{
+			if(rootCode!=QStringLiteral("ok"))return {rootCode,{}};
+			copy.ticket.roots=roots;copy.ticket.limits=limits;
+		}
+		copy.ticket.policyRevision=s.policyRevision;
 		s.sources.push_back(std::move(copy.ticket));
 	}
 	const auto budget=estimateVocalBudget(s);if(budget.code!="ok")return {budget.code,{}};

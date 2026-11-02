@@ -1,5 +1,6 @@
 #include "AiBridgeVocalEditPlanner.h"
 
+#include "AiBridgeVocalDspBackend.h"
 #include "AiBridgeVocalTypes.h"
 #include <QCryptographicHash>
 #include <QDataStream>
@@ -149,6 +150,25 @@ quint64 totalSelectedInputFrames(const VocalEditRequest& request)
 
 } // namespace
 
+QString vocalEditWorldHash(const VocalEditWorld& world)
+{
+	if (world.tempoBpm < 10 || world.tempoBpm > 999 || !supportedRate(world.outputRate)
+		|| world.ticksPerQuarterNote != 48 || world.timeSignatureNumerator < 1
+		|| world.timeSignatureNumerator > 32 || world.timeSignatureDenominator < 1
+		|| world.timeSignatureDenominator > 32)
+	{
+		return {};
+	}
+	QByteArray bytes;
+	QDataStream stream(&bytes, QIODevice::WriteOnly);
+	stream.setVersion(QDataStream::Qt_5_15);
+	stream.setByteOrder(QDataStream::BigEndian);
+	stream << QStringLiteral("lmms-vocal-edit-world-v1") << world.tempoBpm << world.outputRate
+		<< world.ticksPerQuarterNote << world.timeSignatureNumerator
+		<< world.timeSignatureDenominator << world.tempoAutomationPresent;
+	return finishHash(bytes);
+}
+
 VocalEditPlanResult AiBridgeVocalEditPlanner::plan(
 	const VocalEditRequest& request,
 	const VocalEditPlanningSnapshot& snapshot,
@@ -165,7 +185,7 @@ VocalEditPlanResult AiBridgeVocalEditPlanner::plan(
 		result.code = QStringLiteral("plan_stale");
 		return result;
 	}
-	if (snapshot.world.tempoAutomationPresent || snapshot.world.tempoBpm <= 0
+	if ((snapshot.world.tempoAutomationPresent && timingMap(request)) || snapshot.world.tempoBpm <= 0
 		|| snapshot.world.ticksPerQuarterNote != 48
 		|| snapshot.world.timeSignatureNumerator < 1 || snapshot.world.timeSignatureNumerator > 32
 		|| snapshot.world.timeSignatureDenominator < 1 || snapshot.world.timeSignatureDenominator > 32
@@ -234,11 +254,41 @@ VocalEditPlanResult AiBridgeVocalEditPlanner::plan(
 	}
 	plan.projectGeneration = snapshot.generation;
 	plan.worldHash = snapshot.worldHash;
+	const bool compInput = std::holds_alternative<VocalCompRecipe>(request.input);
+	const bool hasTiming = timingMap(request) != nullptr;
+	const bool hasGainFade = std::any_of(request.operations.begin(), request.operations.end(),
+		[](const VocalEditOperation& operation) {
+			return !std::holds_alternative<VocalTimingMap>(operation);
+		});
+	if (hasTiming)
+	{
+		const auto stretchRenderer = QStringLiteral("lmms-")
+			+ QString::fromLatin1(AiBridgeVocalDspBackend::RendererId);
+		plan.rendererId = compInput
+			? hasGainFade ? QStringLiteral("lmms-native-comp-gain-fade-")
+					+ QString::fromLatin1(AiBridgeVocalDspBackend::RendererId)
+				: QStringLiteral("lmms-native-comp-") + QString::fromLatin1(AiBridgeVocalDspBackend::RendererId)
+			: hasGainFade ? QStringLiteral("lmms-gain-fade-")
+					+ QString::fromLatin1(AiBridgeVocalDspBackend::RendererId)
+				: stretchRenderer;
+		plan.rendererVersion = QString::fromLatin1(AiBridgeVocalDspBackend::RendererVersion);
+	}
+	else if (compInput)
+	{
+		plan.rendererId = QStringLiteral("lmms-native-comp-gain-fade");
+		plan.rendererVersion = QStringLiteral("1");
+	}
+	else
+	{
+		plan.rendererId = QStringLiteral("lmms-native-gain-fade");
+		plan.rendererVersion = QStringLiteral("1");
+	}
 	QByteArray planBytes;
 	QDataStream planStream(&planBytes, QIODevice::WriteOnly);
 	planStream.setVersion(QDataStream::Qt_5_15);
 	planStream.setByteOrder(QDataStream::BigEndian);
-	planStream << QStringLiteral("lmms-vocal-edit-plan-v1") << plan.recipeHash << snapshot.generation
+	planStream << QStringLiteral("lmms-vocal-edit-plan-v2") << plan.recipeHash << plan.rendererId
+		<< plan.rendererVersion << snapshot.generation
 		<< snapshot.worldHash << snapshot.world.tempoBpm << snapshot.world.outputRate
 		<< snapshot.world.ticksPerQuarterNote << snapshot.world.tempoAutomationPresent
 		<< snapshot.world.timeSignatureNumerator << snapshot.world.timeSignatureDenominator
@@ -248,13 +298,13 @@ VocalEditPlanResult AiBridgeVocalEditPlanner::plan(
 		planStream << source.clipId << source.audioStateHash << source.sourceFrames
 			<< source.sampleRate << source.channels << source.sourceVerified;
 	}
-	plan.planHash = finishHash(planBytes);
-
 	if (const auto* map = timingMap(request))
 	{
 		constexpr size_t previewLimit = 128;
+		const auto domain = renderInputRange(request);
+		const auto maximumFrames = qint64(snapshot.world.outputRate) * qint64(VocalLimits::seconds);
 		std::vector<VocalEditAnchorPreview> mapped;
-		mapped.reserve(map->anchors.size());
+		mapped.reserve(map->anchors.size() + map->protectedRenderInputFrames.size() * 2);
 		for (const auto& anchor : map->anchors)
 		{
 			VocalEditAnchorPreview preview;
@@ -262,7 +312,7 @@ VocalEditPlanResult AiBridgeVocalEditPlanner::plan(
 			preview.targetTick = anchor.targetTick;
 			if (anchor.outputFrame)
 			{
-				preview.outputFrame = *anchor.outputFrame;
+				preview.requestedOutputFrame = *anchor.outputFrame;
 			}
 			else if (!tickToFrame(*anchor.targetTick, snapshot.world, preview.outputFrame,
 					preview.roundingErrorNumerator, preview.roundingErrorDenominator,
@@ -271,7 +321,11 @@ VocalEditPlanResult AiBridgeVocalEditPlanner::plan(
 				result.code = QStringLiteral("resource_limit");
 				return result;
 			}
-			if (preview.outputFrame > qint64(snapshot.world.outputRate) * qint64(VocalLimits::seconds))
+			else
+			{
+				preview.requestedOutputFrame = preview.outputFrame;
+			}
+			if (preview.requestedOutputFrame > maximumFrames)
 			{
 				result.code = QStringLiteral("resource_limit");
 				return result;
@@ -281,26 +335,124 @@ VocalEditPlanResult AiBridgeVocalEditPlanner::plan(
 				result.code = QStringLiteral("timing_anchor_out_of_tolerance");
 				return result;
 			}
-			if (!mapped.empty())
+			const auto identityFrame = anchor.renderInputFrame - domain.inFrame;
+			const auto requestedDelta = preview.requestedOutputFrame - identityFrame;
+			const auto strengthOutput = double(identityFrame) + double(requestedDelta) * map->strength;
+			if (!std::isfinite(strengthOutput) || strengthOutput < 0.0
+				|| strengthOutput > double(maximumFrames))
 			{
-				const auto& previous = mapped.back();
-				if (preview.outputFrame <= previous.outputFrame)
-				{
-					result.code = QStringLiteral("invalid_parameter");
-					return result;
-				}
-				const auto sourceDelta = anchor.renderInputFrame - previous.renderInputFrame;
-				const auto outputDelta = preview.outputFrame - previous.outputFrame;
-				const double ratio = static_cast<double>(outputDelta) / static_cast<double>(sourceDelta);
-				if (!std::isfinite(ratio) || ratio < limits.minimumLocalStretchRatio
-					|| ratio > limits.maximumLocalStretchRatio)
-				{
-					result.code = QStringLiteral("unsupported_stretch_ratio");
-					return result;
-				}
+				result.code = QStringLiteral("resource_limit");
+				return result;
 			}
+			preview.outputFrame = qint64(std::floor(strengthOutput + 0.5));
+			preview.strengthRoundingErrorFrames = strengthOutput - double(preview.outputFrame);
+			preview.preAnchorCrossfadeFrames = anchor.preAnchorCrossfadeFrames;
+			preview.crossfadeLaw = anchor.crossfadeLaw;
 			mapped.push_back(preview);
 		}
+		if (mapped.front().requestedOutputFrame != 0 || mapped.front().outputFrame != 0)
+		{
+			result.code = QStringLiteral("invalid_parameter");
+			return result;
+		}
+
+		auto makeProtectedBoundary = [&](qint64 inputFrame) -> bool {
+			const auto outputFrame = inputFrame - domain.inFrame;
+			auto found = std::lower_bound(mapped.begin(), mapped.end(), inputFrame,
+				[](const VocalEditAnchorPreview& candidate, qint64 frame) {
+					return candidate.renderInputFrame < frame;
+				});
+			if (found != mapped.end() && found->renderInputFrame == inputFrame)
+			{
+				return found->outputFrame == outputFrame;
+			}
+			VocalEditAnchorPreview synthetic;
+			synthetic.renderInputFrame = inputFrame;
+			synthetic.outputFrame = outputFrame;
+			synthetic.requestedOutputFrame = outputFrame;
+			synthetic.syntheticProtectedBoundary = true;
+			mapped.insert(found, synthetic);
+			return true;
+		};
+		for (const auto& range : map->protectedRenderInputFrames)
+		{
+			if (!makeProtectedBoundary(range.inFrame) || !makeProtectedBoundary(range.outFrame))
+			{
+				result.code = QStringLiteral("protected_range_not_preserved");
+				return result;
+			}
+		}
+
+		for (size_t i = 0; i + 1 < mapped.size(); ++i)
+		{
+			auto& anchor = mapped[i];
+			const auto& next = mapped[i + 1];
+			for (const auto& range : map->protectedRenderInputFrames)
+			{
+				const bool overlaps = anchor.renderInputFrame < range.outFrame
+					&& next.renderInputFrame > range.inFrame;
+				if (overlaps)
+				{
+					if (anchor.renderInputFrame < range.inFrame || next.renderInputFrame > range.outFrame
+						|| next.outputFrame - anchor.outputFrame != next.renderInputFrame - anchor.renderInputFrame)
+					{
+						result.code = QStringLiteral("protected_range_not_preserved");
+						return result;
+					}
+					anchor.copyProtectedInterval = true;
+				}
+			}
+			if (anchor.copyProtectedInterval && next.preAnchorCrossfadeFrames > 0)
+			{
+				result.code = QStringLiteral("protected_range_not_preserved");
+				return result;
+			}
+		}
+
+		for (size_t i = 1; i + 1 < mapped.size(); ++i)
+		{
+			const auto& previous = mapped[i - 1];
+			const auto& current = mapped[i];
+			const auto& next = mapped[i + 1];
+			if (current.preAnchorCrossfadeFrames > limits.maxCrossfadeFrames)
+			{
+				result.code = QStringLiteral("resource_limit");
+				return result;
+			}
+			if (current.preAnchorCrossfadeFrames > (current.outputFrame - previous.outputFrame) / 2
+				|| current.preAnchorCrossfadeFrames > (next.outputFrame - current.outputFrame) / 2
+				|| (mapped[i - 1].copyProtectedInterval && current.preAnchorCrossfadeFrames > 0))
+			{
+				result.code = mapped[i - 1].copyProtectedInterval && current.preAnchorCrossfadeFrames > 0
+					? QStringLiteral("protected_range_not_preserved") : QStringLiteral("invalid_parameter");
+				return result;
+			}
+		}
+		for (size_t i = 1; i < mapped.size(); ++i)
+		{
+			const auto& previous = mapped[i - 1];
+			const auto& current = mapped[i];
+			if (current.outputFrame <= previous.outputFrame)
+			{
+				result.code = QStringLiteral("invalid_parameter");
+				return result;
+			}
+			const auto sourceDelta = current.renderInputFrame - previous.renderInputFrame;
+			const auto outputDelta = current.outputFrame - previous.outputFrame;
+			const double ratio = static_cast<double>(outputDelta) / static_cast<double>(sourceDelta);
+			if (!std::isfinite(ratio) || ratio < map->minimumLocalStretchRatio
+				|| ratio > map->maximumLocalStretchRatio)
+			{
+				result.code = QStringLiteral("unsupported_stretch_ratio");
+				return result;
+			}
+			if (current.outputFrame > maximumFrames)
+			{
+				result.code = QStringLiteral("resource_limit");
+				return result;
+			}
+		}
+		plan.resolvedAnchors = mapped;
 		if (mapped.size() > previewLimit)
 		{
 			plan.anchorPreviews.insert(plan.anchorPreviews.end(), mapped.begin(), mapped.begin() + previewLimit);
@@ -312,6 +464,17 @@ VocalEditPlanResult AiBridgeVocalEditPlanner::plan(
 			plan.anchorPreviews.insert(plan.anchorPreviews.end(), mapped.begin(), mapped.end());
 		}
 	}
+	planStream << quint32(plan.resolvedAnchors.size());
+	for (const auto& anchor : plan.resolvedAnchors)
+	{
+		planStream << anchor.renderInputFrame << anchor.requestedOutputFrame << anchor.outputFrame
+			<< bool(anchor.targetTick) << anchor.targetTick.value_or(0)
+			<< anchor.roundingErrorNumerator << anchor.roundingErrorDenominator
+			<< anchor.strengthRoundingErrorFrames << anchor.preAnchorCrossfadeFrames
+			<< quint8(anchor.crossfadeLaw) << anchor.copyProtectedInterval
+			<< anchor.syntheticProtectedBoundary;
+	}
+	plan.planHash = finishHash(planBytes);
 	result.code = QStringLiteral("ok");
 	result.value = std::move(plan);
 	return result;

@@ -78,6 +78,46 @@ private slots:
 		QCOMPARE(result.value->roundingPolicy, VocalTickFrameRoundingPolicy::NearestTiesUp);
 	}
 
+	void appliesCorrectionStrengthAndReportsRequestedAndRealizedFrames()
+	{
+		auto request = timingRequest();
+		auto& map = std::get<VocalTimingMap>(request.operations.front());
+		map.strength = 0.0;
+		auto result = AiBridgeVocalEditPlanner::plan(request, snapshot(), limits());
+		QCOMPARE(result.code, QStringLiteral("ok"));
+		QCOMPARE(result.value->resolvedAnchors.size(), size_t(2));
+		QCOMPARE(result.value->resolvedAnchors.back().requestedOutputFrame, qint64(60000));
+		QCOMPARE(result.value->resolvedAnchors.back().outputFrame, qint64(48000));
+		QCOMPARE(result.value->resolvedAnchors.back().strengthRoundingErrorFrames, 0.0);
+
+		map.strength = 0.5;
+		result = AiBridgeVocalEditPlanner::plan(request, snapshot(), limits());
+		QCOMPARE(result.code, QStringLiteral("ok"));
+		QCOMPARE(result.value->resolvedAnchors.back().outputFrame, qint64(54000));
+
+		map.strength = 1.0;
+		result = AiBridgeVocalEditPlanner::plan(request, snapshot(), limits());
+		QCOMPARE(result.code, QStringLiteral("ok"));
+		QCOMPARE(result.value->resolvedAnchors.back().outputFrame, qint64(60000));
+	}
+
+	void addsSampleExactProtectedRangeBoundariesToResolvedMap()
+	{
+		auto request = timingRequest();
+		request.operations = {VocalTimingMap{{{0, 0, {}}, {48000, 54400, {}}}, {{12000, 16000}}}};
+		const auto result = AiBridgeVocalEditPlanner::plan(request, snapshot(), limits());
+		QCOMPARE(result.code, QStringLiteral("ok"));
+		QVERIFY(result.value);
+		QCOMPARE(result.value->resolvedAnchors.size(), size_t(4));
+		QCOMPARE(result.value->resolvedAnchors[1].renderInputFrame, qint64(12000));
+		QCOMPARE(result.value->resolvedAnchors[1].outputFrame, qint64(12000));
+		QCOMPARE(result.value->resolvedAnchors[2].renderInputFrame, qint64(16000));
+		QCOMPARE(result.value->resolvedAnchors[2].outputFrame, qint64(16000));
+		QVERIFY(result.value->resolvedAnchors[1].copyProtectedInterval);
+		QVERIFY(result.value->resolvedAnchors[1].syntheticProtectedBoundary);
+		QVERIFY(result.value->resolvedAnchors[2].syntheticProtectedBoundary);
+	}
+
 	void refusesAutomationStaleHashesAndUnsupportedRates()
 	{
 		auto request = timingRequest();
@@ -85,6 +125,9 @@ private slots:
 		world.world.tempoAutomationPresent = true;
 		QCOMPARE(AiBridgeVocalEditPlanner::plan(request, world, limits()).code,
 			QStringLiteral("unsupported_playback_world"));
+		auto frameOnly = timingRequest();
+		frameOnly.operations = {VocalGainEnvelope{{{0, 0.0}, {48000, 6.0}}}};
+		QCOMPARE(AiBridgeVocalEditPlanner::plan(frameOnly, world, limits()).code, QStringLiteral("ok"));
 
 		world = snapshot();
 		world.worldHash = digest('c');
@@ -156,6 +199,26 @@ private slots:
 		QCOMPARE(result.value->anchorPreviews.back().outputFrame, qint64(868));
 		QCOMPARE(result.value->anchorPreviews.back().roundingErrorNumerator, qint64(-14));
 		QCOMPARE(result.value->anchorPreviews.back().roundingErrorDenominator, qint64(127));
+	}
+
+	void worldHashIncludesTempoRateMeterAndAutomation()
+	{
+		const VocalEditWorld original{127, 44100, 48, false, 6, 8};
+		const auto hash = vocalEditWorldHash(original);
+		QCOMPARE(hash.size(), 64);
+		QCOMPARE(vocalEditWorldHash(original), hash);
+		auto changed = original;
+		changed.tempoBpm++;
+		QVERIFY(vocalEditWorldHash(changed) != hash);
+		changed = original;
+		changed.outputRate = 48000;
+		QVERIFY(vocalEditWorldHash(changed) != hash);
+		changed = original;
+		changed.timeSignatureNumerator = 4;
+		QVERIFY(vocalEditWorldHash(changed) != hash);
+		changed = original;
+		changed.tempoAutomationPresent = true;
+		QVERIFY(vocalEditWorldHash(changed) != hash);
 	}
 };
 

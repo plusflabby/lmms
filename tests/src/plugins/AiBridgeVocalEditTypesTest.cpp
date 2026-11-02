@@ -99,7 +99,7 @@ private slots:
 	{
 		auto request = directRequest();
 		request.operations.clear();
-		request.operations.push_back(VocalFade{{100, 500}, 0.0, -12.0, VocalFadeCurve::LinearAmplitude});
+		request.operations.push_back(VocalFade{{100, 48100}, 0.0, -12.0, VocalFadeCurve::LinearAmplitude});
 		QCOMPARE(validateVocalEditRequest(request, limits()), QStringLiteral("ok"));
 
 		std::get<VocalFade>(request.operations.front()).renderInputFrames.inFrame = 99;
@@ -108,6 +108,19 @@ private slots:
 		request.operations.clear();
 		request.operations.push_back(VocalTimingMap{{{100, 0, {}}, {48100, 60000, {}}}, {{200, 300}}});
 		request.operations.push_back(VocalFade{{100, 500}, 0.0, -12.0, VocalFadeCurve::LinearAmplitude});
+		QCOMPARE(validateVocalEditRequest(request, limits()), QStringLiteral("invalid_parameter"));
+	}
+
+	void rejectsDiscontinuousGainAndFadeRegionsInsideTheSelectedSource()
+	{
+		auto request = directRequest();
+		request.operations = {VocalGainEnvelope{{{200, -6.0}, {48000, 0.0}}}};
+		QCOMPARE(validateVocalEditRequest(request, limits()), QStringLiteral("invalid_parameter"));
+		request.operations = {VocalGainEnvelope{{{200, 0.0}, {48000, -6.0}}}};
+		QCOMPARE(validateVocalEditRequest(request, limits()), QStringLiteral("invalid_parameter"));
+		request.operations = {VocalFade{{200, 48000}, -6.0, 0.0, VocalFadeCurve::LinearAmplitude}};
+		QCOMPARE(validateVocalEditRequest(request, limits()), QStringLiteral("invalid_parameter"));
+		request.operations = {VocalFade{{200, 48000}, 0.0, -6.0, VocalFadeCurve::EqualPower}};
 		QCOMPARE(validateVocalEditRequest(request, limits()), QStringLiteral("invalid_parameter"));
 	}
 
@@ -131,6 +144,40 @@ private slots:
 		QCOMPARE(validateVocalEditRequest(directRequest(), strictLimits), QStringLiteral("invalid_parameter"));
 	}
 
+	void validatesStrengthAndExplicitTimingCrossfadeFields()
+	{
+		auto request = directRequest();
+		request.operations.clear();
+		VocalTimingMap map{{{100, 0, {}}, {24100, 26400, {}, 840, VocalCrossfadeLaw::EqualPower},
+			{48100, 56400, {}}}};
+		request.operations.push_back(map);
+		QCOMPARE(validateVocalEditRequest(request, limits()), QStringLiteral("ok"));
+		const auto originalHash = canonicalVocalEditRecipeHash(request);
+		std::get<VocalTimingMap>(request.operations.front()).strength = 0.5;
+		QVERIFY(originalHash != canonicalVocalEditRecipeHash(request));
+		std::get<VocalTimingMap>(request.operations.front()).strength = 0.0;
+		QCOMPARE(validateVocalEditRequest(request, limits()), QStringLiteral("invalid_parameter"));
+		std::get<VocalTimingMap>(request.operations.front()).strength = -0.1;
+		QCOMPARE(validateVocalEditRequest(request, limits()), QStringLiteral("invalid_parameter"));
+		std::get<VocalTimingMap>(request.operations.front()).strength = 1.1;
+		QCOMPARE(validateVocalEditRequest(request, limits()), QStringLiteral("invalid_parameter"));
+		std::get<VocalTimingMap>(request.operations.front()).strength = 1.0;
+		std::get<VocalTimingMap>(request.operations.front()).anchors[1].preAnchorCrossfadeFrames = 12001;
+		QCOMPARE(validateVocalEditRequest(request, limits()), QStringLiteral("resource_limit"));
+		std::get<VocalTimingMap>(request.operations.front()).anchors[1].preAnchorCrossfadeFrames = 0;
+		std::get<VocalTimingMap>(request.operations.front()).anchors.back().preAnchorCrossfadeFrames = 1;
+		QCOMPARE(validateVocalEditRequest(request, limits()), QStringLiteral("invalid_parameter"));
+	}
+
+	void boundsTotalGainAndFadePointsAcrossTheWholeRecipe()
+	{
+		auto request = directRequest();
+		request.operations.clear();
+		for (int i = 0; i < 513; ++i)
+			request.operations.push_back(VocalGainEnvelope{{{100, 0.0}, {48100, 0.0}}});
+		QCOMPARE(validateVocalEditRequest(request, limits()), QStringLiteral("resource_limit"));
+	}
+
 	void validatesCompSelectionsAndDeclaredOverlap()
 	{
 		auto request = directRequest();
@@ -144,6 +191,39 @@ private slots:
 
 		std::get<VocalCompRecipe>(request.input).boundaries[0].overlapFrames = 12001;
 		QCOMPARE(validateVocalEditRequest(request, limits()), QStringLiteral("resource_limit"));
+	}
+
+	void rejectsCompGapsMismatchedDurationsAndOverHalfCrossfades()
+	{
+		auto request = directRequest();
+		request.operations.clear();
+		request.selections.push_back({"clip-b", digest('c'), VocalEditSourceBasis::SourcePcm, {0, 1000}});
+		request.input = VocalCompRecipe{
+			{{0, {100, 1100}, {0, 1000}}, {1, {0, 1000}, {1001, 2001}}}, {}};
+		QCOMPARE(validateVocalEditRequest(request, limits()), QStringLiteral("invalid_parameter"));
+
+		auto& comp = std::get<VocalCompRecipe>(request.input);
+		comp.segments[0].outputFrames = {0, 999};
+		comp.segments[1].outputFrames = {999, 1999};
+		QCOMPARE(validateVocalEditRequest(request, limits()), QStringLiteral("invalid_parameter"));
+
+		comp.segments[0].outputFrames = {0, 1000};
+		comp.segments[1].outputFrames = {1000, 2000};
+		comp.segments[0].sourceFrames = {100, 1099};
+		QCOMPARE(validateVocalEditRequest(request, limits()), QStringLiteral("invalid_parameter"));
+
+		comp.segments[0].sourceFrames = {100, 1100};
+		comp.segments[1].outputFrames = {499, 1499};
+		comp.boundaries = {{0, 1, 501, VocalCrossfadeLaw::EqualPower}};
+		QCOMPARE(validateVocalEditRequest(request, limits()), QStringLiteral("invalid_parameter"));
+	}
+
+	void compRequiresMultipleApprovedTakeSections()
+	{
+		auto request = directRequest();
+		request.operations.clear();
+		request.input = VocalCompRecipe{{{0, {100, 1100}, {0, 1000}}}, {}};
+		QCOMPARE(validateVocalEditRequest(request, limits()), QStringLiteral("invalid_parameter"));
 	}
 
 	void rejectsDuplicateTimingMapsAndUnsafeClipIdentifiers()

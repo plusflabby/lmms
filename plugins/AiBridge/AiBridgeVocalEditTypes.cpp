@@ -155,11 +155,13 @@ void writeOperation(QDataStream& out, const VocalEditOperation& operation)
 		}
 		else
 		{
-			out << quint32(value.anchors.size());
+			out << canonical(value.strength) << canonical(value.minimumLocalStretchRatio)
+				<< canonical(value.maximumLocalStretchRatio) << quint32(value.anchors.size());
 			for (const auto& anchor : value.anchors)
 			{
 				out << anchor.renderInputFrame << bool(anchor.outputFrame) << anchor.outputFrame.value_or(0)
-					<< bool(anchor.targetTick) << anchor.targetTick.value_or(0);
+					<< bool(anchor.targetTick) << anchor.targetTick.value_or(0)
+					<< anchor.preAnchorCrossfadeFrames << quint8(anchor.crossfadeLaw);
 			}
 			out << quint32(value.protectedRenderInputFrames.size());
 			for (const auto& range : value.protectedRenderInputFrames)
@@ -243,6 +245,10 @@ QString validateVocalEditRequest(const VocalEditRequest& request, const VocalEdi
 	else
 	{
 		const auto& comp = std::get<VocalCompRecipe>(request.input);
+		if (request.selections.size() < 2 || comp.segments.size() < 2)
+		{
+			return QStringLiteral("invalid_parameter");
+		}
 		if (comp.segments.size() > limits.maxCompSegments)
 		{
 			return QStringLiteral("resource_limit");
@@ -255,11 +261,17 @@ QString validateVocalEditRequest(const VocalEditRequest& request, const VocalEdi
 		{
 			return QStringLiteral("invalid_parameter");
 		}
+		if (comp.segments.front().outputFrames.inFrame != 0)
+		{
+			return QStringLiteral("invalid_parameter");
+		}
 		for (size_t i = 0; i < comp.segments.size(); ++i)
 		{
 			const auto& segment = comp.segments[i];
 			if (segment.selectionIndex >= request.selections.size()
-				|| !isValidRange(segment.sourceFrames) || !isValidRange(segment.outputFrames))
+				|| !isValidRange(segment.sourceFrames) || !isValidRange(segment.outputFrames)
+				|| segment.sourceFrames.outFrame - segment.sourceFrames.inFrame
+					!= segment.outputFrames.outFrame - segment.outputFrames.inFrame)
 			{
 				return QStringLiteral("invalid_parameter");
 			}
@@ -267,6 +279,10 @@ QString validateVocalEditRequest(const VocalEditRequest& request, const VocalEdi
 			const auto& selected = request.selections[segment.selectionIndex].sourceFrames;
 			if (segment.sourceFrames.inFrame < selected.inFrame || segment.sourceFrames.outFrame > selected.outFrame
 				|| (i && segment.outputFrames.inFrame < comp.segments[i - 1].outputFrames.inFrame))
+			{
+				return QStringLiteral("invalid_parameter");
+			}
+			if (i && segment.outputFrames.inFrame > comp.segments[i - 1].outputFrames.outFrame)
 			{
 				return QStringLiteral("invalid_parameter");
 			}
@@ -291,6 +307,8 @@ QString validateVocalEditRequest(const VocalEditRequest& request, const VocalEdi
 					return QStringLiteral("invalid_parameter");
 				}
 				const auto overlap = left.outputFrames.outFrame - right.outputFrames.inFrame;
+				const auto leftLength = left.outputFrames.outFrame - left.outputFrames.inFrame;
+				const auto rightLength = right.outputFrames.outFrame - right.outputFrames.inFrame;
 				if (boundaryIndex >= comp.boundaries.size())
 				{
 					return QStringLiteral("invalid_parameter");
@@ -299,6 +317,8 @@ QString validateVocalEditRequest(const VocalEditRequest& request, const VocalEdi
 				if (boundary.leftSegmentIndex != i || boundary.rightSegmentIndex != j
 					|| boundary.overlapFrames != overlap || boundary.overlapFrames <= 0
 					|| boundary.overlapFrames > limits.maxCrossfadeFrames
+					|| boundary.overlapFrames > leftLength / 2
+					|| boundary.overlapFrames > rightLength / 2
 					|| (boundary.law != VocalCrossfadeLaw::LinearAmplitude
 						&& boundary.law != VocalCrossfadeLaw::EqualPower))
 				{
@@ -318,6 +338,7 @@ QString validateVocalEditRequest(const VocalEditRequest& request, const VocalEdi
 		return QStringLiteral("invalid_parameter");
 	}
 	bool sawTimingMap = false;
+	size_t totalGainFadePoints = 0;
 	for (const auto& operation : request.operations)
 	{
 		const auto code = std::visit([&](const auto& value) -> QString {
@@ -332,6 +353,11 @@ QString validateVocalEditRequest(const VocalEditRequest& request, const VocalEdi
 				{
 					return QStringLiteral("resource_limit");
 				}
+				if (value.points.size() > limits.maxGainFadePoints - totalGainFadePoints)
+				{
+					return QStringLiteral("resource_limit");
+				}
+				totalGainFadePoints += value.points.size();
 				if (value.points.size() < 2)
 				{
 					return QStringLiteral("invalid_parameter");
@@ -347,10 +373,26 @@ QString validateVocalEditRequest(const VocalEditRequest& request, const VocalEdi
 					}
 					previous = point.renderInputFrame;
 				}
+				// An interior envelope edge must join the untouched region at unity.
+				// Clip-edge endpoints may be non-unity because there is no adjacent
+				// output frame on the outside of the rendered variant.
+				if ((value.points.front().renderInputFrame > inputRange->inFrame
+						&& value.points.front().gainDb != 0.0)
+					|| (value.points.back().renderInputFrame < inputRange->outFrame
+						&& value.points.back().gainDb != 0.0))
+				{
+					return QStringLiteral("invalid_parameter");
+				}
 				return QStringLiteral("ok");
 			}
 			else if constexpr (std::is_same_v<T, VocalFade>)
 			{
+				if (totalGainFadePoints > limits.maxGainFadePoints
+					|| 2 > limits.maxGainFadePoints - totalGainFadePoints)
+				{
+					return QStringLiteral("resource_limit");
+				}
+				totalGainFadePoints += 2;
 				if (sawTimingMap || !isValidRange(value.renderInputFrames)
 					|| value.renderInputFrames.inFrame < inputRange->inFrame
 					|| value.renderInputFrames.outFrame > inputRange->outFrame
@@ -359,6 +401,13 @@ QString validateVocalEditRequest(const VocalEditRequest& request, const VocalEdi
 					|| value.endGainDb < limits.minimumGainDb || value.endGainDb > limits.maximumGainDb
 					|| (value.curve != VocalFadeCurve::LinearAmplitude
 						&& value.curve != VocalFadeCurve::EqualPower))
+				{
+					return QStringLiteral("invalid_parameter");
+				}
+				if ((value.renderInputFrames.inFrame > inputRange->inFrame
+						&& value.startGainDb != 0.0)
+					|| (value.renderInputFrames.outFrame < inputRange->outFrame
+						&& value.endGainDb != 0.0))
 				{
 					return QStringLiteral("invalid_parameter");
 				}
@@ -371,7 +420,30 @@ QString validateVocalEditRequest(const VocalEditRequest& request, const VocalEdi
 					return QStringLiteral("invalid_parameter");
 				}
 				sawTimingMap = true;
+				if (!std::isfinite(value.strength) || value.strength < 0.0 || value.strength > 1.0)
+				{
+					return QStringLiteral("invalid_parameter");
+				}
+				if (!std::isfinite(value.minimumLocalStretchRatio)
+					|| !std::isfinite(value.maximumLocalStretchRatio)
+					|| value.minimumLocalStretchRatio < limits.minimumLocalStretchRatio
+					|| value.maximumLocalStretchRatio > limits.maximumLocalStretchRatio
+					|| value.minimumLocalStretchRatio > value.maximumLocalStretchRatio)
+				{
+					return QStringLiteral("invalid_parameter");
+				}
+				if (value.strength == 0.0
+					&& std::any_of(value.anchors.begin(), value.anchors.end(), [](const VocalTimingAnchor& anchor) {
+						return anchor.preAnchorCrossfadeFrames != 0;
+					}))
+				{
+					return QStringLiteral("invalid_parameter");
+				}
 				if (value.anchors.size() > limits.maxTimingAnchors)
+				{
+					return QStringLiteral("resource_limit");
+				}
+				if (value.protectedRenderInputFrames.size() > (limits.maxTimingAnchors - value.anchors.size()) / 2)
 				{
 					return QStringLiteral("resource_limit");
 				}
@@ -380,7 +452,9 @@ QString validateVocalEditRequest(const VocalEditRequest& request, const VocalEdi
 					return QStringLiteral("invalid_parameter");
 				}
 				if (value.anchors.front().renderInputFrame != inputRange->inFrame
-					|| value.anchors.back().renderInputFrame != inputRange->outFrame)
+					|| value.anchors.back().renderInputFrame != inputRange->outFrame
+					|| value.anchors.front().preAnchorCrossfadeFrames != 0
+					|| value.anchors.back().preAnchorCrossfadeFrames != 0)
 				{
 					return QStringLiteral("invalid_parameter");
 				}
@@ -391,9 +465,14 @@ QString validateVocalEditRequest(const VocalEditRequest& request, const VocalEdi
 				{
 					if (anchor.renderInputFrame <= previousInput || anchor.renderInputFrame < inputRange->inFrame
 						|| anchor.renderInputFrame > inputRange->outFrame
-						|| bool(anchor.outputFrame) == bool(anchor.targetTick))
+						|| bool(anchor.outputFrame) == bool(anchor.targetTick)
+						|| anchor.preAnchorCrossfadeFrames < 0
+						|| anchor.preAnchorCrossfadeFrames > limits.maxCrossfadeFrames
+						|| (anchor.crossfadeLaw != VocalCrossfadeLaw::LinearAmplitude
+							&& anchor.crossfadeLaw != VocalCrossfadeLaw::EqualPower))
 					{
-						return QStringLiteral("invalid_parameter");
+						return anchor.preAnchorCrossfadeFrames > limits.maxCrossfadeFrames
+							? QStringLiteral("resource_limit") : QStringLiteral("invalid_parameter");
 					}
 					if (anchor.outputFrame)
 					{

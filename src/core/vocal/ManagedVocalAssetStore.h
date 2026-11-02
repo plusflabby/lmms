@@ -29,17 +29,20 @@ struct ManagedVocalAssetPublishResult
 struct ManagedVocalAssetInspectResult
 {
 	QString code;
+	QString projectId;
 	QString assetId;
 	QString mediaSha256;
 	QString manifestSha256;
 	QString recipeHash;
 	QString rendererId;
 	QString rendererVersion;
+	ManagedVocalVariantReference reference;
 	quint64 frames = 0;
 	int sampleRate = 0;
 	int channels = 0;
 	ManagedVocalMedia media;
 	size_t sourceCount = 0;
+	std::vector<ManagedVocalSourceProvenance> sources;
 };
 
 struct ManagedVocalAssetOpenResult
@@ -103,6 +106,7 @@ public:
 		std::unique_ptr<ManagedVocalAssetWriter> writer,
 		ManagedVocalManifest manifest);
 	ManagedVocalAssetInspectResult inspect(const ManagedVocalVariantReference& reference) const;
+	ManagedVocalAssetInspectResult inspectById(const QString& assetId, const QString& expectedProjectId = {}) const;
 	// Internal native use only. The manifest includes private authorized source references.
 	ManagedVocalAssetOpenResult openVerified(const ManagedVocalVariantReference& reference) const;
 	ManagedVocalAssetRecoveryScanResult scanRecovery(size_t limit = 128) const;

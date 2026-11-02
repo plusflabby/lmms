@@ -48,12 +48,15 @@ struct ManagedVocalMedia
 	QString pcmSha256;
 	double peak = 0.0;
 	bool overrange = false;
+	double rms = 0.0;
+	bool rmsKnown = false;
 };
 
 struct ManagedVocalManifest
 {
-	quint32 schemaVersion = 1;
+	quint32 schemaVersion = 2;
 	QString assetId;
+	QString projectId;
 	QString assetRootId;
 	ManagedVocalMedia media;
 	QString recipeHash;

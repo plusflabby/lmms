@@ -223,6 +223,8 @@ ManagedVocalWaveReadResult ManagedVocalWaveReader::read(
 		return failure(QStringLiteral("invalid_source"));
 	}
 	QCryptographicHash digest(QCryptographicHash::Sha256);
+	long double sumSquares = 0.0L;
+	quint64 measuredSamples = 0;
 	const quint64 blockBytes = (65536 / blockAlign) * blockAlign;
 	QByteArray block(int(blockBytes), Qt::Uninitialized);
 	quint64 remaining = dataBytes;
@@ -246,6 +248,8 @@ ManagedVocalWaveReadResult ManagedVocalWaveReader::read(
 			const auto magnitude = std::abs(double(sample));
 			result.info.peak = std::max(result.info.peak, magnitude);
 			result.info.overrange = result.info.overrange || magnitude > 1.0;
+			sumSquares += static_cast<long double>(sample) * static_cast<long double>(sample);
+			++measuredSamples;
 			if (retainSamples)
 			{
 				result.samples.push_back(sample);
@@ -254,6 +258,7 @@ ManagedVocalWaveReadResult ManagedVocalWaveReader::read(
 		remaining -= quint64(count);
 	}
 	result.info.pcmSha256 = QString::fromLatin1(digest.result().toHex());
+	result.info.rms = measuredSamples ? std::sqrt(double(sumSquares / measuredSamples)) : 0.0;
 	return result;
 }
 

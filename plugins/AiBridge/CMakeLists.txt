@@ -9,9 +9,14 @@ target_sources(aibridge PRIVATE AiBridgeAudioTypes.cpp AiBridgeAudioTypes.h)
 target_sources(aibridge PRIVATE AiBridgeVocalTypes.cpp AiBridgeVocalTypes.h)
 target_sources(aibridge PRIVATE AiBridgeVocalEditTypes.cpp AiBridgeVocalEditTypes.h)
 target_sources(aibridge PRIVATE AiBridgeVocalEditPlanner.cpp AiBridgeVocalEditPlanner.h)
+target_sources(aibridge PRIVATE AiBridgeVocalGainFade.cpp AiBridgeVocalGainFade.h)
+target_sources(aibridge PRIVATE AiBridgeVocalComp.cpp AiBridgeVocalComp.h)
+target_sources(aibridge PRIVATE AiBridgeVocalDspBackend.cpp AiBridgeVocalDspBackend.h)
 target_sources(aibridge PRIVATE AiBridgeVocalContext.cpp AiBridgeVocalContext.h AiBridgeVocalSource.cpp AiBridgeVocalSource.h)
 target_sources(aibridge PRIVATE AiBridgeVocalAnalysis.cpp AiBridgeVocalAnalysis.h)
 target_sources(aibridge PRIVATE AiBridgeVocalJobs.cpp AiBridgeVocalJobs.h)
+target_sources(aibridge PRIVATE AiBridgeVocalAssetActions.cpp AiBridgeVocalAssetActions.h)
+target_sources(aibridge PRIVATE AiBridgeVocalVariantAttachment.cpp AiBridgeVocalVariantAttachment.h)
 target_sources(aibridge PRIVATE AiBridgeVocalWire.cpp AiBridgeVocalWire.h AiBridgeVocalRequest.h)
 target_sources(aibridge PRIVATE AiBridgeVocalJobView.cpp AiBridgeVocalJobView.h)
 target_sources(aibridge PRIVATE AiBridgeVocalTrackActions.cpp AiBridgeVocalTrackActions.h)
@@ -27,6 +32,9 @@ target_sources(aibridge PRIVATE AiBridgeAudioWire.cpp AiBridgeAudioWire.h)
 target_sources(aibridge PRIVATE AiBridgeAudioRangePlanner.cpp AiBridgeAudioRangePlanner.h AiBridgeAudioRangeActions.cpp AiBridgeAudioRangeActions.h)
 target_sources(aibridge PRIVATE AiBridgeRecordingTypes.cpp AiBridgeRecordingTypes.h AiBridgeRecordingActions.cpp AiBridgeRecordingActions.h)
 target_include_directories(aibridge PRIVATE
+	${CMAKE_SOURCE_DIR}
+	${CMAKE_SOURCE_DIR}/src/3rdparty/signalsmith/stretch
+	${CMAKE_SOURCE_DIR}/src/3rdparty/signalsmith/linear/include
 	${CMAKE_SOURCE_DIR}/plugins/Amplifier
 	${CMAKE_SOURCE_DIR}/plugins/Compressor
 	${CMAKE_SOURCE_DIR}/plugins/CrossoverEQ
