@@ -7,6 +7,8 @@ target_sources(aibridge PRIVATE AiBridgeProjectMutationGuard.cpp AiBridgeProject
 target_link_libraries(aibridge Qt${QT_VERSION_MAJOR}::Network)
 target_sources(aibridge PRIVATE AiBridgeAudioTypes.cpp AiBridgeAudioTypes.h)
 target_sources(aibridge PRIVATE AiBridgeVocalTypes.cpp AiBridgeVocalTypes.h)
+target_sources(aibridge PRIVATE AiBridgeVocalEditTypes.cpp AiBridgeVocalEditTypes.h)
+target_sources(aibridge PRIVATE AiBridgeVocalEditPlanner.cpp AiBridgeVocalEditPlanner.h)
 target_sources(aibridge PRIVATE AiBridgeVocalContext.cpp AiBridgeVocalContext.h AiBridgeVocalSource.cpp AiBridgeVocalSource.h)
 target_sources(aibridge PRIVATE AiBridgeVocalAnalysis.cpp AiBridgeVocalAnalysis.h)
 target_sources(aibridge PRIVATE AiBridgeVocalJobs.cpp AiBridgeVocalJobs.h)
