@@ -1,4 +1,5 @@
 #include "ManagedVocalAssetTypes.h"
+#include "ManagedVocalPlayback.h"
 
 #include <QCryptographicHash>
 #include <QJsonDocument>
@@ -7,6 +8,7 @@
 #include <algorithm>
 #include <cmath>
 #include <limits>
+#include <numeric>
 #include <utility>
 #include <QSet>
 
@@ -86,6 +88,18 @@ bool parseSignedFrame(const QString& text, qint64& value)
 		return false;
 	}
 	value = qint64(parsed);
+	return true;
+}
+
+bool parseCanonicalSigned(const QString& text, qint64& value)
+{
+	bool ok = false;
+	const auto parsed = text.toLongLong(&ok, 10);
+	if (!ok || QString::number(parsed) != text)
+	{
+		return false;
+	}
+	value = parsed;
 	return true;
 }
 
@@ -212,6 +226,154 @@ bool readSource(const QJsonObject& object, ManagedVocalSourceProvenance& source)
 	{
 		return false;
 	}
+	return true;
+}
+
+bool validVariantReference(const ManagedVocalVariantReference& reference)
+{
+	return uuid(reference.assetId) && digest(reference.assetRootId) && digest(reference.mediaSha256)
+		&& digest(reference.manifestSha256) && reference.frames > 0
+		&& (reference.sampleRate == 44100 || reference.sampleRate == 48000)
+		&& (reference.channels == 1 || reference.channels == 2)
+		&& reference.frames <= quint64(reference.sampleRate) * 120;
+}
+
+bool validPlaybackContext(
+	const ManagedVocalPlaybackContext& playback,
+	const ManagedVocalVariantReference& reference)
+{
+	if (playback.tempoBpm < 10 || playback.tempoBpm > 999
+		|| playback.outputRate != reference.sampleRate || playback.ticksPerQuarterNote != 48
+		|| playback.timeSignatureNumerator < 1 || playback.timeSignatureNumerator > 32
+		|| playback.timeSignatureDenominator < 1 || playback.timeSignatureDenominator > 32
+		|| playback.visualLengthTicks <= 0
+		|| playback.visualLengthTicks > std::numeric_limits<qint32>::max()
+		|| playback.endpointResidualNumerator < 0 || playback.endpointResidualDenominator <= 0
+		|| !digest(playback.worldHash))
+	{
+		return false;
+	}
+	const auto extent = managedVocalVisualExtent(reference.frames, reference.sampleRate, playback.tempoBpm);
+	return extent.code == QStringLiteral("ok")
+		&& playback.visualLengthTicks == extent.visualLengthTicks
+		&& playback.nativeVisualCoverageFrames == extent.nativeCoverageFrames
+		&& playback.endpointResidualNumerator == extent.exactResidualNumerator
+		&& playback.endpointResidualDenominator == extent.exactResidualDenominator;
+}
+
+void writeReferenceAttributes(QDomElement& element, const ManagedVocalVariantReference& reference)
+{
+	element.setAttribute(QStringLiteral("asset_id"), reference.assetId);
+	element.setAttribute(QStringLiteral("asset_root_id"), reference.assetRootId);
+	element.setAttribute(QStringLiteral("media_sha256"), reference.mediaSha256);
+	element.setAttribute(QStringLiteral("manifest_sha256"), reference.manifestSha256);
+	element.setAttribute(QStringLiteral("frames"), QString::number(reference.frames));
+	element.setAttribute(QStringLiteral("sample_rate"), QString::number(reference.sampleRate));
+	element.setAttribute(QStringLiteral("channels"), QString::number(reference.channels));
+}
+
+bool readReferenceAttributes(const QDomElement& element, ManagedVocalVariantReference& reference,
+	bool allowAdditionalAttributes = false)
+{
+	if ((!allowAdditionalAttributes && element.attributes().count() != 7)
+		|| (allowAdditionalAttributes && element.attributes().count() < 7))
+	{
+		return false;
+	}
+	quint64 frames = 0;
+	quint64 rate = 0;
+	quint64 channels = 0;
+	if (!parseUnsigned(element.attribute(QStringLiteral("frames")), frames)
+		|| !parseUnsigned(element.attribute(QStringLiteral("sample_rate")), rate)
+		|| !parseUnsigned(element.attribute(QStringLiteral("channels")), channels)
+		|| rate > quint64(std::numeric_limits<int>::max())
+		|| channels > quint64(std::numeric_limits<int>::max()))
+	{
+		return false;
+	}
+	reference.assetId = element.attribute(QStringLiteral("asset_id"));
+	reference.assetRootId = element.attribute(QStringLiteral("asset_root_id"));
+	reference.mediaSha256 = element.attribute(QStringLiteral("media_sha256"));
+	reference.manifestSha256 = element.attribute(QStringLiteral("manifest_sha256"));
+	reference.frames = frames;
+	reference.sampleRate = int(rate);
+	reference.channels = int(channels);
+	return validVariantReference(reference);
+}
+
+void writePlaybackAttributes(QDomElement& element, const ManagedVocalPlaybackContext& playback)
+{
+	element.setAttribute(QStringLiteral("tempo_bpm"), QString::number(playback.tempoBpm));
+	element.setAttribute(QStringLiteral("output_rate"), QString::number(playback.outputRate));
+	element.setAttribute(QStringLiteral("ticks_per_quarter_note"),
+		QString::number(playback.ticksPerQuarterNote));
+	element.setAttribute(QStringLiteral("time_signature_numerator"),
+		QString::number(playback.timeSignatureNumerator));
+	element.setAttribute(QStringLiteral("time_signature_denominator"),
+		QString::number(playback.timeSignatureDenominator));
+	element.setAttribute(QStringLiteral("visual_length_ticks"), QString::number(playback.visualLengthTicks));
+	element.setAttribute(QStringLiteral("native_visual_coverage_frames"),
+		QString::number(playback.nativeVisualCoverageFrames));
+	element.setAttribute(QStringLiteral("endpoint_error_numerator"),
+		QString::number(playback.endpointResidualNumerator));
+	element.setAttribute(QStringLiteral("endpoint_error_denominator"),
+		QString::number(playback.endpointResidualDenominator));
+	element.setAttribute(QStringLiteral("world_hash"), playback.worldHash);
+}
+
+bool readPlaybackAttributes(const QDomElement& element, ManagedVocalPlaybackContext& playback,
+	bool allowAdditionalAttributes = false)
+{
+	const QStringList names{
+		QStringLiteral("tempo_bpm"), QStringLiteral("output_rate"), QStringLiteral("ticks_per_quarter_note"),
+		QStringLiteral("time_signature_numerator"), QStringLiteral("time_signature_denominator"),
+		QStringLiteral("visual_length_ticks"), QStringLiteral("native_visual_coverage_frames"),
+		QStringLiteral("endpoint_error_numerator"),
+		QStringLiteral("endpoint_error_denominator"), QStringLiteral("world_hash")
+	};
+	if ((!allowAdditionalAttributes && element.attributes().count() != names.size())
+		|| (allowAdditionalAttributes && element.attributes().count() < names.size()))
+	{
+		return false;
+	}
+	for (const auto& name : names)
+	{
+		if (!element.hasAttribute(name)) return false;
+	}
+	quint64 tempo = 0;
+	quint64 rate = 0;
+	quint64 ticksPerQuarterNote = 0;
+	quint64 timeSignatureNumerator = 0;
+	quint64 timeSignatureDenominator = 0;
+	quint64 nativeVisualCoverageFrames = 0;
+	if (!parseUnsigned(element.attribute(QStringLiteral("tempo_bpm")), tempo)
+		|| !parseUnsigned(element.attribute(QStringLiteral("output_rate")), rate)
+		|| !parseUnsigned(element.attribute(QStringLiteral("ticks_per_quarter_note")), ticksPerQuarterNote)
+		|| !parseUnsigned(element.attribute(QStringLiteral("time_signature_numerator")), timeSignatureNumerator)
+		|| !parseUnsigned(element.attribute(QStringLiteral("time_signature_denominator")), timeSignatureDenominator)
+		|| !parseUnsigned(element.attribute(QStringLiteral("native_visual_coverage_frames")),
+			nativeVisualCoverageFrames)
+		|| tempo > quint64(std::numeric_limits<int>::max())
+		|| rate > quint64(std::numeric_limits<int>::max())
+		|| ticksPerQuarterNote > quint64(std::numeric_limits<int>::max())
+		|| timeSignatureNumerator > quint64(std::numeric_limits<int>::max())
+		|| timeSignatureDenominator > quint64(std::numeric_limits<int>::max())
+		|| !parseSignedFrame(element.attribute(QStringLiteral("visual_length_ticks")),
+			playback.visualLengthTicks)
+		|| !parseSignedFrame(element.attribute(QStringLiteral("endpoint_error_numerator")),
+			playback.endpointResidualNumerator)
+		|| !parseSignedFrame(element.attribute(QStringLiteral("endpoint_error_denominator")),
+			playback.endpointResidualDenominator))
+	{
+		return false;
+	}
+	playback.tempoBpm = int(tempo);
+	playback.outputRate = int(rate);
+	playback.ticksPerQuarterNote = int(ticksPerQuarterNote);
+	playback.timeSignatureNumerator = int(timeSignatureNumerator);
+	playback.timeSignatureDenominator = int(timeSignatureDenominator);
+	playback.nativeVisualCoverageFrames = nativeVisualCoverageFrames;
+	playback.worldHash = element.attribute(QStringLiteral("world_hash"));
 	return true;
 }
 
@@ -373,6 +535,140 @@ ManagedVocalVariantReferenceResult makeManagedVocalVariantReference(
 	reference.sampleRate = manifest.media.sampleRate;
 	reference.channels = manifest.media.channels;
 	return {QStringLiteral("ok"), std::move(reference)};
+}
+
+QString validateManagedVocalVariantAssociation(const ManagedVocalVariantAssociation& association)
+{
+	if (association.schemaVersion != 1 || !validVariantReference(association.active)
+		|| (association.previousVariant && !validVariantReference(*association.previousVariant))
+		|| !validPlaybackContext(association.playback, association.active)
+		|| bool(association.previousVariant) != bool(association.previousPlayback)
+		|| association.originalLengthTicks <= 0
+		|| association.originalLengthTicks > std::numeric_limits<qint32>::max()
+		|| association.originalOffsetTicks < std::numeric_limits<qint32>::min()
+		|| association.originalOffsetTicks > std::numeric_limits<qint32>::max())
+	{
+		return QStringLiteral("invalid_managed_variant");
+	}
+	const auto& playback = association.playback;
+	if (playback.tempoBpm < 10 || playback.tempoBpm > 999
+		|| playback.outputRate != association.active.sampleRate
+		|| playback.ticksPerQuarterNote != 48
+		|| playback.timeSignatureNumerator < 1 || playback.timeSignatureNumerator > 32
+		|| playback.timeSignatureDenominator < 1 || playback.timeSignatureDenominator > 32
+		|| playback.visualLengthTicks <= 0
+		|| playback.visualLengthTicks > std::numeric_limits<qint32>::max()
+		|| playback.endpointResidualNumerator < 0 || playback.endpointResidualDenominator <= 0
+		|| !digest(playback.worldHash))
+	{
+		return QStringLiteral("invalid_managed_variant");
+	}
+	if (association.previousVariant)
+	{
+		if (!validPlaybackContext(*association.previousPlayback, *association.previousVariant))
+		{
+			return QStringLiteral("invalid_managed_variant");
+		}
+	}
+	return QStringLiteral("ok");
+}
+
+QDomElement writeManagedVocalVariantAssociation(
+	QDomDocument& document,
+	const ManagedVocalVariantAssociation& association)
+{
+	if (validateManagedVocalVariantAssociation(association) != QStringLiteral("ok"))
+	{
+		return {};
+	}
+	auto element = document.createElement(QStringLiteral("managed_vocal_variant"));
+	element.setAttribute(QStringLiteral("schema"), QString::number(association.schemaVersion));
+	writeReferenceAttributes(element, association.active);
+	writePlaybackAttributes(element, association.playback);
+	element.setAttribute(QStringLiteral("original_auto_resize"), association.originalAutoResize ? "1" : "0");
+	element.setAttribute(QStringLiteral("original_length_ticks"), QString::number(association.originalLengthTicks));
+	element.setAttribute(QStringLiteral("original_offset_ticks"), QString::number(association.originalOffsetTicks));
+	if (association.previousVariant)
+	{
+		auto previous = document.createElement(QStringLiteral("previous_variant"));
+		writeReferenceAttributes(previous, *association.previousVariant);
+		writePlaybackAttributes(previous, *association.previousPlayback);
+		element.appendChild(previous);
+	}
+	return element;
+}
+
+ManagedVocalVariantAssociationResult readManagedVocalVariantAssociation(const QDomElement& element)
+{
+	const QStringList expectedAttributes{
+		QStringLiteral("schema"), QStringLiteral("asset_id"), QStringLiteral("asset_root_id"),
+		QStringLiteral("media_sha256"), QStringLiteral("manifest_sha256"), QStringLiteral("frames"),
+		QStringLiteral("sample_rate"), QStringLiteral("channels"), QStringLiteral("tempo_bpm"),
+		QStringLiteral("output_rate"), QStringLiteral("ticks_per_quarter_note"),
+		QStringLiteral("time_signature_numerator"), QStringLiteral("time_signature_denominator"),
+		QStringLiteral("visual_length_ticks"),
+		QStringLiteral("native_visual_coverage_frames"),
+		QStringLiteral("endpoint_error_numerator"), QStringLiteral("endpoint_error_denominator"),
+		QStringLiteral("world_hash"), QStringLiteral("original_auto_resize"),
+		QStringLiteral("original_length_ticks"), QStringLiteral("original_offset_ticks")
+	};
+	if (element.isNull() || element.tagName() != QStringLiteral("managed_vocal_variant")
+		|| element.attributes().count() != expectedAttributes.size())
+	{
+		return {QStringLiteral("invalid_managed_variant"), {}};
+	}
+	for (const auto& name : expectedAttributes)
+	{
+		if (!element.hasAttribute(name))
+		{
+			return {QStringLiteral("invalid_managed_variant"), {}};
+		}
+	}
+	ManagedVocalVariantAssociation association;
+	quint64 schema = 0;
+	if (!parseUnsigned(element.attribute(QStringLiteral("schema")), schema)
+		|| schema > std::numeric_limits<quint32>::max()
+		|| !readReferenceAttributes(element, association.active, true)
+		|| !readPlaybackAttributes(element, association.playback, true)
+		|| (element.attribute(QStringLiteral("original_auto_resize")) != QStringLiteral("0")
+			&& element.attribute(QStringLiteral("original_auto_resize")) != QStringLiteral("1"))
+		|| !parseSignedFrame(element.attribute(QStringLiteral("original_length_ticks")),
+			association.originalLengthTicks)
+		|| !parseCanonicalSigned(element.attribute(QStringLiteral("original_offset_ticks")),
+			association.originalOffsetTicks))
+	{
+		return {QStringLiteral("invalid_managed_variant"), {}};
+	}
+	association.schemaVersion = quint32(schema);
+	association.originalAutoResize = element.attribute(QStringLiteral("original_auto_resize")) == QStringLiteral("1");
+	for (auto child = element.firstChild(); !child.isNull(); child = child.nextSibling())
+	{
+		if (child.isText() && child.nodeValue().trimmed().isEmpty())
+		{
+			continue;
+		}
+		if (!child.isElement() || child.toElement().tagName() != QStringLiteral("previous_variant")
+			|| association.previousVariant)
+		{
+			return {QStringLiteral("invalid_managed_variant"), {}};
+		}
+		ManagedVocalVariantReference previous;
+		const auto previousElement = child.toElement();
+		ManagedVocalPlaybackContext previousPlayback;
+		if (previousElement.attributes().count() != 17
+			|| !readReferenceAttributes(previousElement, previous, true)
+			|| !readPlaybackAttributes(previousElement, previousPlayback, true)
+			|| !previousElement.firstChild().isNull())
+		{
+			return {QStringLiteral("invalid_managed_variant"), {}};
+		}
+		association.previousVariant = std::move(previous);
+		association.previousPlayback = std::move(previousPlayback);
+	}
+	const auto code = validateManagedVocalVariantAssociation(association);
+	return code == QStringLiteral("ok")
+		? ManagedVocalVariantAssociationResult{code, std::move(association)}
+		: ManagedVocalVariantAssociationResult{code, {}};
 }
 
 } // namespace lmms

@@ -497,11 +497,16 @@ ManagedVocalAssetInspectResult ManagedVocalAssetStore::inspect(
 	const auto result = readVariant(reference, false);
 	if (result.code != QStringLiteral("ok") || !result.manifest)
 	{
-		return {result.code, {}, {}, {}, {}, {}, 0};
+		return {result.code};
 	}
 	ManagedVocalAssetInspectResult summary;
 	summary.code = QStringLiteral("ok");
-	summary.reference = reference;
+	summary.assetId = reference.assetId;
+	summary.mediaSha256 = reference.mediaSha256;
+	summary.manifestSha256 = reference.manifestSha256;
+	summary.frames = reference.frames;
+	summary.sampleRate = reference.sampleRate;
+	summary.channels = reference.channels;
 	summary.media = result.manifest->media;
 	summary.recipeHash = result.manifest->recipeHash;
 	summary.rendererId = result.manifest->rendererId;

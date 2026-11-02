@@ -29,6 +29,7 @@
 #include <QPainter>
 
 #include "Sample.h"
+#include "src/core/vocal/ManagedVocalPlayback.h"
 
 namespace {
 	constexpr auto MaxSampleThumbnailCacheSize = 32;
@@ -56,6 +57,30 @@ SampleThumbnail::Thumbnail::Thumbnail(const float* buffer, size_t size, size_t w
 	}
 }
 
+SampleThumbnail::Thumbnail::Thumbnail(
+	const float* interleavedBuffer, size_t frames, size_t channels, size_t width)
+	: m_peaks(width)
+	, m_samplesPerPeak(std::max(static_cast<double>(frames) / width, 1.0))
+{
+	for (auto peakIndex = std::size_t{0}; peakIndex < width; ++peakIndex)
+	{
+		const auto beginFrame = static_cast<size_t>(std::floor(peakIndex * m_samplesPerPeak));
+		const auto endFrame = std::min(frames,
+			std::max(beginFrame + 1, static_cast<size_t>(std::ceil((peakIndex + 1) * m_samplesPerPeak))));
+		Peak peak;
+		for (auto frame = beginFrame; frame < endFrame; ++frame)
+		{
+			for (auto channel = std::size_t{0}; channel < channels; ++channel)
+			{
+				const auto sample = interleavedBuffer[frame * channels + channel];
+				peak.min = std::min(peak.min, sample);
+				peak.max = std::max(peak.max, sample);
+			}
+		}
+		m_peaks[peakIndex] = peak;
+	}
+}
+
 SampleThumbnail::Thumbnail SampleThumbnail::Thumbnail::zoomOut(float factor) const
 {
 	assert(factor >= 1 && "Invalid zoom out factor");
@@ -74,6 +99,9 @@ SampleThumbnail::Thumbnail SampleThumbnail::Thumbnail::zoomOut(float factor) con
 SampleThumbnail::SampleThumbnail(const Sample& sample)
 	: m_buffer(sample.buffer())
 {
+	m_frameCount = m_buffer->size();
+	m_flatBuffer = m_buffer->data()->data();
+	m_flatBufferSize = m_frameCount * DEFAULT_CHANNELS;
 	auto entry = SampleThumbnailEntry{sample.sampleFile(), QFileInfo{sample.sampleFile()}.lastModified()};
 	if (!entry.filePath.isEmpty())
 	{
@@ -94,10 +122,28 @@ SampleThumbnail::SampleThumbnail(const Sample& sample)
 		s_sampleThumbnailCacheMap[std::move(entry)] = m_thumbnailCache;
 	}
 
-	const auto flatBuffer = m_buffer->data()->data();
-	const auto flatBufferSize = m_buffer->size() * DEFAULT_CHANNELS;
-	m_thumbnailCache->emplace_back(flatBuffer, flatBufferSize, flatBufferSize / AggregationPerZoomStep);
+	if (!m_flatBufferSize) return;
+	m_thumbnailCache->emplace_back(m_flatBuffer, m_flatBufferSize,
+		std::max<size_t>(m_flatBufferSize / AggregationPerZoomStep, 1));
 
+	while (m_thumbnailCache->back().width() >= AggregationPerZoomStep)
+	{
+		auto zoomedOutThumbnail = m_thumbnailCache->back().zoomOut(AggregationPerZoomStep);
+		m_thumbnailCache->emplace_back(std::move(zoomedOutThumbnail));
+	}
+}
+
+SampleThumbnail::SampleThumbnail(std::shared_ptr<const ManagedVocalPlaybackView> managedView)
+	: m_managedView(std::move(managedView))
+{
+	if (!m_managedView || !m_managedView->interleavedSamples) return;
+	m_frameCount = std::size_t(m_managedView->frames);
+	m_channels = std::size_t(m_managedView->channels);
+	m_flatBuffer = m_managedView->interleavedSamples->data();
+	m_flatBufferSize = m_managedView->interleavedSamples->size();
+	if (!m_flatBufferSize) return;
+	m_thumbnailCache->emplace_back(m_flatBuffer, m_frameCount, m_channels,
+		std::max<size_t>(m_frameCount / AggregationPerZoomStep, 1));
 	while (m_thumbnailCache->back().width() >= AggregationPerZoomStep)
 	{
 		auto zoomedOutThumbnail = m_thumbnailCache->back().zoomOut(AggregationPerZoomStep);
@@ -107,6 +153,10 @@ SampleThumbnail::SampleThumbnail(const Sample& sample)
 
 void SampleThumbnail::visualize(VisualizeParameters parameters, QPainter& painter) const
 {
+	if (!m_flatBuffer || !m_frameCount || m_thumbnailCache->empty())
+	{
+		return;
+	}
 	const auto& sampleRect = parameters.sampleRect;
 	const auto& viewportRect = parameters.viewportRect.isNull() ? sampleRect : parameters.viewportRect;
 
@@ -121,7 +171,7 @@ void SampleThumbnail::visualize(VisualizeParameters parameters, QPainter& painte
 		[&](const auto& thumbnail) { return thumbnail.width() >= targetThumbnailWidth; });
 
 	const auto useOriginalBuffer = finerThumbnail == m_thumbnailCache->rend();
-	const auto drawOriginalBuffer = static_cast<size_t>(targetThumbnailWidth) == m_buffer->size();
+	const auto drawOriginalBuffer = static_cast<size_t>(targetThumbnailWidth) == m_frameCount;
 
 	painter.save();
 	painter.setRenderHint(QPainter::Antialiasing, true);
@@ -132,7 +182,7 @@ void SampleThumbnail::visualize(VisualizeParameters parameters, QPainter& painte
 	const auto thumbnailEnd = parameters.reversed ? targetThumbnailWidth - thumbnailEndForward : thumbnailEndForward;
 	const auto advanceThumbnailBy = parameters.reversed ? -1 : 1;
 
-	const auto finerThumbnailWidth = useOriginalBuffer ? m_buffer->size() : finerThumbnail->width();
+	const auto finerThumbnailWidth = useOriginalBuffer ? m_frameCount : finerThumbnail->width();
 	const auto finerThumbnailScaleFactor = static_cast<double>(finerThumbnailWidth) / targetThumbnailWidth;
 	const auto yScale = renderRect.height() / 2 * parameters.amplification;
 
@@ -141,8 +191,17 @@ void SampleThumbnail::visualize(VisualizeParameters parameters, QPainter& painte
 	{
 		if (useOriginalBuffer && drawOriginalBuffer)
 		{
-			const auto value = m_buffer->data()->data()[i];
-			painter.drawPoint(x, renderRect.center().y() - value * yScale);
+			if (m_channels == 1)
+			{
+				painter.drawPoint(x, renderRect.center().y() - m_flatBuffer[i] * yScale);
+			}
+			else
+			{
+				const auto* frame = m_flatBuffer + std::size_t(i) * m_channels;
+				const auto [minimum, maximum] = std::minmax_element(frame, frame + m_channels);
+				painter.drawLine(x, renderRect.center().y() - *minimum * yScale,
+					x, renderRect.center().y() - *maximum * yScale);
+			}
 			continue;
 		}
 		else
@@ -155,8 +214,7 @@ void SampleThumbnail::visualize(VisualizeParameters parameters, QPainter& painte
 
 			if (useOriginalBuffer)
 			{
-				const auto flatBuffer = m_buffer->data()->data();
-				const auto [min, max] = std::minmax_element(flatBuffer + beginIndex, flatBuffer + endIndex);
+				const auto [min, max] = std::minmax_element(m_flatBuffer + beginIndex, m_flatBuffer + endIndex);
 				minPeak = *min;
 				maxPeak = *max;
 			}

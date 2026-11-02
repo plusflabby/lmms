@@ -137,7 +137,8 @@ private slots:
 
 		const auto inspection = store.inspect(*published.value);
 		QCOMPARE(inspection.code, QStringLiteral("ok"));
-		QVERIFY(inspection.reference);
+		QCOMPARE(inspection.assetId, published.value->assetId);
+		QVERIFY(!inspection.mediaSha256.isEmpty());
 		const auto opened = store.openVerified(*published.value);
 		QCOMPARE(opened.code, QStringLiteral("ok"));
 		QCOMPARE(opened.samples, std::vector<float>({0.0f, 0.5f, -1.25f}));

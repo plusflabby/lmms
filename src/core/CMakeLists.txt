@@ -6,6 +6,9 @@ set(LMMS_SRCS
 	core/vocal/ManagedVocalAssetTypes.cpp
 	core/vocal/ManagedVocalAssetRoot.cpp
 	core/vocal/ManagedVocalAssetStore.cpp
+	core/vocal/ManagedVocalPlayback.cpp
+	core/vocal/ManagedVocalPlaybackCache.cpp
+	core/ManagedVocalPlayHandle.cpp
 	core/recording/RecordingDuplexTypes.cpp
 	core/recording/RecordingOutputQueue.cpp
 	core/recording/RecordingTypes.cpp

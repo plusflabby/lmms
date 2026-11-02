@@ -82,6 +82,65 @@ private slots:
 		value.sources.front().sourceFrames = {48000, 0};
 		QVERIFY(encodeManagedVocalManifest(value).isEmpty());
 	}
+
+	void roundTripsNativeAssociationWithoutPersistingSourcePaths()
+	{
+		const auto original = manifest();
+		const auto encoded = encodeManagedVocalManifest(original);
+		const auto ref = makeManagedVocalVariantReference(original, encoded);
+		QVERIFY(ref.value);
+		ManagedVocalVariantAssociation association;
+		association.active = *ref.value;
+		association.previousVariant = *ref.value;
+		association.playback.tempoBpm = 120;
+		association.playback.outputRate = 48000;
+		association.playback.ticksPerQuarterNote = 48;
+		association.playback.timeSignatureNumerator = 4;
+		association.playback.timeSignatureDenominator = 4;
+		association.playback.visualLengthTicks = 96;
+		association.playback.nativeVisualCoverageFrames = 48000;
+		association.playback.endpointResidualNumerator = 0;
+		association.playback.endpointResidualDenominator = 1;
+		association.playback.worldHash = digest('f');
+		association.previousPlayback = association.playback;
+		association.originalLengthTicks = 1;
+		QCOMPARE(validateManagedVocalVariantAssociation(association), QStringLiteral("ok"));
+
+		QDomDocument document;
+		const auto element = writeManagedVocalVariantAssociation(document, association);
+		QVERIFY(!element.isNull());
+		QVERIFY(!document.toString().contains(QStringLiteral("C:/Authorized")));
+		const auto parsed = readManagedVocalVariantAssociation(element);
+		QCOMPARE(parsed.code, QStringLiteral("ok"));
+		QVERIFY(parsed.value);
+		QCOMPARE(parsed.value->active.assetId, association.active.assetId);
+		QCOMPARE(parsed.value->previousVariant->manifestSha256, association.previousVariant->manifestSha256);
+		QCOMPARE(parsed.value->playback.visualLengthTicks, qint64(96));
+		QCOMPARE(parsed.value->playback.nativeVisualCoverageFrames, quint64(48000));
+
+		auto altered = element.cloneNode(true).toElement();
+		altered.setAttribute(QStringLiteral("source_path"), QStringLiteral("C:/secret.wav"));
+		QCOMPARE(readManagedVocalVariantAssociation(altered).code, QStringLiteral("invalid_managed_variant"));
+	}
+
+	void rejectsInconsistentNativeVisualCoverage()
+	{
+		auto association = ManagedVocalVariantAssociation{};
+		const auto source = manifest();
+		const auto encoded = encodeManagedVocalManifest(source);
+		const auto reference = makeManagedVocalVariantReference(source, encoded);
+		QVERIFY(reference.value);
+		association.active = *reference.value;
+		association.playback.tempoBpm = 120;
+		association.playback.outputRate = 48000;
+		association.playback.visualLengthTicks = 96;
+		association.playback.nativeVisualCoverageFrames = 47999;
+		association.playback.endpointResidualNumerator = 0;
+		association.playback.endpointResidualDenominator = 1;
+		association.playback.worldHash = digest('f');
+		association.originalLengthTicks = 1;
+		QCOMPARE(validateManagedVocalVariantAssociation(association), QStringLiteral("invalid_managed_variant"));
+	}
 };
 
 QTEST_APPLESS_MAIN(ManagedVocalAssetTypesTest)

@@ -29,7 +29,13 @@
 #include <QThread>
 #include <QScopeGuard>
 #include <QSignalBlocker>
+#include <QMetaObject>
+#include <new>
 #include "AudioWindowPlayback.h"
+#include "src/core/vocal/ManagedVocalAssetRoot.h"
+#include "src/core/vocal/ManagedVocalAssetStore.h"
+#include "src/core/vocal/ManagedVocalPlaybackCache.h"
+#include "ConfigManager.h"
 
 #include "PatternStore.h"
 #include "PathUtil.h"
@@ -62,6 +68,28 @@ void storePublishedAudioWindowView(std::shared_ptr<const AudioWindowPlaybackView
 {
 	std::atomic_store_explicit(&view, std::move(replacement), std::memory_order_release);
 }
+
+std::shared_ptr<const ManagedVocalPlaybackView> loadPublishedManagedVocalView(
+	const std::shared_ptr<const ManagedVocalPlaybackView>& view)
+{
+	return std::atomic_load_explicit(&view, std::memory_order_acquire);
+}
+
+void storePublishedManagedVocalView(std::shared_ptr<const ManagedVocalPlaybackView>& view,
+	std::shared_ptr<const ManagedVocalPlaybackView> replacement)
+{
+	std::atomic_store_explicit(&view, std::move(replacement), std::memory_order_release);
+}
+
+bool sameManagedVocalReference(const ManagedVocalVariantReference& left,
+	const ManagedVocalVariantReference& right)
+{
+	return left.assetId == right.assetId && left.assetRootId == right.assetRootId
+		&& left.mediaSha256 == right.mediaSha256 && left.manifestSha256 == right.manifestSha256
+		&& left.frames == right.frames && left.sampleRate == right.sampleRate
+		&& left.channels == right.channels;
+}
+
 #if defined(__clang__)
 #pragma clang diagnostic pop
 #elif defined(__GNUC__)
@@ -99,6 +127,7 @@ SampleClip::SampleClip(Track* _track, Sample sample, bool isPlaying):
 	connect( this, SIGNAL(positionChanged()), this, SLOT(updateTrackClips()));
 
 	initializeAudioWindowConnections();
+	initializeManagedVocalConnections();
 	updateTrackClips();
 }
 
@@ -111,6 +140,8 @@ SampleClip::SampleClip(const SampleClip& orig) : SampleClip(orig,orig.getTrack()
 
 SampleClip::SampleClip(const SampleClip& orig, Track* target) :
 	Clip(orig,target),
+	m_managedVocalAssociation(orig.m_managedVocalAssociation),
+	m_managedVocalVariantStatus(orig.m_managedVocalVariantStatus),
 	m_sample(std::move(orig.m_sample)),
 	m_unavailableSampleFile(orig.m_unavailableSampleFile),
 	m_sourceLoadError(orig.m_sourceLoadError),
@@ -130,6 +161,11 @@ SampleClip::SampleClip(const SampleClip& orig, Track* target) :
 	if (m_audioWindowStorage.kind == AudioWindowStorageKind::InvalidMetadata)
 	{
 		m_audioWindowStorage.retainedInvalidXml = orig.m_audioWindowStorage.retainedInvalidXml.cloneNode(true).toDocument();
+	}
+	if (!orig.m_unavailableManagedVocalVariants.isNull())
+	{
+		m_unavailableManagedVocalVariants =
+			orig.m_unavailableManagedVocalVariants.cloneNode(true).toDocument();
 	}
 	// we need to receive bpm-change-events, because then we have to
 	// change length of this Clip
@@ -152,6 +188,7 @@ SampleClip::SampleClip(const SampleClip& orig, Track* target) :
 	connect( this, SIGNAL(positionChanged()), this, SLOT(updateTrackClips()));
 
 	initializeAudioWindowConnections();
+	initializeManagedVocalConnections();
 	updateTrackClips();
 }
 
@@ -160,7 +197,11 @@ SampleClip::SampleClip(const SampleClip& orig, Track* target) :
 
 SampleClip::~SampleClip()
 {
+	m_managedVocalPlaybackLoadTimer.stop();
+	m_managedVocalPlaybackLoadTicket.reset();
 	m_audioWindowGuard->epoch.fetch_add(1,std::memory_order_acq_rel);
+	m_managedVocalPlaybackGuard->epoch.fetch_add(1, std::memory_order_acq_rel);
+	storePublishedManagedVocalView(m_managedVocalPlaybackView, {});
 	auto sampletrack = dynamic_cast<SampleTrack*>(getTrack());
 	if ( sampletrack )
 	{
@@ -343,6 +384,534 @@ void SampleClip::refreshAudioWindowPlayback()
 	emit audioWindowStatusChanged(code);
 }
 
+std::shared_ptr<const ManagedVocalPlaybackView> SampleClip::managedVocalPlaybackView() const
+{
+	auto view = loadPublishedManagedVocalView(m_managedVocalPlaybackView);
+	if (view && view->guard
+		&& view->guard->epoch.load(std::memory_order_acquire) == view->expectedEpoch)
+	{
+		return view;
+	}
+	return {};
+}
+
+void SampleClip::setManagedVocalVariantStatus(const QString& status)
+{
+	if (m_managedVocalVariantStatus == status)
+	{
+		return;
+	}
+	m_managedVocalVariantStatus = status;
+	emit managedVocalVariantStatusChanged(status);
+}
+
+ManagedVocalPlaybackPreparation SampleClip::prepareManagedVocalPlayback(
+	const ManagedVocalVariantAssociation& association,
+	std::shared_ptr<const std::vector<float>> samples,
+	std::shared_ptr<const ManagedVocalPlaybackGuard> guard,
+	quint64 expectedEpoch,
+	bool autoResize,
+	bool checkGeometry) const
+{
+	if (hasAudioSourceWindow() || association.playback.visualLengthTicks <= 0)
+	{
+		return {QStringLiteral("unsupported_clip_state"), {}};
+	}
+	if (QThread::currentThread() != thread())
+	{
+		return {QStringLiteral("wrong_thread"), {}};
+	}
+	auto* song = Engine::getSong();
+	const auto rate = int(Engine::audioEngine()->outputSampleRate());
+	const auto numerator = song->getTimeSigModel().getNumerator();
+	const auto denominator = song->getTimeSigModel().getDenominator();
+	if (numerator <= 0 || denominator <= 0)
+	{
+		return {QStringLiteral("unsupported_playback_world"), {}};
+	}
+	const auto ticksPerQuarterNote = DefaultTicksPerBar / 4;
+	const ManagedVocalPlaybackWorld world{song->getTempo(), rate, ticksPerQuarterNote,
+		song->tempoModel().isAutomatedOrControlled(), numerator, denominator};
+	if (world.tempoAutomationPresent || world.tempoBpm != association.playback.tempoBpm
+		|| world.outputRate != association.playback.outputRate
+		|| world.ticksPerQuarterNote != association.playback.ticksPerQuarterNote
+		|| world.timeSignatureNumerator != association.playback.timeSignatureNumerator
+		|| world.timeSignatureDenominator != association.playback.timeSignatureDenominator)
+	{
+		return {QStringLiteral("unsupported_playback_world"), {}};
+	}
+	const auto visualExtent = managedVocalVisualExtent(
+		association.active.frames, association.active.sampleRate, world.tempoBpm);
+	if (visualExtent.code != QStringLiteral("ok")
+		|| visualExtent.visualLengthTicks != association.playback.visualLengthTicks
+		|| visualExtent.nativeCoverageFrames != association.playback.nativeVisualCoverageFrames
+		|| visualExtent.exactResidualNumerator != association.playback.endpointResidualNumerator
+		|| visualExtent.exactResidualDenominator != association.playback.endpointResidualDenominator)
+	{
+		return {QStringLiteral("unrepresentable_audio_boundary"), {}};
+	}
+	if (m_sample.reversed() || autoResize || m_sample.frequency() != DefaultBaseFreq
+		|| startTimeOffset().getTicks() != 0)
+	{
+		return {QStringLiteral("unsupported_clip_state"), {}};
+	}
+	if (checkGeometry && length().getTicks() != association.playback.visualLengthTicks)
+	{
+		return {QStringLiteral("unrepresentable_audio_boundary"), {}};
+	}
+	if (!samples || samples->size() != std::size_t(association.active.frames)
+		* std::size_t(association.active.channels))
+	{
+		return {QStringLiteral("asset_integrity_failed"), {}};
+	}
+	return makeManagedVocalPlaybackView(std::move(samples), association.active.sampleRate,
+		association.active.channels, world, false, false, std::move(guard), expectedEpoch, m_sample.amplification());
+}
+
+QString SampleClip::requestManagedVocalAsset(
+	const ManagedVocalVariantReference& reference,
+	std::shared_ptr<const std::vector<float>>& samples)
+{
+	if (QThread::currentThread() != thread()) return QStringLiteral("wrong_thread");
+	auto approval = ManagedVocalAssetRoot::authorizeConfiguredRoot();
+	if (!approval.root) return approval.code;
+	if (approval.root->rootId() != reference.assetRootId)
+	{
+		return QStringLiteral("asset_root_mismatch");
+	}
+	if (m_managedVocalPreloadedSamples
+		&& sameManagedVocalReference(m_managedVocalPreloadedReference, reference))
+	{
+		samples = m_managedVocalPreloadedSamples;
+		return QStringLiteral("ok");
+	}
+	if (m_managedVocalPlaybackLoadTicket
+		&& sameManagedVocalReference(m_managedVocalPlaybackLoadingReference, reference))
+	{
+		if (!m_managedVocalPlaybackLoadTicket->isComplete())
+		{
+			return QStringLiteral("asset_loading");
+		}
+		pollManagedVocalPlaybackLoad();
+		if (m_managedVocalPreloadedSamples
+			&& sameManagedVocalReference(m_managedVocalPreloadedReference, reference))
+		{
+			samples = m_managedVocalPreloadedSamples;
+			return QStringLiteral("ok");
+		}
+		return m_managedVocalVariantStatus;
+	}
+	if (m_managedVocalPlaybackLoadTicket)
+	{
+		m_managedVocalPlaybackLoadTimer.stop();
+		m_managedVocalPlaybackLoadTicket.reset();
+	}
+	m_managedVocalPreloadedReference = {};
+	m_managedVocalPreloadedSamples.reset();
+	ManagedVocalAssetStore store(approval.root);
+	const auto request = ManagedVocalPlaybackCache::instance().requestLoad(store, reference);
+	if (request.code != QStringLiteral("ok") || !request.ticket)
+	{
+		if (request.code == QStringLiteral("job_busy"))
+		{
+			m_managedVocalPlaybackLoadingReference = reference;
+			if (!m_managedVocalAssociation
+				|| sameManagedVocalReference(m_managedVocalAssociation->active, reference))
+			{
+				m_managedVocalPlaybackLoadTimer.setInterval(100);
+				m_managedVocalPlaybackLoadTimer.start();
+				setManagedVocalVariantStatus(request.code);
+			}
+		}
+		return request.code;
+	}
+	if (request.ticket->isComplete())
+	{
+		const auto result = request.ticket->result();
+		if (result.code != QStringLiteral("ok") || !result.samples)
+		{
+			return result.code;
+		}
+		m_managedVocalPreloadedReference = reference;
+		m_managedVocalPreloadedSamples = result.samples;
+		samples = std::move(result.samples);
+		return QStringLiteral("ok");
+	}
+	m_managedVocalPlaybackLoadingReference = reference;
+	m_managedVocalPlaybackLoadTicket = request.ticket;
+	m_managedVocalPlaybackLoadTimer.setInterval(20);
+	m_managedVocalPlaybackLoadTimer.start();
+	if (!m_managedVocalAssociation
+		|| sameManagedVocalReference(m_managedVocalAssociation->active, reference))
+	{
+		setManagedVocalVariantStatus(QStringLiteral("asset_loading"));
+	}
+	return QStringLiteral("asset_loading");
+}
+
+void SampleClip::pollManagedVocalPlaybackLoad()
+{
+	if (QThread::currentThread() != thread())
+	{
+		return;
+	}
+	if (!m_managedVocalPlaybackLoadTicket)
+	{
+		if (m_managedVocalVariantStatus != QStringLiteral("job_busy")
+			|| m_managedVocalPlaybackLoadingReference.assetId.isEmpty())
+		{
+			return;
+		}
+		const auto reference = m_managedVocalPlaybackLoadingReference;
+		std::shared_ptr<const std::vector<float>> samples;
+		const auto code = requestManagedVocalAsset(reference, samples);
+		if (code == QStringLiteral("ok"))
+		{
+			m_managedVocalPlaybackLoadTimer.stop();
+			if (m_managedVocalAssociation
+				&& sameManagedVocalReference(m_managedVocalAssociation->active, reference))
+			{
+				refreshManagedVocalPlayback();
+			}
+			else if (!m_managedVocalAssociation)
+			{
+				setManagedVocalVariantStatus(QStringLiteral("asset_ready"));
+			}
+		}
+		else if (code != QStringLiteral("job_busy") && code != QStringLiteral("asset_loading"))
+		{
+			m_managedVocalPlaybackLoadTimer.stop();
+			setManagedVocalVariantStatus(code);
+		}
+		return;
+	}
+	if (!m_managedVocalPlaybackLoadTicket->isComplete()) return;
+	m_managedVocalPlaybackLoadTimer.stop();
+	const auto reference = m_managedVocalPlaybackLoadingReference;
+	auto ticket = std::move(m_managedVocalPlaybackLoadTicket);
+	const auto result = ticket->result();
+	if (result.code == QStringLiteral("ok") && result.samples
+		&& result.samples->size() == std::size_t(reference.frames) * std::size_t(reference.channels))
+	{
+		m_managedVocalPreloadedReference = reference;
+		m_managedVocalPreloadedSamples = result.samples;
+		if (m_managedVocalAssociation
+			&& sameManagedVocalReference(m_managedVocalAssociation->active, reference))
+		{
+			refreshManagedVocalPlayback();
+		}
+		else if (!m_managedVocalAssociation
+			&& m_managedVocalVariantStatus == QStringLiteral("asset_loading"))
+		{
+			setManagedVocalVariantStatus(QStringLiteral("asset_ready"));
+		}
+		return;
+	}
+	const auto code = result.code == QStringLiteral("ok")
+		? QStringLiteral("asset_integrity_failed") : result.code;
+	if (m_managedVocalAssociation
+		&& sameManagedVocalReference(m_managedVocalAssociation->active, reference))
+	{
+		setIsPlaying(false);
+		setManagedVocalVariantStatus(code);
+	}
+	else if (m_managedVocalVariantStatus == QStringLiteral("asset_loading"))
+	{
+		setManagedVocalVariantStatus(code);
+	}
+}
+
+void SampleClip::refreshManagedVocalPlayback()
+{
+	if (m_loadingManagedVocalAssociation.load(std::memory_order_acquire))
+	{
+		return;
+	}
+	if (QThread::currentThread() != thread())
+	{
+		QMetaObject::invokeMethod(this, [this] { refreshManagedVocalPlayback(); }, Qt::QueuedConnection);
+		return;
+	}
+	const auto previousView = managedVocalPlaybackView();
+	const auto expectedEpoch = m_managedVocalPlaybackGuard->epoch.fetch_add(1, std::memory_order_acq_rel) + 1;
+	storePublishedManagedVocalView(m_managedVocalPlaybackView, {});
+	if (!m_managedVocalAssociation)
+	{
+		if (!m_unavailableManagedVocalVariants.isNull())
+		{
+			setManagedVocalVariantStatus(QStringLiteral("invalid_managed_variant"));
+		}
+		else if (!m_managedVocalPlaybackLoadTicket)
+		{
+			setManagedVocalVariantStatus(QStringLiteral("ok"));
+		}
+		return;
+	}
+	std::shared_ptr<const std::vector<float>> samples;
+	if (previousView && m_managedVocalPreloadedSamples
+		&& sameManagedVocalReference(m_managedVocalAssociation->active, m_managedVocalPreloadedReference))
+	{
+		samples = previousView->interleavedSamples;
+	}
+	const auto loadCode = samples ? QStringLiteral("ok")
+		: requestManagedVocalAsset(m_managedVocalAssociation->active, samples);
+	if (loadCode == QStringLiteral("asset_loading"))
+	{
+		setManagedVocalVariantStatus(loadCode);
+		return;
+	}
+	if (loadCode != QStringLiteral("ok") || !samples)
+	{
+		setIsPlaying(false);
+		setManagedVocalVariantStatus(loadCode == QStringLiteral("ok")
+			? QStringLiteral("asset_integrity_failed") : loadCode);
+		return;
+	}
+	const auto prepared = prepareManagedVocalPlayback(*m_managedVocalAssociation,
+		std::move(samples), m_managedVocalPlaybackGuard, expectedEpoch, getAutoResize(), true);
+	if (prepared.code != QStringLiteral("ok") || !prepared.view
+		|| m_managedVocalPlaybackGuard->epoch.load(std::memory_order_acquire) != expectedEpoch)
+	{
+		setIsPlaying(false);
+		setManagedVocalVariantStatus(prepared.code == QStringLiteral("ok")
+			? QStringLiteral("plan_stale") : prepared.code);
+		return;
+	}
+	storePublishedManagedVocalView(m_managedVocalPlaybackView, prepared.view);
+	setManagedVocalVariantStatus(QStringLiteral("ok"));
+	emit sampleChanged();
+}
+
+void SampleClip::invalidateManagedVocalPlayback()
+{
+	if (!hasManagedVocalVariant() || m_loadingManagedVocalAssociation.load(std::memory_order_acquire))
+	{
+		return;
+	}
+	m_managedVocalPlaybackGuard->epoch.fetch_add(1, std::memory_order_acq_rel);
+	storePublishedManagedVocalView(m_managedVocalPlaybackView, {});
+	if (QThread::currentThread() == thread())
+	{
+		setIsPlaying(false);
+		refreshManagedVocalPlayback();
+	}
+	else
+	{
+		QMetaObject::invokeMethod(this, [this] {
+			setIsPlaying(false);
+			refreshManagedVocalPlayback();
+		}, Qt::QueuedConnection);
+	}
+}
+
+void SampleClip::initializeManagedVocalConnections()
+{
+	m_managedVocalPlaybackLoadTimer.setInterval(20);
+	connect(&m_managedVocalPlaybackLoadTimer, &QTimer::timeout,
+		this, &SampleClip::pollManagedVocalPlaybackLoad);
+	connect(Engine::getSong(), &Song::timeSignatureChanged, this,
+		[this](int, int) { invalidateManagedVocalPlayback(); }, Qt::DirectConnection);
+	connect(Engine::getSong(), &Song::tempoAutomationTopologyChanged, this,
+		[this] { invalidateManagedVocalPlayback(); }, Qt::DirectConnection);
+	connect(Engine::audioEngine(), &AudioEngine::sampleRateChanged, this,
+		[this] { invalidateManagedVocalPlayback(); }, Qt::DirectConnection);
+	connect(this, &Clip::lengthChanged, this, &SampleClip::invalidateManagedVocalPlayback,
+		Qt::DirectConnection);
+	connect(this, &SampleClip::wasReversed, this, &SampleClip::invalidateManagedVocalPlayback,
+		Qt::DirectConnection);
+	connect(ConfigManager::inst(), &ConfigManager::valueChanged, this,
+		[this](const QString& section, const QString& key, const QString&) {
+			if (section == QStringLiteral("vocal_assets") && key == QStringLiteral("managed_root"))
+			{
+				invalidateManagedVocalPlayback();
+			}
+		}, Qt::DirectConnection);
+	refreshManagedVocalPlayback();
+}
+
+QString SampleClip::applyManagedVocalVariantAssociation(
+	const ManagedVocalVariantAssociation& requested)
+{
+	return applyManagedVocalVariantAssociationInternal(requested, true);
+}
+
+QString SampleClip::applyManagedVocalVariantAssociationInternal(
+	const ManagedVocalVariantAssociation& requested,
+	bool retainCurrentForRevert)
+{
+	if (QThread::currentThread() != thread())
+	{
+		return QStringLiteral("wrong_thread");
+	}
+	if (m_loadingManagedVocalAssociation.load(std::memory_order_acquire))
+	{
+		return QStringLiteral("unsupported_audio_operation");
+	}
+	auto association = requested;
+	if (m_managedVocalAssociation)
+	{
+		association.originalAutoResize = m_managedVocalAssociation->originalAutoResize;
+		association.originalLengthTicks = m_managedVocalAssociation->originalLengthTicks;
+		association.originalOffsetTicks = m_managedVocalAssociation->originalOffsetTicks;
+		if (retainCurrentForRevert && !association.previousVariant)
+		{
+			association.previousVariant = m_managedVocalAssociation->active;
+			association.previousPlayback = m_managedVocalAssociation->playback;
+		}
+	}
+	else
+	{
+		association.originalAutoResize = getAutoResize();
+		association.originalLengthTicks = length().getTicks();
+		association.originalOffsetTicks = startTimeOffset().getTicks();
+	}
+	if (const auto code = validateManagedVocalVariantAssociation(association);
+		code != QStringLiteral("ok"))
+	{
+		return code;
+	}
+	if (hasAudioSourceWindow() || startTimeOffset().getTicks() != 0)
+	{
+		return QStringLiteral("unsupported_clip_state");
+	}
+	const auto startingEpoch = m_managedVocalPlaybackGuard->epoch.load(std::memory_order_acquire);
+	if (startingEpoch == std::numeric_limits<quint64>::max())
+	{
+		return QStringLiteral("resource_limit");
+	}
+	std::shared_ptr<ManagedVocalPlaybackGuard> candidateGuard;
+	try
+	{
+		candidateGuard = std::make_shared<ManagedVocalPlaybackGuard>();
+	}
+	catch (const std::bad_alloc&)
+	{
+		return QStringLiteral("resource_limit");
+	}
+	std::shared_ptr<const std::vector<float>> samples;
+	const auto loadCode = requestManagedVocalAsset(association.active, samples);
+	if (loadCode != QStringLiteral("ok") || !samples)
+	{
+		return loadCode;
+	}
+	const auto prepared = prepareManagedVocalPlayback(association, std::move(samples), candidateGuard,
+		candidateGuard->epoch.load(std::memory_order_acquire), false, false);
+	if (prepared.code != QStringLiteral("ok") || !prepared.view)
+	{
+		return prepared.code;
+	}
+	if (m_managedVocalPlaybackGuard->epoch.load(std::memory_order_acquire) != startingEpoch)
+	{
+		return QStringLiteral("plan_stale");
+	}
+	std::shared_ptr<ManagedVocalPlaybackView> writableView;
+	try
+	{
+		writableView = std::make_shared<ManagedVocalPlaybackView>(*prepared.view);
+	}
+	catch (const std::bad_alloc&)
+	{
+		return QStringLiteral("resource_limit");
+	}
+	const auto nextEpoch = startingEpoch + 1;
+	writableView->guard = m_managedVocalPlaybackGuard;
+	writableView->expectedEpoch = nextEpoch;
+	{
+		const auto changes = Engine::audioEngine()->requestChangesGuard();
+		if (m_managedVocalPlaybackGuard->epoch.load(std::memory_order_acquire) != startingEpoch)
+		{
+			return QStringLiteral("plan_stale");
+		}
+		auto expectedEpoch = startingEpoch;
+		if (!m_managedVocalPlaybackGuard->epoch.compare_exchange_strong(expectedEpoch, nextEpoch,
+			std::memory_order_acq_rel, std::memory_order_acquire))
+		{
+			return QStringLiteral("plan_stale");
+		}
+		addJournalCheckPoint();
+		m_loadingManagedVocalAssociation.store(true, std::memory_order_release);
+		Engine::audioEngine()->removePlayHandlesOfTypes(getTrack(), PlayHandle::Type::SamplePlayHandle);
+		Clip::setAutoResize(false);
+		Clip::changeLength(TimePos(int(association.playback.visualLengthTicks)));
+		Clip::setStartTimeOffset(TimePos(0));
+		m_managedVocalAssociation = std::move(association);
+		m_unavailableManagedVocalVariants = QDomDocument{};
+		storePublishedManagedVocalView(m_managedVocalPlaybackView, std::move(writableView));
+		m_loadingManagedVocalAssociation.store(false, std::memory_order_release);
+		setIsPlaying(false);
+	}
+	setManagedVocalVariantStatus(QStringLiteral("ok"));
+	emit sampleChanged();
+	Engine::getSong()->setModified();
+	refreshManagedVocalPlayback();
+	return managedVocalVariantStatus();
+}
+
+QString SampleClip::revertManagedVocalVariant()
+{
+	if (!m_managedVocalAssociation)
+	{
+		if (m_unavailableManagedVocalVariants.isNull())
+		{
+			return QStringLiteral("invalid_parameter");
+		}
+		resetManagedVocalVariant();
+		return QStringLiteral("ok");
+	}
+	const auto current = *m_managedVocalAssociation;
+	if (current.previousVariant && current.previousPlayback)
+	{
+		auto previous = current;
+		previous.active = *current.previousVariant;
+		previous.playback = *current.previousPlayback;
+		previous.previousVariant.reset();
+		previous.previousPlayback.reset();
+		return applyManagedVocalVariantAssociationInternal(previous, false);
+	}
+	{
+		const auto changes = Engine::audioEngine()->requestChangesGuard();
+		addJournalCheckPoint();
+		m_loadingManagedVocalAssociation.store(true, std::memory_order_release);
+		m_managedVocalPlaybackGuard->epoch.fetch_add(1, std::memory_order_acq_rel);
+		storePublishedManagedVocalView(m_managedVocalPlaybackView, {});
+		m_managedVocalAssociation.reset();
+		m_unavailableManagedVocalVariants = QDomDocument{};
+		Clip::setAutoResize(current.originalAutoResize);
+		Clip::changeLength(TimePos(int(current.originalLengthTicks)));
+		Clip::setStartTimeOffset(TimePos(int(current.originalOffsetTicks)));
+		m_loadingManagedVocalAssociation.store(false, std::memory_order_release);
+		setIsPlaying(false);
+	}
+	Engine::audioEngine()->removePlayHandlesOfTypes(getTrack(), PlayHandle::Type::SamplePlayHandle);
+	setManagedVocalVariantStatus(QStringLiteral("ok"));
+	emit sampleChanged();
+	Engine::getSong()->setModified();
+	return QStringLiteral("ok");
+}
+
+void SampleClip::resetManagedVocalVariant()
+{
+	m_managedVocalPlaybackLoadTimer.stop();
+	m_managedVocalPlaybackLoadTimer.setInterval(20);
+	m_managedVocalPlaybackLoadTicket.reset();
+	m_managedVocalPreloadedReference = {};
+	m_managedVocalPreloadedSamples.reset();
+	if (m_managedVocalAssociation && !m_loadingManagedVocalAssociation.load(std::memory_order_acquire))
+	{
+		const auto current = *m_managedVocalAssociation;
+		m_loadingManagedVocalAssociation.store(true, std::memory_order_release);
+		Clip::setAutoResize(current.originalAutoResize);
+		Clip::changeLength(TimePos(int(current.originalLengthTicks)));
+		Clip::setStartTimeOffset(TimePos(int(current.originalOffsetTicks)));
+		m_loadingManagedVocalAssociation.store(false, std::memory_order_release);
+	}
+	m_managedVocalPlaybackGuard->epoch.fetch_add(1, std::memory_order_acq_rel);
+	storePublishedManagedVocalView(m_managedVocalPlaybackView, {});
+	m_managedVocalAssociation.reset();
+	m_unavailableManagedVocalVariants = QDomDocument{};
+	setManagedVocalVariantStatus(QStringLiteral("ok"));
+}
+
 bool SampleClip::hasSampleFileLoaded(const QString & filename) const
 {
 	return m_sample.sampleFile() == filename;
@@ -351,6 +920,7 @@ bool SampleClip::hasSampleFileLoaded(const QString & filename) const
 void SampleClip::setSampleBuffer(std::shared_ptr<const SampleBuffer> sb)
 {
 	if (hasAudioSourceWindow()) return;
+	resetManagedVocalVariant();
 	resetRecordedTakeSource();
 	{
 		const auto guard = Engine::audioEngine()->requestChangesGuard();
@@ -364,6 +934,7 @@ void SampleClip::setSampleBuffer(std::shared_ptr<const SampleBuffer> sb)
 	updateLength();
 
 	emit sampleChanged();
+	emit playbackPositionChanged();
 
 	Engine::getSong()->setModified();
 }
@@ -371,6 +942,7 @@ void SampleClip::setSampleBuffer(std::shared_ptr<const SampleBuffer> sb)
 void SampleClip::setSampleFile(const QString& sf)
 {
 	if (hasAudioSourceWindow()) return;
+	resetManagedVocalVariant();
 	if (!sf.isEmpty()) resetRecordedTakeSource();
 	// An explicit source replacement establishes a new expected recording.
 	if (!sf.isEmpty()) m_invalidSourceIdentity = false;
@@ -384,6 +956,7 @@ QString SampleClip::adoptAuthorizedAudio(std::unique_ptr<AudioImportPolicy::Prep
 	if (!audio || !audio->m_buffer) return QStringLiteral("unsupported_audio_operation");
 	if (audio->isRecordedTake()) return QStringLiteral("recorded_source_reference_required");
 	if (!audio->isCurrent()) return QStringLiteral("plan_stale");
+	resetManagedVocalVariant();
 	setStartTimeOffset(0);
 	{
 		const auto guard = Engine::audioEngine()->requestChangesGuard();
@@ -405,6 +978,7 @@ QString SampleClip::adoptRecordedTakeAudio(std::unique_ptr<AudioImportPolicy::Pr
 	if (!audio->isCurrent()) return QStringLiteral("recording_source_unavailable");
 	if (!recording::RecordedTakeSource::matches(reference, audio->m_recordedTake->facts()))
 		return QStringLiteral("recorded_source_changed");
+	if (notify) resetManagedVocalVariant();
 	Clip::setStartTimeOffset(0);
 	{
 		const auto guard = Engine::audioEngine()->requestChangesGuard();
@@ -550,6 +1124,11 @@ void SampleClip::setIsPlaying(bool isPlaying)
 
 void SampleClip::updateLength()
 {
+	if (hasManagedVocalVariant())
+	{
+		emit sampleChanged();
+		return;
+	}
 	if (hasAudioSourceWindow()) { emit sampleChanged(); return; }
 	// If the clip has already been manually resized, don't automatically resize it.
 	if (getAutoResize())
@@ -569,6 +1148,12 @@ void SampleClip::updateLength()
 
 void SampleClip::tempoChanged()
 {
+	if (hasManagedVocalVariant())
+	{
+		invalidateManagedVocalPlayback();
+		emit sampleChanged();
+		return;
+	}
 	if (hasAudioSourceWindow() && !m_recordedTakeMetadataPresent)
 	{
 		refreshAudioWindowPlayback();
@@ -590,6 +1175,10 @@ void SampleClip::setStartTimeOffset(const TimePos& startTimeOffset)
 
 TimePos SampleClip::sampleLength() const
 {
+	if (m_managedVocalAssociation)
+	{
+		return TimePos(int(m_managedVocalAssociation->playback.visualLengthTicks));
+	}
 	return static_cast<int>(m_sample.sampleSize() / Engine::framesPerTick(m_sample.sampleRate()));
 }
 
@@ -679,6 +1268,36 @@ void SampleClip::saveSettings( QDomDocument & _doc, QDomElement & _this )
 		_this.setAttribute("reversed", "true");
 	}
 	// TODO: start- and end-frame
+	for (auto child = _this.firstChild(); !child.isNull();)
+	{
+		const auto next = child.nextSibling();
+		if (child.isElement() && child.nodeName() == QStringLiteral("managed_vocal_variant"))
+		{
+			_this.removeChild(child);
+		}
+		child = next;
+	}
+	if (m_managedVocalAssociation)
+	{
+		const auto managed = writeManagedVocalVariantAssociation(_doc, *m_managedVocalAssociation);
+		if (!managed.isNull()) _this.appendChild(managed);
+		else if (!m_unavailableManagedVocalVariants.isNull())
+		{
+			const auto wrapper = m_unavailableManagedVocalVariants.documentElement();
+			for (auto child = wrapper.firstChild(); !child.isNull(); child = child.nextSibling())
+			{
+				_this.appendChild(_doc.importNode(child, true));
+			}
+		}
+	}
+	else if (!m_unavailableManagedVocalVariants.isNull())
+	{
+		const auto wrapper = m_unavailableManagedVocalVariants.documentElement();
+		for (auto child = wrapper.firstChild(); !child.isNull(); child = child.nextSibling())
+		{
+			_this.appendChild(_doc.importNode(child, true));
+		}
+	}
 	writeAudioWindow(m_audioWindowStorage, _doc, _this);
 }
 
@@ -687,11 +1306,28 @@ void SampleClip::saveSettings( QDomDocument & _doc, QDomElement & _this )
 
 void SampleClip::loadSettings( const QDomElement & _this )
 {
-	struct LoadingReset { std::atomic_bool& flag; bool previous; ~LoadingReset(){flag.store(previous,std::memory_order_release);} };
+	struct LoadingReset
+	{
+		std::atomic_bool& flag;
+		bool previous;
+		~LoadingReset(){flag.store(previous,std::memory_order_release);}
+	};
 	LoadingReset loading{m_loadingAudioWindow,m_loadingAudioWindow.exchange(true,std::memory_order_acq_rel)};
+	LoadingReset managedLoading{m_loadingManagedVocalAssociation,
+		m_loadingManagedVocalAssociation.exchange(true,std::memory_order_acq_rel)};
+	m_managedVocalPlaybackLoadTimer.stop();
+	m_managedVocalPlaybackLoadTimer.setInterval(20);
+	m_managedVocalPlaybackLoadTicket.reset();
+	m_managedVocalPreloadedReference = {};
+	m_managedVocalPreloadedSamples.reset();
 	{
 		const auto guard = Engine::audioEngine()->requestChangesGuard();
 		m_audioWindowGuard->epoch.fetch_add(1, std::memory_order_acq_rel);
+		m_managedVocalPlaybackGuard->epoch.fetch_add(1, std::memory_order_acq_rel);
+		storePublishedManagedVocalView(m_managedVocalPlaybackView, {});
+		m_managedVocalAssociation.reset();
+		m_unavailableManagedVocalVariants = QDomDocument{};
+		m_managedVocalVariantStatus = QStringLiteral("ok");
 		if(hasAudioSourceWindow() || !_this.firstChildElement("audio_source_window").isNull())
 		{
 			Engine::audioEngine()->removePlayHandlesOfTypes(getTrack(),PlayHandle::Type::SamplePlayHandle);
@@ -700,6 +1336,46 @@ void SampleClip::loadSettings( const QDomElement & _this )
 		storePublishedAudioWindowView(m_audioWindowView, {});
 		m_sample.m_audioWindowGuard.reset();
 		m_audioWindowStorage = parseAudioWindow(_this);
+	}
+	QList<QDomElement> managedElements;
+	for (auto child = _this.firstChild(); !child.isNull(); child = child.nextSibling())
+	{
+		if (child.isElement() && child.nodeName() == QStringLiteral("managed_vocal_variant"))
+		{
+			managedElements.push_back(child.toElement());
+		}
+	}
+	if (!managedElements.isEmpty())
+	{
+		if (managedElements.size() == 1)
+		{
+			const auto parsed = readManagedVocalVariantAssociation(managedElements.front());
+			if (parsed.code == QStringLiteral("ok") && parsed.value)
+			{
+				m_managedVocalAssociation = *parsed.value;
+			}
+			else
+			{
+				m_unavailableManagedVocalVariants = QDomDocument{};
+				auto wrapper = m_unavailableManagedVocalVariants.createElement(
+					QStringLiteral("unavailable_managed_variants"));
+				m_unavailableManagedVocalVariants.appendChild(wrapper);
+				wrapper.appendChild(m_unavailableManagedVocalVariants.importNode(managedElements.front(), true));
+				setManagedVocalVariantStatus(parsed.code);
+			}
+		}
+		else
+		{
+			m_unavailableManagedVocalVariants = QDomDocument{};
+			auto wrapper = m_unavailableManagedVocalVariants.createElement(
+				QStringLiteral("unavailable_managed_variants"));
+			m_unavailableManagedVocalVariants.appendChild(wrapper);
+			for (const auto& element : managedElements)
+			{
+				wrapper.appendChild(m_unavailableManagedVocalVariants.importNode(element, true));
+			}
+			setManagedVocalVariantStatus(QStringLiteral("invalid_managed_variant"));
+		}
 	}
 	m_unavailableSampleFile.clear();
 	m_sourceLoadError.clear();
@@ -853,18 +1529,33 @@ void SampleClip::loadSettings( const QDomElement & _this )
 		m_sample.setReversed(true);
 		emit wasReversed(); // tell SampleClipView to update the view
 	}
-	if (!m_sourceLoadError.isEmpty() || m_recordedTakeMetadataPresent)
+	if (!m_sourceLoadError.isEmpty() || m_recordedTakeMetadataPresent || hasManagedVocalVariant())
 	{
 		emit sampleChanged();
 		playbackPositionChanged();
 	}
 	if (hasAudioSourceWindow())
 	{
+		loading.flag.store(loading.previous, std::memory_order_release);
 		m_loadingAudioWindow=false;
 		refreshAudioWindowPlayback();
 		const auto code = audioWindowStatus();
 		if(code!="ok") Engine::getSong()->collectError(tr("Audio range unavailable: %1").arg(code));
 		emit audioWindowStatusChanged(code);
+	}
+	managedLoading.flag.store(managedLoading.previous, std::memory_order_release);
+	if (hasManagedVocalVariant() && !managedLoading.previous)
+	{
+		refreshManagedVocalPlayback();
+		if (managedVocalVariantStatus() != QStringLiteral("ok"))
+		{
+			if (managedVocalVariantStatus() != QStringLiteral("asset_loading")
+				&& managedVocalVariantStatus() != QStringLiteral("job_busy"))
+			{
+				Engine::getSong()->collectError(tr("Managed vocal variant unavailable: %1")
+					.arg(managedVocalVariantStatus()));
+			}
+		}
 	}
 
 }

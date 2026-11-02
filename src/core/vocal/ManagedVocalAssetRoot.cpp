@@ -10,6 +10,8 @@
 #include <cstddef>
 #include <cstring>
 #include <limits>
+#include <map>
+#include <mutex>
 #include <vector>
 #ifdef Q_OS_WIN
 #include <windows.h>
@@ -275,7 +277,40 @@ ManagedVocalAssetRoot::Approval ManagedVocalAssetRoot::authorizeConfiguredRoot()
 	{
 		return {QStringLiteral("asset_root_not_configured"), {}};
 	}
+#ifdef Q_OS_WIN
+	const auto path = canonicalRoot(selected);
+	if (path.isEmpty())
+	{
+		return {QStringLiteral("asset_root_denied"), {}};
+	}
+	static std::mutex mutex;
+	static std::map<QString, std::weak_ptr<ManagedVocalAssetRoot>> roots;
+	std::lock_guard lock(mutex);
+	for (auto entry = roots.begin(); entry != roots.end();)
+	{
+		if (entry->second.expired()) entry = roots.erase(entry);
+		else ++entry;
+	}
+	if (const auto found = roots.find(path); found != roots.end())
+	{
+		if (auto root = found->second.lock(); root && root->isAuthorized())
+		{
+			return {QStringLiteral("ok"), std::move(root)};
+		}
+		roots.erase(found);
+	}
+	std::shared_ptr<ManagedVocalAssetRootState> state;
+	const auto code = openRoot(path, state);
+	if (code != QStringLiteral("ok"))
+	{
+		return {code, {}};
+	}
+	auto root = std::shared_ptr<ManagedVocalAssetRoot>(new ManagedVocalAssetRoot(std::move(state)));
+	roots.emplace(path, root);
+	return {QStringLiteral("ok"), std::move(root)};
+#else
 	return authorizeLocalRoot(selected);
+#endif
 }
 
 bool ManagedVocalAssetRoot::isAuthorized() const

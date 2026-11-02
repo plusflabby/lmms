@@ -2,6 +2,8 @@
 #define LMMS_MANAGED_VOCAL_ASSET_TYPES_H
 
 #include <QByteArray>
+#include <QDomDocument>
+#include <QDomElement>
 #include <QJsonArray>
 #include <QJsonObject>
 #include <QString>
@@ -76,6 +78,32 @@ struct ManagedVocalVariantReference
 	int channels = 0;
 };
 
+struct ManagedVocalPlaybackContext
+{
+	int tempoBpm = 0;
+	int outputRate = 0;
+	int ticksPerQuarterNote = 48;
+	int timeSignatureNumerator = 4;
+	int timeSignatureDenominator = 4;
+	qint64 visualLengthTicks = 0;
+	quint64 nativeVisualCoverageFrames = 0;
+	qint64 endpointResidualNumerator = 0;
+	qint64 endpointResidualDenominator = 1;
+	QString worldHash;
+};
+
+struct ManagedVocalVariantAssociation
+{
+	quint32 schemaVersion = 1;
+	ManagedVocalVariantReference active;
+	std::optional<ManagedVocalVariantReference> previousVariant;
+	ManagedVocalPlaybackContext playback;
+	std::optional<ManagedVocalPlaybackContext> previousPlayback;
+	bool originalAutoResize = false;
+	qint64 originalLengthTicks = 0;
+	qint64 originalOffsetTicks = 0;
+};
+
 struct ManagedVocalManifestResult
 {
 	QString code;
@@ -88,12 +116,25 @@ struct ManagedVocalVariantReferenceResult
 	std::optional<ManagedVocalVariantReference> value;
 };
 
+struct ManagedVocalVariantAssociationResult
+{
+	QString code;
+	std::optional<ManagedVocalVariantAssociation> value;
+};
+
 LMMS_EXPORT QString validateManagedVocalManifest(const ManagedVocalManifest& manifest);
 LMMS_EXPORT QByteArray encodeManagedVocalManifest(const ManagedVocalManifest& manifest);
 LMMS_EXPORT ManagedVocalManifestResult decodeManagedVocalManifest(const QByteArray& bytes);
 LMMS_EXPORT ManagedVocalVariantReferenceResult makeManagedVocalVariantReference(
 	const ManagedVocalManifest& manifest,
 	const QByteArray& encodedManifest);
+LMMS_EXPORT QString validateManagedVocalVariantAssociation(
+	const ManagedVocalVariantAssociation& association);
+LMMS_EXPORT QDomElement writeManagedVocalVariantAssociation(
+	QDomDocument& document,
+	const ManagedVocalVariantAssociation& association);
+LMMS_EXPORT ManagedVocalVariantAssociationResult readManagedVocalVariantAssociation(
+	const QDomElement& element);
 
 } // namespace lmms
 

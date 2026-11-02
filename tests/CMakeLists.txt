@@ -47,6 +47,9 @@ set(LMMS_TESTS
 	src/core/ManagedVocalWaveReaderTest.cpp
 	src/core/ManagedVocalAssetTypesTest.cpp
 	src/core/ManagedVocalAssetStoreTest.cpp
+	src/core/ManagedVocalPlaybackTest.cpp
+	src/core/ManagedVocalPlaybackCacheTest.cpp
+	src/core/SampleClipManagedVocalVariantTest.cpp
 	src/plugins/AiBridgeVocalTypesTest.cpp
 	src/plugins/AiBridgeVocalEditTypesTest.cpp
 	src/plugins/AiBridgeVocalEditPlannerTest.cpp
@@ -171,7 +174,7 @@ foreach(LMMS_TEST_SRC IN LISTS LMMS_TESTS)
 		target_include_directories(${LMMS_TEST_NAME} PRIVATE ${CMAKE_SOURCE_DIR}/plugins/AiBridge)
 		target_sources(${LMMS_TEST_NAME} PRIVATE ${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeVocalEditTypes.cpp)
 	endif()
-	if(LMMS_TEST_NAME STREQUAL "ManagedVocalWaveReaderTest" OR LMMS_TEST_NAME STREQUAL "ManagedVocalAssetTypesTest" OR LMMS_TEST_NAME STREQUAL "ManagedVocalAssetStoreTest")
+	if(LMMS_TEST_NAME STREQUAL "ManagedVocalWaveReaderTest" OR LMMS_TEST_NAME STREQUAL "ManagedVocalAssetTypesTest" OR LMMS_TEST_NAME STREQUAL "ManagedVocalAssetStoreTest" OR LMMS_TEST_NAME STREQUAL "ManagedVocalPlaybackTest" OR LMMS_TEST_NAME STREQUAL "ManagedVocalPlaybackCacheTest" OR LMMS_TEST_NAME STREQUAL "SampleClipManagedVocalVariantTest")
 		target_include_directories(${LMMS_TEST_NAME} PRIVATE ${CMAKE_SOURCE_DIR}/src/core/vocal)
 	endif()
 	if(LMMS_TEST_NAME STREQUAL "AiBridgeVocalEditPlannerTest")

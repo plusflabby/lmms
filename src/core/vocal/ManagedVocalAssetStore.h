@@ -29,11 +29,16 @@ struct ManagedVocalAssetPublishResult
 struct ManagedVocalAssetInspectResult
 {
 	QString code;
-	std::optional<ManagedVocalVariantReference> reference;
-	ManagedVocalMedia media;
+	QString assetId;
+	QString mediaSha256;
+	QString manifestSha256;
 	QString recipeHash;
 	QString rendererId;
 	QString rendererVersion;
+	quint64 frames = 0;
+	int sampleRate = 0;
+	int channels = 0;
+	ManagedVocalMedia media;
 	size_t sourceCount = 0;
 };
 
