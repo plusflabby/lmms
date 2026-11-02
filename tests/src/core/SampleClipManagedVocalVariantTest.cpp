@@ -284,6 +284,18 @@ private slots:
 		QVERIFY(QDir().mkpath(movedProjectDirectory));
 		const auto movedProject=QDir(movedProjectDirectory).filePath(QStringLiteral("project.mmp"));
 		QVERIFY(QFile::copy(originalProject,movedProject));
+		auto hashFile=[](const QString& path){
+			QFile file(path);if(!file.open(QIODevice::ReadOnly))return QByteArray{};
+			return QCryptographicHash::hash(file.readAll(),QCryptographicHash::Sha256);
+		};
+		const auto projectHashBefore=hashFile(movedProject);QVERIFY(!projectHashBefore.isEmpty());
+		QString assetMediaSha256;
+		{
+			auto storeRoot=ManagedVocalAssetRoot::authorizeConfiguredRoot();QVERIFY(storeRoot.root);
+			ManagedVocalAssetStore store(storeRoot.root);
+			const auto assetBefore=store.inspectById(variant.assetId,QStringLiteral("11111111-1111-4111-8111-111111111111"));
+			QCOMPARE(assetBefore.code,QStringLiteral("ok"));assetMediaSha256=assetBefore.mediaSha256;
+		}
 		QDomDocument configuration;
 		auto configRoot=configuration.createElement(QStringLiteral("lmmsrc"));
 		configRoot.setAttribute(QStringLiteral("version"),QStringLiteral("1.3.0-alpha"));
@@ -329,6 +341,13 @@ private slots:
 		float firstSample=0.0f;std::memcpy(&firstSample,&firstBits,sizeof(firstSample));
 		QVERIFY(std::isfinite(firstSample));
 		QVERIFY2(std::abs(firstSample-0.1f)<0.02f,qPrintable(QString::number(firstSample,'g',9)));
+		QCOMPARE(hashFile(movedProject),projectHashBefore);
+		{
+			auto storeRoot=ManagedVocalAssetRoot::authorizeConfiguredRoot();QVERIFY(storeRoot.root);
+			ManagedVocalAssetStore store(storeRoot.root);
+			const auto assetAfter=store.inspectById(variant.assetId,QStringLiteral("11111111-1111-4111-8111-111111111111"));
+			QCOMPARE(assetAfter.code,QStringLiteral("ok"));QCOMPARE(assetAfter.mediaSha256,assetMediaSha256);
+		}
 #endif
 	}
 
