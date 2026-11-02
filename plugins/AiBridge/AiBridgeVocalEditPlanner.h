@@ -12,8 +12,10 @@ struct VocalEditWorld
 {
 	int tempoBpm = 0;
 	int outputRate = 0;
-	int ticksPerBeat = 0;
+	int ticksPerQuarterNote = 48;
 	bool tempoAutomationPresent = false;
+	int timeSignatureNumerator = 4;
+	int timeSignatureDenominator = 4;
 };
 
 struct VocalEditSourceSnapshot

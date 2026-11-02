@@ -138,6 +138,25 @@ private slots:
 		QCOMPARE(result.value->anchorPreviews.back().renderInputFrame, qint64(1900));
 		QCOMPARE(result.value->anchorPreviews.back().outputFrame, qint64(2280));
 	}
+
+	void convertsSongTicksUsingQuarterNoteGridUnderCompoundMeter()
+	{
+		auto request = timingRequest();
+		request.selections[0].sourceFrames = {0, 1000};
+		request.operations.clear();
+		request.operations.push_back(VocalTimingMap{{{0, 0, {}}, {1000, {}, 2}}});
+		auto world = snapshot(44100, 127);
+		world.world.timeSignatureNumerator = 6;
+		world.world.timeSignatureDenominator = 8;
+		world.sources[0].sourceFrames = 1000;
+
+		const auto result = AiBridgeVocalEditPlanner::plan(request, world, limits());
+		QCOMPARE(result.code, QStringLiteral("ok"));
+		QVERIFY(result.value);
+		QCOMPARE(result.value->anchorPreviews.back().outputFrame, qint64(868));
+		QCOMPARE(result.value->anchorPreviews.back().roundingErrorNumerator, qint64(-14));
+		QCOMPARE(result.value->anchorPreviews.back().roundingErrorDenominator, qint64(127));
+	}
 };
 
 QTEST_APPLESS_MAIN(AiBridgeVocalEditPlannerTest)

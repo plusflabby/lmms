@@ -42,12 +42,13 @@ QString finishHash(const QByteArray& data)
 bool tickToFrame(qint64 tick, const VocalEditWorld& world, qint64& frame,
 	qint64& errorNumerator, qint64& errorDenominator, double& error)
 {
-	if (tick < 0 || world.tempoBpm <= 0 || world.ticksPerBeat <= 0 || !supportedRate(world.outputRate))
+	if (tick < 0 || world.tempoBpm <= 0 || world.ticksPerQuarterNote <= 0
+		|| !supportedRate(world.outputRate))
 	{
 		return false;
 	}
 	const quint64 numeratorFactor = quint64(world.outputRate) * 60;
-	const quint64 denominator = quint64(world.tempoBpm) * quint64(world.ticksPerBeat);
+	const quint64 denominator = quint64(world.tempoBpm) * quint64(world.ticksPerQuarterNote);
 	const quint64 maximumFrames = quint64(world.outputRate) * VocalLimits::seconds;
 	const quint64 tickValue = quint64(tick);
 	const quint64 wholeTicks = tickValue / denominator;
@@ -165,7 +166,10 @@ VocalEditPlanResult AiBridgeVocalEditPlanner::plan(
 		return result;
 	}
 	if (snapshot.world.tempoAutomationPresent || snapshot.world.tempoBpm <= 0
-		|| snapshot.world.ticksPerBeat <= 0 || snapshot.sources.size() != request.selections.size())
+		|| snapshot.world.ticksPerQuarterNote != 48
+		|| snapshot.world.timeSignatureNumerator < 1 || snapshot.world.timeSignatureNumerator > 32
+		|| snapshot.world.timeSignatureDenominator < 1 || snapshot.world.timeSignatureDenominator > 32
+		|| snapshot.sources.size() != request.selections.size())
 	{
 		result.code = QStringLiteral("unsupported_playback_world");
 		return result;
@@ -236,7 +240,9 @@ VocalEditPlanResult AiBridgeVocalEditPlanner::plan(
 	planStream.setByteOrder(QDataStream::BigEndian);
 	planStream << QStringLiteral("lmms-vocal-edit-plan-v1") << plan.recipeHash << snapshot.generation
 		<< snapshot.worldHash << snapshot.world.tempoBpm << snapshot.world.outputRate
-		<< snapshot.world.ticksPerBeat << snapshot.world.tempoAutomationPresent << quint8(plan.roundingPolicy);
+		<< snapshot.world.ticksPerQuarterNote << snapshot.world.tempoAutomationPresent
+		<< snapshot.world.timeSignatureNumerator << snapshot.world.timeSignatureDenominator
+		<< quint8(plan.roundingPolicy);
 	for (const auto& source : snapshot.sources)
 	{
 		planStream << source.clipId << source.audioStateHash << source.sourceFrames
