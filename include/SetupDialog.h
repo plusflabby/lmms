@@ -126,6 +126,8 @@ private slots:
 	void setGIGDir(const QString & gigDir);
 	void openThemeDir();
 	void setThemeDir(const QString & themeDir);
+	void openManagedVocalAssetRoot();
+	void setManagedVocalAssetRoot(const QString& path);
 	void openBackgroundPicFile();
 	void setBackgroundPicFile(const QString & backgroundPicFile);
 
@@ -208,11 +210,13 @@ private:
 	QString m_sf2File;
 #endif
 	QString m_themeDir;
+	QString m_managedVocalAssetRoot;
 	QString m_backgroundPicFile;
 
 	QLineEdit * m_workingDirLineEdit;
 	QLineEdit * m_vstDirLineEdit;
 	QLineEdit * m_themeDirLineEdit;
+	QLineEdit * m_managedVocalAssetRootLineEdit;
 	QLineEdit * m_ladspaDirLineEdit;
 	QLineEdit * m_gigDirLineEdit;
 	QLineEdit * m_sf2DirLineEdit;

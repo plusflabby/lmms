@@ -1,0 +1,88 @@
+#include <QtTest>
+#include <QCryptographicHash>
+#include <QJsonDocument>
+#include <QJsonObject>
+#include <QUuid>
+#include "ManagedVocalAssetTypes.h"
+
+using namespace lmms;
+
+class ManagedVocalAssetTypesTest : public QObject
+{
+	Q_OBJECT
+
+	static QString digest(char value)
+	{
+		return QString(64, QChar(value));
+	}
+
+	static ManagedVocalManifest manifest()
+	{
+		ManagedVocalManifest value;
+		value.assetId = QUuid::createUuid().toString(QUuid::WithoutBraces);
+		value.assetRootId = digest('e');
+		value.media = {48000, 48000, 1, digest('a')};
+		value.recipeHash = digest('b');
+		value.rendererId = QStringLiteral("native-float-renderer");
+		value.rendererVersion = QStringLiteral("1");
+		value.recipe = QJsonObject{{"recipe_version", 1}, {"operation", "gain_envelope"}};
+		value.sources.push_back({"clip-a", digest('c'), digest('d'), QStringLiteral("C:/Authorized/Vox/lead.wav"),
+			{0, 48000}, 48000, 48000, 1, ManagedVocalSourceBasis::AuthorizedPcm, {}, {}});
+		return value;
+	}
+
+private slots:
+	void roundTripsVersionedPrivateProvenanceAndPathFreeReference()
+	{
+		const auto original = manifest();
+		const auto encoded = encodeManagedVocalManifest(original);
+		QVERIFY(!encoded.isEmpty());
+		QVERIFY(encoded.contains("C:/Authorized/Vox/lead.wav"));
+		const auto decoded = decodeManagedVocalManifest(encoded);
+		QCOMPARE(decoded.code, QStringLiteral("ok"));
+		QVERIFY(decoded.value);
+		QCOMPARE(decoded.value->assetId, original.assetId);
+		QCOMPARE(decoded.value->sources.front().sourceSha256, digest('c'));
+		QCOMPARE(decoded.value->sources.front().privateSourceReference, QStringLiteral("C:/Authorized/Vox/lead.wav"));
+
+		const auto reference = makeManagedVocalVariantReference(original, encoded);
+		QCOMPARE(reference.code, QStringLiteral("ok"));
+		QVERIFY(reference.value);
+		QCOMPARE(reference.value->assetId, original.assetId);
+		QCOMPARE(reference.value->assetRootId, original.assetRootId);
+		QCOMPARE(reference.value->manifestSha256,
+			QString::fromLatin1(QCryptographicHash::hash(encoded, QCryptographicHash::Sha256).toHex()));
+		QVERIFY(!reference.value->manifestSha256.contains('/'));
+	}
+
+	void rejectsTamperingUnknownKeysAndNoncanonicalFrames()
+	{
+		const auto encoded = encodeManagedVocalManifest(manifest());
+		auto object = QJsonDocument::fromJson(encoded).object();
+		object.insert(QStringLiteral("absolute_path"), QStringLiteral("C:/arbitrary.wav"));
+		QCOMPARE(decodeManagedVocalManifest(QJsonDocument(object).toJson(QJsonDocument::Compact)).code,
+			QStringLiteral("invalid_manifest"));
+
+		object = QJsonDocument::fromJson(encoded).object();
+		object.insert(QStringLiteral("media"), QJsonObject{{"frames", "048000"}, {"sample_rate", 48000},
+			{"channels", 1}, {"pcm_sha256", digest('a')}, {"peak", 0.5}, {"overrange", false}});
+		QCOMPARE(decodeManagedVocalManifest(QJsonDocument(object).toJson(QJsonDocument::Compact)).code,
+			QStringLiteral("invalid_manifest"));
+	}
+
+	void refusesInvalidMediaMetadataAndSourceIdentity()
+	{
+		auto value = manifest();
+		value.media.channels = 6;
+		QVERIFY(encodeManagedVocalManifest(value).isEmpty());
+		value = manifest();
+		value.sources.front().sourceIdentity = QStringLiteral("unknown");
+		QVERIFY(encodeManagedVocalManifest(value).isEmpty());
+		value = manifest();
+		value.sources.front().sourceFrames = {48000, 0};
+		QVERIFY(encodeManagedVocalManifest(value).isEmpty());
+	}
+};
+
+QTEST_APPLESS_MAIN(ManagedVocalAssetTypesTest)
+#include "ManagedVocalAssetTypesTest.moc"
