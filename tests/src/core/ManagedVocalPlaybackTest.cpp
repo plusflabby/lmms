@@ -60,6 +60,16 @@ private slots:
 			QCOMPARE(frame.left(), 0.0f);
 			QCOMPARE(frame.right(), 0.0f);
 		}
+
+		const auto restarted = makeManagedVocalPlaybackView(
+			created.view->interleavedSamples, 44100, 2, world(44100), false, false,
+			guard, guard->epoch.load(std::memory_order_acquire));
+		QCOMPARE(restarted.code, QStringLiteral("ok"));
+		QVERIFY(restarted.view);
+		std::fill(output.begin(), output.end(), SampleFrame{});
+		renderManagedVocalPlayback(*restarted.view, 0, output);
+		QCOMPARE(output[0].left(), 0.1f);
+		QCOMPARE(output[0].right(), -0.1f);
 	}
 
 	void rejectsUnsupportedWorldAndClipProperties()

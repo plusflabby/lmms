@@ -88,8 +88,8 @@ void SampleClipView::updateSample()
 	if (m_clip->hasManagedVocalVariant())
 	{
 		setToolTip(m_clip->managedVocalVariantStatus() == QStringLiteral("ok")
-			? tr("Managed vocal variant. Original source is retained.")
-			: tr("Managed vocal variant unavailable: %1. Original source is retained and is not used for playback.")
+			? tr("Managed vocal variant. Original source is retained. Playback requires a compatible new LMMS build.")
+			: tr("Managed vocal variant unavailable: %1. Original source is retained and is not used for playback. Compatible new LMMS builds are required for managed playback.")
 				.arg(m_clip->managedVocalVariantStatus()));
 	}
 	else
