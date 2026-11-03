@@ -84,6 +84,10 @@ AutomationClip::AutomationClip( const AutomationClip & _clip_to_copy ) :
 		// Sets the node's clip to this one
 		m_timeMap[POS(it)].setClip(this);
 	}
+	for (const auto& object : m_objects)
+	{
+		if (object) emit object->automationTargetAdded();
+	}
 	initializeTempoNotifications();
 	notifyTempoTargetChange();
 }
@@ -133,6 +137,7 @@ bool AutomationClip::addObject( AutomatableModel * _obj, bool _search_dup )
 	connect( _obj, SIGNAL(destroyed(lmms::jo_id_t)),
 			this, SLOT(objectDestroyed(lmms::jo_id_t)),
 						Qt::DirectConnection );
+	emit _obj->automationTargetAdded();
 
 	emit dataChanged();
 

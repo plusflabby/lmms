@@ -25,6 +25,7 @@
 #include "EqControls.h"
 
 
+#include "AutomationClip.h"
 #include "EqControlsDialog.h"
 #include "EqEffect.h"
 
@@ -100,6 +101,21 @@ EqControls::EqControls( EqEffect *effect ) :
 	m_highShelfPeakL = 0; m_highShelfPeakR = 0;
 	m_inProgress = false;
 	m_inGainModel.setScaleLogarithmic( true );
+	connect(&m_hpTypeModel,&AutomatableModel::automationTargetAdded,this,[this]{
+		m_hpTypeModelDrivesStages.store(true,std::memory_order_release);
+		synchronizeHighPassStages();
+	});
+	connect(&m_hpTypeModel,&AutomatableModel::dataChanged,this,[this]{
+		if(m_hpTypeModelDrivesStages.load(std::memory_order_acquire)) synchronizeHighPassStages();
+	},Qt::QueuedConnection);
+}
+
+void EqControls::synchronizeHighPassStages()
+{
+	const auto type=m_hpTypeModel.value();
+	m_hp12Model.setValue(type==0,true);
+	m_hp24Model.setValue(type==1,true);
+	m_hp48Model.setValue(type==2,true);
 }
 
 
@@ -107,6 +123,7 @@ EqControls::EqControls( EqEffect *effect ) :
 
 void EqControls::loadSettings( const QDomElement &_this )
 {
+	m_hpTypeModelDrivesStages.store(false,std::memory_order_release);
 	m_inGainModel.loadSettings( _this, "Inputgain" );
 	m_outGainModel.loadSettings( _this, "Outputgain" );
 	m_lowShelfGainModel.loadSettings( _this , "Lowshelfgain" );
@@ -147,6 +164,11 @@ void EqControls::loadSettings( const QDomElement &_this )
 	m_hp48Model.loadSettings( _this , "HP48" );
 	m_lpTypeModel.loadSettings( _this, "LP" );
 	m_hpTypeModel.loadSettings( _this, "HP" );
+	if(AutomationClip::isAutomated(&m_hpTypeModel))
+	{
+		m_hpTypeModelDrivesStages.store(true,std::memory_order_release);
+		synchronizeHighPassStages();
+	}
 	m_analyseInModel.loadSettings( _this, "AnalyseIn" );
 	m_analyseOutModel.loadSettings( _this, "AnalyseOut" );
 }
@@ -161,6 +183,7 @@ gui::EffectControlDialog* EqControls::createView()
 
 void EqControls::saveSettings( QDomDocument &doc, QDomElement &parent )
 {
+	if(m_hpTypeModelDrivesStages.load(std::memory_order_acquire)) synchronizeHighPassStages();
 	m_inGainModel.saveSettings( doc, parent, "Inputgain" );
 	m_outGainModel.saveSettings( doc, parent, "Outputgain");
 	m_lowShelfGainModel.saveSettings( doc, parent , "Lowshelfgain" );

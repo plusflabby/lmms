@@ -165,7 +165,9 @@ private slots:
 		auto ar=readProposal(writeProposal(a)),br=readProposal(writeProposal(b));QVERIFY(ar && br);
 		QCOMPARE(ar->referenceEndFrame,qint64(60417));QCOMPARE(br->referenceEndFrame,qint64(88200));
 		QCOMPARE(proposalEligibility(*ar),QString("unrepresentable_audio_boundary"));QCOMPARE(proposalEligibility(*br),QString("ok"));
-		QCOMPARE(shortReference.back()[0],0.0f);QCOMPARE(longReference[60416][0],-0.44439697265625f);
+		// The patched linear converter retains a real previous frame for both source spans;
+		// eligibility still rejects the short reference below when its frame map is ambiguous.
+		QCOMPARE(shortReference.back()[0],longReference[60416][0]);QCOMPARE(longReference[60416][0],-0.44439697265625f);
 		QVERIFY(!proposalSample(*ar,clip.sample(),60416));auto last=proposalSample(*br,clip.sample(),60416);QVERIFY(last);
 		QCOMPARE((*last)[0],longReference[60416][0]);
 		qInfo()<<"ENDPOINT_PROPOSAL"<<ar->referenceEndFrame<<br->referenceEndFrame<<"short_rejected_long_excerpt"<<(*last)[0];
