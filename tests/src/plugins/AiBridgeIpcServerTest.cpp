@@ -207,10 +207,32 @@ private slots:
 		{
 			socket.disconnectFromServer();QTRY_VERIFY(socket.state()==QLocalSocket::UnconnectedState);QTest::qWait(5);
 			SampleTrack comparisonTrack(Engine::getSong());
+			SampleTrack compSourceTrack(Engine::getSong());
+			const int compPcmBytes=44100*sizeof(qint16);
+			QByteArray compWav(compPcmBytes+44,0);std::memcpy(compWav.data(),"RIFF",4);std::memcpy(compWav.data()+8,"WAVEfmt ",8);std::memcpy(compWav.data()+36,"data",4);
+			qToLittleEndian<quint32>(compPcmBytes+36,compWav.data()+4);qToLittleEndian<quint32>(16,compWav.data()+16);
+			qToLittleEndian<quint16>(1,compWav.data()+20);qToLittleEndian<quint16>(1,compWav.data()+22);
+			qToLittleEndian<quint32>(44100,compWav.data()+24);qToLittleEndian<quint32>(88200,compWav.data()+28);
+			qToLittleEndian<quint16>(2,compWav.data()+32);qToLittleEndian<quint16>(16,compWav.data()+34);
+			qToLittleEndian<quint32>(compPcmBytes,compWav.data()+40);
+			for(int frame=0;frame<44100;++frame)
+			{
+				const auto sample=static_cast<qint16>(std::lround(11000.0*std::sin(2.0*3.14159265358979323846*330.0*frame/44100.0)));
+				qToLittleEndian<qint16>(sample,compWav.data()+44+frame*sizeof(qint16));
+			}
+			const auto compPath=root.filePath("VerseAlt.wav");
+			{QFile f(compPath);QVERIFY(f.open(QIODevice::WriteOnly|QIODevice::NewOnly));QCOMPARE(f.write(compWav),qint64(compWav.size()));}
+			auto compImport=AudioImportPolicy::configured().prepare(compPath);QCOMPARE(compImport.code,QStringLiteral("ok"));QVERIFY(compImport.audio);
+			SampleClip compSourceClip(&compSourceTrack);
+			QCOMPARE(compSourceClip.adoptAuthorizedAudio(std::move(compImport.audio)),QStringLiteral("ok"));
+			compSourceClip.setAutoResize(false);compSourceClip.movePosition(3840);
 			const auto destinationTrackId=ids.idForTrack(&comparisonTrack);
+			const auto compTrackId=ids.idForTrack(&compSourceTrack),compClipId=ids.idForClip(&compSourceClip);
 			const auto originalAudio=AiBridgeAudioContext{}.clip(id);QVERIFY(originalAudio.value);
+			const auto compAudio=AiBridgeAudioContext{}.clip(compClipId);QVERIFY(compAudio.value);
 			const auto sourceTrack=captureVocalTrack(trackId);QVERIFY(sourceTrack.value);
 			const auto destinationTrack=captureVocalTrack(destinationTrackId);QVERIFY(destinationTrack.value);
+			const auto compTrack=captureVocalTrack(compTrackId);QVERIFY(compTrack.value);
 			const auto generation=Engine::getSong()->recordingProjectIdentity().revision();
 			const auto worldHash=vocalEditWorldHash(captureVocalEditWorld());
 			const auto sourceSha256=QCryptographicHash::hash(wav,QCryptographicHash::Sha256);
@@ -218,8 +240,13 @@ private slots:
 			QFile ready(readyTemporaryPath);QVERIFY(ready.open(QIODevice::WriteOnly|QIODevice::NewOnly));
 			const auto readiness=QJsonDocument(QJsonObject{
 				{"pid",double(QCoreApplication::applicationPid())},{"clip_id",id},{"track_id",trackId},
-				{"destination_track_id",destinationTrackId},{"expected_project_generation",QString::number(generation)},
-				{"expected_world_hash",worldHash},{"source_sha256",QString::fromLatin1(sourceSha256.toHex())}
+				{"destination_track_id",destinationTrackId},{"comp_clip_id",compClipId},{"comp_track_id",compTrackId},
+				{"expected_project_generation",QString::number(generation)},
+				{"expected_world_hash",worldHash},{"source_sha256",QString::fromLatin1(sourceSha256.toHex())},
+				{"original_audio_state_hash",originalAudio.value->stateHash},{"source_track_state_hash",sourceTrack.value->hash},
+				{"destination_track_state_hash",destinationTrack.value->hash},
+				{"comp_source_sha256",QString::fromLatin1(QCryptographicHash::hash(compWav,QCryptographicHash::Sha256).toHex())},
+				{"comp_audio_state_hash",compAudio.value->stateHash},{"comp_track_state_hash",compTrack.value->hash}
 			}).toJson(QJsonDocument::Compact);
 			QCOMPARE(ready.write(readiness),qint64(readiness.size()));ready.close();
 			QVERIFY(QFile::rename(readyTemporaryPath,nativeVocalReady));
@@ -228,9 +255,14 @@ private slots:
 			vocalJobs.shutdown();
 			QFile unchanged(path);QVERIFY(unchanged.open(QIODevice::ReadOnly));const auto unchangedBytes=unchanged.readAll();
 			QCOMPARE(unchangedBytes,wav);QCOMPARE(QCryptographicHash::hash(unchangedBytes,QCryptographicHash::Sha256),sourceSha256);
+			QFile unchangedComp(compPath);QVERIFY(unchangedComp.open(QIODevice::ReadOnly));const auto unchangedCompBytes=unchangedComp.readAll();
+			QCOMPARE(unchangedCompBytes,compWav);QCOMPARE(QCryptographicHash::hash(unchangedCompBytes,QCryptographicHash::Sha256),
+				QCryptographicHash::hash(compWav,QCryptographicHash::Sha256));
 			const auto restored=AiBridgeAudioContext{}.clip(id);QVERIFY(restored.value);
 			QCOMPARE(restored.value->stateHash,originalAudio.value->stateHash);
-			QCOMPARE(track->numOfClips(),1);
+			const auto restoredComp=AiBridgeAudioContext{}.clip(compClipId);QVERIFY(restoredComp.value);
+			QCOMPARE(restoredComp.value->stateHash,compAudio.value->stateHash);
+			QCOMPARE(track->numOfClips(),1);QCOMPARE(compSourceTrack.numOfClips(),1);
 			QCOMPARE(Engine::getSong()->recordingProjectIdentity().revision(),generation);
 			return;
 		}
