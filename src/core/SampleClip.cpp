@@ -480,6 +480,10 @@ QString SampleClip::requestManagedVocalAsset(
 	std::shared_ptr<const std::vector<float>>& samples)
 {
 	if (QThread::currentThread() != thread()) return QStringLiteral("wrong_thread");
+	auto* song = Engine::getSong();
+	if (!song) return QStringLiteral("stale_id");
+	const auto projectId = song->recordingProjectIdentity().cachedIdentity().id;
+	if (projectId.isEmpty()) return QStringLiteral("project_identity_unverified");
 	auto approval = ManagedVocalAssetRoot::authorizeConfiguredRoot();
 	if (!approval.root) return approval.code;
 	if (approval.root->rootId() != reference.assetRootId)
@@ -487,12 +491,14 @@ QString SampleClip::requestManagedVocalAsset(
 		return QStringLiteral("asset_root_mismatch");
 	}
 	if (m_managedVocalPreloadedSamples
+		&& m_managedVocalPreloadedProjectId == projectId
 		&& sameManagedVocalReference(m_managedVocalPreloadedReference, reference))
 	{
 		samples = m_managedVocalPreloadedSamples;
 		return QStringLiteral("ok");
 	}
 	if (m_managedVocalPlaybackLoadTicket
+		&& m_managedVocalPlaybackLoadingProjectId == projectId
 		&& sameManagedVocalReference(m_managedVocalPlaybackLoadingReference, reference))
 	{
 		if (!m_managedVocalPlaybackLoadTicket->isComplete())
@@ -501,6 +507,7 @@ QString SampleClip::requestManagedVocalAsset(
 		}
 		pollManagedVocalPlaybackLoad();
 		if (m_managedVocalPreloadedSamples
+			&& m_managedVocalPreloadedProjectId == projectId
 			&& sameManagedVocalReference(m_managedVocalPreloadedReference, reference))
 		{
 			samples = m_managedVocalPreloadedSamples;
@@ -514,14 +521,18 @@ QString SampleClip::requestManagedVocalAsset(
 		m_managedVocalPlaybackLoadTicket.reset();
 	}
 	m_managedVocalPreloadedReference = {};
+	m_managedVocalPreloadedProjectId.clear();
 	m_managedVocalPreloadedSamples.reset();
+	m_managedVocalPlaybackLoadingReference = {};
+	m_managedVocalPlaybackLoadingProjectId.clear();
 	ManagedVocalAssetStore store(approval.root);
-	const auto request = ManagedVocalPlaybackCache::instance().requestLoad(store, reference);
+	const auto request = ManagedVocalPlaybackCache::instance().requestLoad(store, reference, projectId);
 	if (request.code != QStringLiteral("ok") || !request.ticket)
 	{
 		if (request.code == QStringLiteral("job_busy"))
 		{
 			m_managedVocalPlaybackLoadingReference = reference;
+			m_managedVocalPlaybackLoadingProjectId = projectId;
 			if (!m_managedVocalAssociation
 				|| sameManagedVocalReference(m_managedVocalAssociation->active, reference))
 			{
@@ -540,11 +551,13 @@ QString SampleClip::requestManagedVocalAsset(
 			return result.code;
 		}
 		m_managedVocalPreloadedReference = reference;
+		m_managedVocalPreloadedProjectId = projectId;
 		m_managedVocalPreloadedSamples = result.samples;
 		samples = std::move(result.samples);
 		return QStringLiteral("ok");
 	}
 	m_managedVocalPlaybackLoadingReference = reference;
+	m_managedVocalPlaybackLoadingProjectId = projectId;
 	m_managedVocalPlaybackLoadTicket = request.ticket;
 	m_managedVocalPlaybackLoadTimer.setInterval(20);
 	m_managedVocalPlaybackLoadTimer.start();
@@ -595,12 +608,24 @@ void SampleClip::pollManagedVocalPlaybackLoad()
 	if (!m_managedVocalPlaybackLoadTicket->isComplete()) return;
 	m_managedVocalPlaybackLoadTimer.stop();
 	const auto reference = m_managedVocalPlaybackLoadingReference;
+	const auto expectedProjectId = m_managedVocalPlaybackLoadingProjectId;
 	auto ticket = std::move(m_managedVocalPlaybackLoadTicket);
 	const auto result = ticket->result();
+	auto* song = Engine::getSong();
+	const auto currentProjectId = song ? song->recordingProjectIdentity().cachedIdentity().id : QString{};
+	if (expectedProjectId.isEmpty() || currentProjectId != expectedProjectId)
+	{
+		m_managedVocalPreloadedReference = {};
+		m_managedVocalPreloadedProjectId.clear();
+		m_managedVocalPreloadedSamples.reset();
+		setManagedVocalVariantStatus(QStringLiteral("asset_project_mismatch"));
+		return;
+	}
 	if (result.code == QStringLiteral("ok") && result.samples
 		&& result.samples->size() == std::size_t(reference.frames) * std::size_t(reference.channels))
 	{
 		m_managedVocalPreloadedReference = reference;
+		m_managedVocalPreloadedProjectId = expectedProjectId;
 		m_managedVocalPreloadedSamples = result.samples;
 		if (m_managedVocalAssociation
 			&& sameManagedVocalReference(m_managedVocalAssociation->active, reference))
@@ -655,7 +680,11 @@ void SampleClip::refreshManagedVocalPlayback()
 		return;
 	}
 	std::shared_ptr<const std::vector<float>> samples;
+	auto* currentSong = Engine::getSong();
+	const auto currentProjectId = currentSong
+		? currentSong->recordingProjectIdentity().cachedIdentity().id : QString{};
 	if (previousView && m_managedVocalPreloadedSamples
+		&& m_managedVocalPreloadedProjectId == currentProjectId
 		&& sameManagedVocalReference(m_managedVocalAssociation->active, m_managedVocalPreloadedReference))
 	{
 		samples = previousView->interleavedSamples;
@@ -934,7 +963,9 @@ void SampleClip::resetManagedVocalVariant()
 	m_managedVocalPlaybackLoadTimer.stop();
 	m_managedVocalPlaybackLoadTimer.setInterval(20);
 	m_managedVocalPlaybackLoadTicket.reset();
+	m_managedVocalPlaybackLoadingProjectId.clear();
 	m_managedVocalPreloadedReference = {};
+	m_managedVocalPreloadedProjectId.clear();
 	m_managedVocalPreloadedSamples.reset();
 	if (m_managedVocalAssociation && !m_loadingManagedVocalAssociation.load(std::memory_order_acquire))
 	{
@@ -1358,7 +1389,9 @@ void SampleClip::loadSettings( const QDomElement & _this )
 	m_managedVocalPlaybackLoadTimer.stop();
 	m_managedVocalPlaybackLoadTimer.setInterval(20);
 	m_managedVocalPlaybackLoadTicket.reset();
+	m_managedVocalPlaybackLoadingProjectId.clear();
 	m_managedVocalPreloadedReference = {};
+	m_managedVocalPreloadedProjectId.clear();
 	m_managedVocalPreloadedSamples.reset();
 	{
 		const auto guard = Engine::audioEngine()->requestChangesGuard();

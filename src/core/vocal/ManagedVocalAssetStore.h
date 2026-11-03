@@ -108,11 +108,14 @@ public:
 	ManagedVocalAssetInspectResult inspect(const ManagedVocalVariantReference& reference) const;
 	ManagedVocalAssetInspectResult inspectById(const QString& assetId, const QString& expectedProjectId = {}) const;
 	// Internal native use only. The manifest includes private authorized source references.
-	ManagedVocalAssetOpenResult openVerified(const ManagedVocalVariantReference& reference) const;
+	ManagedVocalAssetOpenResult openVerified(
+		const ManagedVocalVariantReference& reference,
+		const QString& expectedProjectId = {}) const;
 	ManagedVocalAssetRecoveryScanResult scanRecovery(size_t limit = 128) const;
 
 private:
-	ManagedVocalAssetOpenResult readVariant(const ManagedVocalVariantReference&, bool retainSamples) const;
+	ManagedVocalAssetOpenResult readVariant(const ManagedVocalVariantReference&, bool retainSamples,
+		const QString& expectedProjectId = {}) const;
 	std::shared_ptr<ManagedVocalAssetRoot> m_root;
 	quint64 m_maximumStagedBytes = 0;
 };

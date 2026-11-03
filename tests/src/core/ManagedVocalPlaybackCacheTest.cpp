@@ -91,6 +91,82 @@ private slots:
 #endif
 	}
 
+	void warmCacheDoesNotReuseSamplesForAMismatchedManifestDigest()
+	{
+#ifndef Q_OS_WIN
+		QSKIP("Managed asset root authorization is Windows-only");
+#else
+		QTemporaryDir rootDirectory;
+		QVERIFY(rootDirectory.isValid());
+		ConfigManager::inst()->setValue(QStringLiteral("vocal_assets"), QStringLiteral("managed_root"),
+			QDir::fromNativeSeparators(rootDirectory.path()));
+		const auto reference = createVariant(48000);
+		QVERIFY(!reference.assetId.isEmpty());
+		auto approval = ManagedVocalAssetRoot::authorizeConfiguredRoot();
+		QVERIFY(approval.root);
+		ManagedVocalAssetStore store(approval.root);
+		ManagedVocalPlaybackCache cache(1024);
+		const auto verified = cache.acquire(store, reference);
+		QCOMPARE(verified.code, QStringLiteral("ok"));
+		auto mismatched = reference;
+		mismatched.manifestSha256 = digest('d');
+		const auto rejected = cache.acquire(store, mismatched);
+		QCOMPARE(rejected.code, QStringLiteral("asset_integrity_failed"));
+		QVERIFY(!rejected.samples);
+#endif
+	}
+
+	void warmCacheDoesNotReuseSamplesForMismatchedFrameFormat()
+	{
+#ifndef Q_OS_WIN
+		QSKIP("Managed asset root authorization is Windows-only");
+#else
+		QTemporaryDir rootDirectory;
+		QVERIFY(rootDirectory.isValid());
+		ConfigManager::inst()->setValue(QStringLiteral("vocal_assets"), QStringLiteral("managed_root"),
+			QDir::fromNativeSeparators(rootDirectory.path()));
+		const auto reference = createVariant(48000);
+		QVERIFY(!reference.assetId.isEmpty());
+		auto approval = ManagedVocalAssetRoot::authorizeConfiguredRoot();
+		QVERIFY(approval.root);
+		ManagedVocalAssetStore store(approval.root);
+		ManagedVocalPlaybackCache cache(1024);
+		const auto verified = cache.acquire(store, reference);
+		QCOMPARE(verified.code, QStringLiteral("ok"));
+		auto mismatched = reference;
+		mismatched.frames = 6;
+		mismatched.channels = 1;
+		const auto rejected = cache.acquire(store, mismatched);
+		QCOMPARE(rejected.code, QStringLiteral("asset_integrity_failed"));
+		QVERIFY(!rejected.samples);
+#endif
+	}
+
+	void warmCacheDoesNotReuseBufferAcrossProjectOwners()
+	{
+#ifndef Q_OS_WIN
+		QSKIP("Managed asset root authorization is Windows-only");
+#else
+		QTemporaryDir rootDirectory;
+		QVERIFY(rootDirectory.isValid());
+		ConfigManager::inst()->setValue(QStringLiteral("vocal_assets"), QStringLiteral("managed_root"),
+			QDir::fromNativeSeparators(rootDirectory.path()));
+		const auto reference = createVariant(48000);
+		QVERIFY(!reference.assetId.isEmpty());
+		auto approval = ManagedVocalAssetRoot::authorizeConfiguredRoot();
+		QVERIFY(approval.root);
+		ManagedVocalAssetStore store(approval.root);
+		ManagedVocalPlaybackCache cache(1024);
+		const auto owner = QStringLiteral("11111111-1111-4111-8111-111111111111");
+		const auto foreignOwner = QStringLiteral("22222222-2222-4222-8222-222222222222");
+		const auto verified = cache.acquire(store, reference, owner);
+		QCOMPARE(verified.code, QStringLiteral("ok"));
+		const auto rejected = cache.acquire(store, reference, foreignOwner);
+		QCOMPARE(rejected.code, QStringLiteral("asset_project_mismatch"));
+		QVERIFY(!rejected.samples);
+#endif
+	}
+
 	void refusesAdmissionBeforeExceedingPlaybackMemoryBudget()
 	{
 #ifndef Q_OS_WIN

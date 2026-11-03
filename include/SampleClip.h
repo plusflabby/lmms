@@ -183,7 +183,9 @@ private:
 	QTimer m_managedVocalPlaybackLoadTimer;
 	std::shared_ptr<ManagedVocalPlaybackLoadTicket> m_managedVocalPlaybackLoadTicket;
 	ManagedVocalVariantReference m_managedVocalPlaybackLoadingReference;
+	QString m_managedVocalPlaybackLoadingProjectId;
 	ManagedVocalVariantReference m_managedVocalPreloadedReference;
+	QString m_managedVocalPreloadedProjectId;
 	std::shared_ptr<const std::vector<float>> m_managedVocalPreloadedSamples;
 	void setSampleFileImpl(const QString& source, const QByteArray& expectedDigest, const QByteArray& expectedIdentity = {});
 	QString adoptRecordedTakeAudio(std::unique_ptr<AudioImportPolicy::Prepared>, const recording::RecordedTakeReference&, bool notify);

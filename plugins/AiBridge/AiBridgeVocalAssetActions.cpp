@@ -1154,6 +1154,21 @@ VocalVariantRenderResult AiBridgeVocalAssetActions::render(
 	}
 	if (phase) phase(VocalJobPhase::Publishing);
 	if (cancelled.load(std::memory_order_acquire)) return {QStringLiteral("cancelled"), {}, {}, budget.jobBytes};
+	for (const auto& sourceTicket : input.ticket.sources.sources)
+	{
+		const auto revalidated = scanVocalSource(sourceTicket,
+			[](quint64, std::span<const SampleFrame>) { return PcmWaveVisitDecision::Continue; }, cancelled);
+		if (cancelled.load(std::memory_order_acquire) || revalidated.code == QStringLiteral("cancelled"))
+			return {QStringLiteral("cancelled"), {}, {}, budget.jobBytes};
+		if (revalidated.code != QStringLiteral("ok"))
+		{
+			const auto code = revalidated.code == QStringLiteral("audio_source_changed")
+				|| revalidated.code == QStringLiteral("audio_source_missing")
+				? QStringLiteral("source_changed") : revalidated.code;
+			return {code, {}, {}, budget.jobBytes};
+		}
+	}
+	if (cancelled.load(std::memory_order_acquire)) return {QStringLiteral("cancelled"), {}, {}, budget.jobBytes};
 	auto published = store.publish(std::move(created.writer), std::move(manifest));
 	if (published.code != QStringLiteral("ok") || !published.value)
 	{

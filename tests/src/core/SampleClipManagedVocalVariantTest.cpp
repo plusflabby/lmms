@@ -48,6 +48,8 @@ class SampleClipManagedVocalVariantTest : public QObject
 	Q_OBJECT
 
 	QString m_oldRoot;
+	std::unique_ptr<QTemporaryDir> m_identityRoot;
+	std::unique_ptr<recording::RecordingLibrary> m_identityLibrary;
 
 	static QString digest(char value)
 	{
@@ -95,7 +97,7 @@ class SampleClipManagedVocalVariantTest : public QObject
 		if (created.writer->appendFrames(output) != QStringLiteral("ok")) return {};
 
 		ManagedVocalManifest manifest;
-		manifest.projectId = QStringLiteral("11111111-1111-4111-8111-111111111111");
+		manifest.projectId = Engine::getSong()->recordingProjectIdentity().cachedIdentity().id;
 		manifest.assetRootId = approval.root->rootId();
 		manifest.media = {3, rate, 2, digest('0'), 0.0, false};
 		long double sumSquares = 0.0L;
@@ -129,6 +131,14 @@ private slots:
 		m_oldRoot = ConfigManager::inst()->value(QStringLiteral("vocal_assets"),
 			QStringLiteral("managed_root"), QStringLiteral("__unset__"));
 		Engine::audioEngine()->audioDev()->stopProcessing();
+#ifdef Q_OS_WIN
+		m_identityRoot = std::make_unique<QTemporaryDir>();
+		QVERIFY(m_identityRoot->isValid());
+		auto authorized = recording::RecordingLibrary::authorizeLocalRoot(m_identityRoot->path());
+		QCOMPARE(authorized.code, QStringLiteral("ok"));
+		QVERIFY(authorized.library);
+		m_identityLibrary = std::move(authorized.library);
+#endif
 	}
 
 	void cleanupTestCase()
@@ -143,12 +153,65 @@ private slots:
 				QStringLiteral("managed_root"), m_oldRoot);
 		}
 		Engine::destroy();
+		m_identityLibrary.reset();
+		m_identityRoot.reset();
 	}
 
 	void cleanup()
 	{
 		Engine::projectJournal()->clearJournal();
 		Engine::projectJournal()->setJournalling(false);
+	}
+
+	void init()
+	{
+#ifdef Q_OS_WIN
+		Engine::getSong()->recordingProjectIdentity().resetForNewProject();
+		const auto identity = Engine::getSong()->recordingProjectIdentity()
+			.getOrCreateForCurrentProject(*m_identityLibrary);
+		QCOMPARE(identity.code, QStringLiteral("ok"));
+#endif
+	}
+
+	void playbackQuarantinesAVariantOwnedByAnotherProject()
+	{
+#ifndef Q_OS_WIN
+		QSKIP("Managed asset root authorization is Windows-only");
+#else
+		QTemporaryDir rootDirectory;
+		QVERIFY(rootDirectory.isValid());
+		ConfigManager::inst()->setValue(QStringLiteral("vocal_assets"), QStringLiteral("managed_root"),
+			QDir::fromNativeSeparators(rootDirectory.path()));
+		const auto sampleRate = int(Engine::audioEngine()->outputSampleRate());
+		const auto variant = createVariant(QStringLiteral("embedded:foreign-project-source"), sampleRate);
+		QVERIFY(!variant.assetId.isEmpty());
+		const auto originalProjectId = Engine::getSong()->recordingProjectIdentity().cachedIdentity().id;
+		Engine::getSong()->recordingProjectIdentity().resetForNewProject();
+		const auto otherProject = Engine::getSong()->recordingProjectIdentity()
+			.getOrCreateForCurrentProject(*m_identityLibrary);
+		QCOMPARE(otherProject.code, QStringLiteral("ok"));
+		QVERIFY(otherProject.identity.id != originalProjectId);
+
+		SampleTrack sourceTrack(Engine::getSong());
+		SampleClip source(&sourceTrack);
+		source.setSampleBuffer(std::make_shared<const SampleBuffer>(
+			std::vector<SampleFrame>(8, SampleFrame(0.25f)), sampleRate));
+		source.setAutoResize(false);
+		source.changeLength(TimePos(1));
+		QDomDocument document;
+		auto settings = originalClipSettings(document, source, 1);
+		settings.appendChild(writeManagedVocalVariantAssociation(document,
+			association(variant, *Engine::getSong(), sampleRate, variant.frames)));
+
+		SampleTrack restoredTrack(Engine::getSong());
+		SampleClip restored(&restoredTrack);
+		restored.loadSettings(settings);
+		QVERIFY(restored.hasManagedVocalVariant());
+		QTRY_COMPARE_WITH_TIMEOUT(restored.managedVocalVariantStatus(), QStringLiteral("asset_project_mismatch"), 5000);
+		QVERIFY(!restored.managedVocalPlaybackView());
+		QCOMPARE(restored.sample().sampleSize(), size_t(8));
+		QVERIFY(!restoredTrack.play(TimePos(0), Engine::audioEngine()->framesPerPeriod(), 0, -1));
+#endif
 	}
 
 	void savesReloadsAndClonesManagedVariantWithoutReplacingOriginalBuffer()
@@ -271,6 +334,7 @@ private slots:
 		source.changeLength(TimePos(8));
 		const auto variant=createVariant(QStringLiteral("embedded:fresh-process-source"),sampleRate);
 		QVERIFY(!variant.assetId.isEmpty());
+		const auto projectId = Engine::getSong()->recordingProjectIdentity().cachedIdentity().id;
 		auto preload=source.preloadManagedVocalVariant(variant);
 		if(preload==QStringLiteral("asset_loading"))QTRY_VERIFY_WITH_TIMEOUT(
 			(preload=source.preloadManagedVocalVariant(variant))==QStringLiteral("ok"),5000);
@@ -293,7 +357,7 @@ private slots:
 		{
 			auto storeRoot=ManagedVocalAssetRoot::authorizeConfiguredRoot();QVERIFY(storeRoot.root);
 			ManagedVocalAssetStore store(storeRoot.root);
-			const auto assetBefore=store.inspectById(variant.assetId,QStringLiteral("11111111-1111-4111-8111-111111111111"));
+			const auto assetBefore=store.inspectById(variant.assetId,projectId);
 			QCOMPARE(assetBefore.code,QStringLiteral("ok"));assetMediaSha256=assetBefore.mediaSha256;
 		}
 		QDomDocument configuration;
@@ -345,7 +409,7 @@ private slots:
 		{
 			auto storeRoot=ManagedVocalAssetRoot::authorizeConfiguredRoot();QVERIFY(storeRoot.root);
 			ManagedVocalAssetStore store(storeRoot.root);
-			const auto assetAfter=store.inspectById(variant.assetId,QStringLiteral("11111111-1111-4111-8111-111111111111"));
+			const auto assetAfter=store.inspectById(variant.assetId,projectId);
 			QCOMPARE(assetAfter.code,QStringLiteral("ok"));QCOMPARE(assetAfter.mediaSha256,assetMediaSha256);
 		}
 #endif

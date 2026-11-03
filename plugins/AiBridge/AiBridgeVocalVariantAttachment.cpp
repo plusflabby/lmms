@@ -12,6 +12,7 @@
 #include "src/core/vocal/ManagedVocalAssetRoot.h"
 #include "src/core/vocal/ManagedVocalPlayback.h"
 #include <QCoreApplication>
+#include <QCryptographicHash>
 #include <QPointer>
 #include <QThread>
 #include <QUuid>
@@ -64,11 +65,25 @@ bool matchingSource(const ManagedVocalAssetInspectResult& asset,const AiBridgeAu
 {
 	const auto digest=QString::fromLatin1(clip.state.sourceDigest.toHex());
 	const auto recorded=nativeClip.recordedTakeReference();
+	const auto identityBytes=recorded
+		? QByteArrayLiteral("recorded-take-identity-v1:")
+			+ QByteArray::number(recorded->sourceIdentity.volume) + QByteArrayLiteral(":")
+			+ QByteArray::number(recorded->sourceIdentity.index)
+		: clip.state.sourceIdentity;
+	const auto identity=QString::fromLatin1(
+		QCryptographicHash::hash(identityBytes,QCryptographicHash::Sha256).toHex());
+	// Clip IDs are session-scoped provenance; rebind across reloads only by the
+	// verified file identity and content digest (plus sealed-take identity).
 	for(const auto& source:asset.sources)
 	{
-		if(!digest.isEmpty() && source.sourceSha256==digest)return true;
-		if(recorded && source.recordedTakeProjectId==recorded->projectId
-			&& source.recordedTakeId==recorded->takeId)return true;
+		if(digest.isEmpty() || identity.isEmpty() || source.sourceSha256!=digest
+			|| source.sourceIdentity!=identity)continue;
+		if(recorded)
+		{
+			if(source.recordedTakeProjectId==recorded->projectId
+				&& source.recordedTakeId==recorded->takeId)return true;
+		}
+		else if(source.recordedTakeProjectId.isEmpty() && source.recordedTakeId.isEmpty())return true;
 	}
 	return false;
 }

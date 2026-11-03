@@ -199,6 +199,9 @@ foreach(LMMS_TEST_SRC IN LISTS LMMS_TESTS)
 			${CMAKE_SOURCE_DIR}/src/3rdparty/signalsmith/linear/include)
 		target_sources(${LMMS_TEST_NAME} PRIVATE
 			${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeVocalAssetActions.cpp
+			${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeVocalVariantAttachment.cpp
+			${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeVocalTrackActions.cpp
+			${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeMixerRegistry.cpp
 			${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeVocalDspBackend.cpp
 			${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeVocalJobs.cpp
 			${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeVocalJobs.h

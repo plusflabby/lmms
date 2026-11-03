@@ -51,10 +51,16 @@ bool validReference(const ManagedVocalVariantReference& reference)
 			/ quint64(reference.channels * int(sizeof(float)));
 }
 
-QString cacheKey(const ManagedVocalVariantReference& reference)
+QString cacheKey(const ManagedVocalVariantReference& reference, const QString& expectedProjectId)
 {
+	// Match the complete verified reference and project owner; never reuse a buffer
+	// for an association with different manifest or media geometry metadata.
 	return reference.assetRootId + QLatin1Char(':') + reference.assetId
-		+ QLatin1Char(':') + reference.mediaSha256;
+		+ QLatin1Char(':') + reference.mediaSha256 + QLatin1Char(':') + reference.manifestSha256
+		+ QLatin1Char(':') + QString::number(reference.frames)
+		+ QLatin1Char(':') + QString::number(reference.sampleRate)
+		+ QLatin1Char(':') + QString::number(reference.channels)
+		+ QLatin1Char(':') + expectedProjectId;
 }
 
 bool ManagedVocalPlaybackLoadTicket::isComplete() const
@@ -99,15 +105,17 @@ ManagedVocalPlaybackCache& ManagedVocalPlaybackCache::instance()
 
 ManagedVocalPlaybackBufferResult ManagedVocalPlaybackCache::acquire(
 	const ManagedVocalAssetStore& store,
-	const ManagedVocalVariantReference& reference)
+	const ManagedVocalVariantReference& reference,
+	const QString& expectedProjectId)
 {
-	return acquireFromState(m_state, store, reference);
+	return acquireFromState(m_state, store, reference, expectedProjectId);
 }
 
 ManagedVocalPlaybackBufferResult ManagedVocalPlaybackCache::acquireFromState(
 	const std::shared_ptr<State>& state,
 	const ManagedVocalAssetStore& store,
-	const ManagedVocalVariantReference& reference)
+	const ManagedVocalVariantReference& reference,
+	const QString& expectedProjectId)
 {
 	if (!validReference(reference))
 	{
@@ -118,7 +126,7 @@ ManagedVocalPlaybackBufferResult ManagedVocalPlaybackCache::acquireFromState(
 	{
 		return {QStringLiteral("resource_limit"), {}};
 	}
-	const auto key = cacheKey(reference);
+	const auto key = cacheKey(reference, expectedProjectId);
 	std::shared_ptr<State::Reservation> reservation;
 	{
 		std::unique_lock lock(state->mutex);
@@ -167,7 +175,7 @@ ManagedVocalPlaybackBufferResult ManagedVocalPlaybackCache::acquireFromState(
 		}
 	}
 
-	auto opened = store.openVerified(reference);
+	auto opened = store.openVerified(reference, expectedProjectId);
 	if (opened.code != QStringLiteral("ok"))
 	{
 		reservation.reset();
@@ -230,7 +238,8 @@ ManagedVocalPlaybackBufferResult ManagedVocalPlaybackCache::acquireFromState(
 
 ManagedVocalPlaybackLoadRequest ManagedVocalPlaybackCache::requestLoad(
 	const ManagedVocalAssetStore& store,
-	const ManagedVocalVariantReference& reference)
+	const ManagedVocalVariantReference& reference,
+	const QString& expectedProjectId)
 {
 	if (!validReference(reference))
 	{
@@ -250,7 +259,7 @@ ManagedVocalPlaybackLoadRequest ManagedVocalPlaybackCache::requestLoad(
 	{
 		return {QStringLiteral("resource_limit"), {}};
 	}
-	const auto key = cacheKey(reference);
+	const auto key = cacheKey(reference, expectedProjectId);
 	{
 		std::lock_guard lock(m_state->mutex);
 		if (const auto found = m_state->buffers.find(key); found != m_state->buffers.end())
@@ -271,11 +280,11 @@ ManagedVocalPlaybackLoadRequest ManagedVocalPlaybackCache::requestLoad(
 	const auto state = m_state;
 	try
 	{
-		m_loaderPool.start(QRunnable::create([state, store, reference, ticket] {
+		m_loaderPool.start(QRunnable::create([state, store, reference, expectedProjectId, ticket] {
 			ManagedVocalPlaybackBufferResult loaded;
 			try
 			{
-				loaded = ManagedVocalPlaybackCache::acquireFromState(state, store, reference);
+				loaded = ManagedVocalPlaybackCache::acquireFromState(state, store, reference, expectedProjectId);
 			}
 			catch (const std::bad_alloc&)
 			{

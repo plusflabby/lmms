@@ -424,7 +424,8 @@ ManagedVocalAssetPublishResult ManagedVocalAssetStore::publish(
 
 ManagedVocalAssetOpenResult ManagedVocalAssetStore::readVariant(
 	const ManagedVocalVariantReference& reference,
-	bool retainSamples) const
+	bool retainSamples,
+	const QString& expectedProjectId) const
 {
 	if (!m_root)
 	{
@@ -469,6 +470,10 @@ ManagedVocalAssetOpenResult ManagedVocalAssetStore::readVariant(
 		|| manifest.media.channels != reference.channels)
 	{
 		return failedOpen(QStringLiteral("asset_integrity_failed"));
+	}
+	if (!expectedProjectId.isEmpty() && manifest.projectId != expectedProjectId)
+	{
+		return failedOpen(QStringLiteral("asset_project_mismatch"));
 	}
 
 	const auto audioName = assetStem(reference.assetId) + QStringLiteral(".wav");
@@ -550,9 +555,10 @@ ManagedVocalAssetInspectResult ManagedVocalAssetStore::inspectById(
 }
 
 ManagedVocalAssetOpenResult ManagedVocalAssetStore::openVerified(
-	const ManagedVocalVariantReference& reference) const
+	const ManagedVocalVariantReference& reference,
+	const QString& expectedProjectId) const
 {
-	return readVariant(reference, true);
+	return readVariant(reference, true, expectedProjectId);
 }
 
 ManagedVocalAssetRecoveryScanResult ManagedVocalAssetStore::scanRecovery(size_t limit) const

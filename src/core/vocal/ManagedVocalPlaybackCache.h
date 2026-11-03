@@ -47,10 +47,12 @@ public:
 	static ManagedVocalPlaybackCache& instance();
 	ManagedVocalPlaybackBufferResult acquire(
 		const ManagedVocalAssetStore& store,
-		const ManagedVocalVariantReference& reference);
+		const ManagedVocalVariantReference& reference,
+		const QString& expectedProjectId = {});
 	ManagedVocalPlaybackLoadRequest requestLoad(
 		const ManagedVocalAssetStore& store,
-		const ManagedVocalVariantReference& reference);
+		const ManagedVocalVariantReference& reference,
+		const QString& expectedProjectId = {});
 	quint64 usedBytes() const;
 
 private:
@@ -58,7 +60,8 @@ private:
 	static ManagedVocalPlaybackBufferResult acquireFromState(
 		const std::shared_ptr<State>& state,
 		const ManagedVocalAssetStore& store,
-		const ManagedVocalVariantReference& reference);
+		const ManagedVocalVariantReference& reference,
+		const QString& expectedProjectId);
 	std::shared_ptr<State> m_state;
 	QThreadPool m_loaderPool;
 };
