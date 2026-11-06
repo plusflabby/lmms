@@ -148,6 +148,10 @@ IF(LMMS_HAVE_WINMM)
 	SET(EXTRA_LIBRARIES "winmm")
 ENDIF()
 
+IF(WIN32)
+	list(APPEND EXTRA_LIBRARIES crypt32 advapi32)
+ENDIF()
+
 IF(LMMS_BUILD_APPLE)
 	SET(EXTRA_LIBRARIES "-framework CoreMIDI -framework CoreFoundation")
 ENDIF()

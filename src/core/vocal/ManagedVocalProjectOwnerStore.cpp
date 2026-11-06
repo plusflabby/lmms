@@ -6,17 +6,22 @@
 #include <QFileInfo>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QScopeGuard>
 #include <QUuid>
 #include <algorithm>
 #include <array>
+#include <mutex>
 #ifdef Q_OS_WIN
 #include <windows.h>
+#include <dpapi.h>
+#include <wincred.h>
 #endif
 
 namespace lmms {
 namespace {
 constexpr qint64 MaxProjectBytes = 64LL * 1024 * 1024;
 constexpr qint64 MaxRecordBytes = 2048;
+std::mutex ownerStoreMutex;
 struct Snapshot
 {
 	QString fileId;
@@ -96,25 +101,129 @@ QString recordName(const Snapshot& state)
 	return QStringLiteral("vocal-project-") + QString::fromLatin1(key) + QStringLiteral(".json");
 }
 
-ManagedVocalProjectOwnerStore::Result readBinding(const std::shared_ptr<ManagedVocalAssetRootState>& root,
-	const QString& rootId, const Snapshot& state)
+QString witnessName(const Snapshot& state)
+{
+	return QStringLiteral("vocal-owner-witness-") + recordName(state).mid(QStringLiteral("vocal-project-").size());
+}
+
+QString credentialName(const QString& rootId, const Snapshot& state)
+{
+	return QStringLiteral("LMMS/ManagedVocalOwner/v1/") + rootId + QLatin1Char('/') + recordName(state);
+}
+
+struct CredentialRead { QString code; QByteArray bytes; };
+CredentialRead readCredential(const QString& name)
+{
+#ifdef Q_OS_WIN
+	PCREDENTIALW credential = nullptr;
+	if (!CredReadW(reinterpret_cast<LPCWSTR>(name.utf16()), CRED_TYPE_GENERIC, 0, &credential))
+		return {GetLastError() == ERROR_NOT_FOUND ? QStringLiteral("asset_missing")
+			: QStringLiteral("asset_integrity_failed"), {}};
+	const auto release = qScopeGuard([&] { if (credential) CredFree(credential); });
+	if (!credential || credential->Type != CRED_TYPE_GENERIC || !credential->CredentialBlob
+		|| !credential->CredentialBlobSize || credential->CredentialBlobSize > DWORD(MaxRecordBytes))
+		return {QStringLiteral("asset_integrity_failed"), {}};
+	return {QStringLiteral("ok"), QByteArray(reinterpret_cast<const char*>(credential->CredentialBlob),
+		int(credential->CredentialBlobSize))};
+#else
+	Q_UNUSED(name);
+	return {QStringLiteral("unsupported_backend"), {}};
+#endif
+}
+
+QString createCredential(const QString& name, const QByteArray& bytes)
+{
+#ifdef Q_OS_WIN
+	const auto current = readCredential(name);
+	if (current.code == QStringLiteral("ok")) return QStringLiteral("asset_exists");
+	if (current.code != QStringLiteral("asset_missing") || bytes.isEmpty() || bytes.size() > MaxRecordBytes)
+		return QStringLiteral("asset_write_failed");
+	CREDENTIALW credential{};
+	credential.Type = CRED_TYPE_GENERIC;
+	credential.TargetName = const_cast<LPWSTR>(reinterpret_cast<LPCWSTR>(name.utf16()));
+	credential.CredentialBlobSize = DWORD(bytes.size());
+	credential.CredentialBlob = reinterpret_cast<LPBYTE>(const_cast<char*>(bytes.constData()));
+	credential.Persist = CRED_PERSIST_LOCAL_MACHINE;
+	return CredWriteW(&credential, 0) ? QStringLiteral("ok") : QStringLiteral("asset_write_failed");
+#else
+	Q_UNUSED(name); Q_UNUSED(bytes);
+	return QStringLiteral("unsupported_backend");
+#endif
+}
+
+QByteArray protectionEntropy(const QString& rootId, const Snapshot& state, const QByteArray& purpose)
+{
+	return QCryptographicHash::hash(QByteArrayLiteral("lmms-vocal-project-protection-v1:")
+		+ purpose + ':' + rootId.toLatin1() + ':' + state.fileId.toLatin1() + ':' + state.digest.toLatin1(),
+		QCryptographicHash::Sha256);
+}
+
+std::optional<QByteArray> protectRecord(const QByteArray& data, const QByteArray& entropy)
+{
+#ifdef Q_OS_WIN
+	DATA_BLOB input{DWORD(data.size()), reinterpret_cast<BYTE*>(const_cast<char*>(data.constData()))};
+	DATA_BLOB extra{DWORD(entropy.size()), reinterpret_cast<BYTE*>(const_cast<char*>(entropy.constData()))};
+	DATA_BLOB output{};
+	if (!CryptProtectData(&input, nullptr, &extra, nullptr, nullptr, CRYPTPROTECT_UI_FORBIDDEN, &output)) return {};
+	const auto release = qScopeGuard([&] { if (output.pbData) LocalFree(output.pbData); });
+	if (!output.pbData || !output.cbData || output.cbData > DWORD(MaxRecordBytes)) return {};
+	return QByteArray(reinterpret_cast<const char*>(output.pbData), int(output.cbData));
+#else
+	Q_UNUSED(data); Q_UNUSED(entropy);
+	return {};
+#endif
+}
+
+std::optional<QByteArray> unprotectRecord(const QByteArray& data, const QByteArray& entropy)
+{
+#ifdef Q_OS_WIN
+	DATA_BLOB input{DWORD(data.size()), reinterpret_cast<BYTE*>(const_cast<char*>(data.constData()))};
+	DATA_BLOB extra{DWORD(entropy.size()), reinterpret_cast<BYTE*>(const_cast<char*>(entropy.constData()))};
+	DATA_BLOB output{};
+	if (!CryptUnprotectData(&input, nullptr, &extra, nullptr, nullptr, CRYPTPROTECT_UI_FORBIDDEN, &output)) return {};
+	const auto release = qScopeGuard([&] {
+		if (output.pbData) { SecureZeroMemory(output.pbData, output.cbData); LocalFree(output.pbData); }
+	});
+	if (!output.pbData || !output.cbData || output.cbData > DWORD(MaxRecordBytes)) return {};
+	return QByteArray(reinterpret_cast<const char*>(output.pbData), int(output.cbData));
+#else
+	Q_UNUSED(data); Q_UNUSED(entropy);
+	return {};
+#endif
+}
+
+ManagedVocalProjectOwnerStore::Result readProtected(const std::shared_ptr<ManagedVocalAssetRootState>& root,
+	const QString& rootId, const Snapshot& state, const QString& name, const QByteArray& purpose,
+	QByteArray* encoded = nullptr)
 {
 	using namespace managed_vocal_detail;
 	std::shared_ptr<FileState> file;
-	const auto code = openReadFile(root, recordName(state), file);
-	if (code == QStringLiteral("asset_missing")) return {QStringLiteral("project_identity_unverified"), {}};
+	const auto code = openReadFile(root, name, file);
 	if (code != QStringLiteral("ok")) return {code, {}};
 	const auto bytes = size(file);
 	if (bytes <= 0 || bytes > MaxRecordBytes) return {QStringLiteral("asset_integrity_failed"), {}};
 	QByteArray json(int(bytes), Qt::Uninitialized);
 	if (read(file, json.data(), bytes) != bytes) return {QStringLiteral("asset_integrity_failed"), {}};
+	if (encoded) *encoded = json;
 	QJsonParseError error{};
-	const auto doc = QJsonDocument::fromJson(json, &error);
+	const auto envelope = QJsonDocument::fromJson(json, &error);
+	const auto outer = envelope.object();
+	const auto protectedText = outer.value(QStringLiteral("protected")).toString().toLatin1();
+	const auto protectedBytes = QByteArray::fromBase64(protectedText);
+	if (error.error != QJsonParseError::NoError || !envelope.isObject() || outer.size() != 2
+		|| outer.value(QStringLiteral("schema")) != QJsonValue(2)
+		|| !outer.value(QStringLiteral("protected")).isString() || protectedBytes.isEmpty()
+		|| protectedBytes.toBase64() != protectedText
+		|| QJsonDocument(outer).toJson(QJsonDocument::Compact) != json)
+		return {QStringLiteral("asset_integrity_failed"), {}};
+	const auto plaintext = unprotectRecord(protectedBytes, protectionEntropy(rootId, state, purpose));
+	if (!plaintext) return {QStringLiteral("asset_integrity_failed"), {}};
+	const auto doc = QJsonDocument::fromJson(*plaintext, &error);
 	const auto object = doc.object();
 	const auto projectId = object.value(QStringLiteral("project_id")).toString();
 	const auto uuid = QUuid(projectId);
 	if (error.error != QJsonParseError::NoError || !doc.isObject() || object.size() != 5
-		|| QJsonDocument(object).toJson(QJsonDocument::Compact) != json
+		|| QJsonDocument(object).toJson(QJsonDocument::Compact) != *plaintext
 		|| object.value(QStringLiteral("schema")) != QJsonValue(1)
 		|| object.value(QStringLiteral("root_id")) != QJsonValue(rootId)
 		|| object.value(QStringLiteral("file_id")) != QJsonValue(state.fileId)
@@ -123,6 +232,49 @@ ManagedVocalProjectOwnerStore::Result readBinding(const std::shared_ptr<ManagedV
 		return {QStringLiteral("asset_integrity_failed"), {}};
 	return {QStringLiteral("ok"), ManagedVocalProjectOwner{projectId, rootId, state.fileId, state.digest}};
 }
+
+ManagedVocalProjectOwnerStore::Result readBinding(const std::shared_ptr<ManagedVocalAssetRootState>& root,
+	const QString& rootId, const Snapshot& state)
+{
+	const auto binding = readProtected(root, rootId, state, recordName(state), QByteArrayLiteral("binding"));
+	QByteArray witnessBytes;
+	const auto witness = readProtected(root, rootId, state, witnessName(state), QByteArrayLiteral("witness"), &witnessBytes);
+	const auto credential = readCredential(credentialName(rootId, state));
+	if (credential.code != QStringLiteral("ok") && credential.code != QStringLiteral("asset_missing"))
+		return {credential.code, {}};
+	if (binding.code == QStringLiteral("asset_missing") && witness.code == QStringLiteral("asset_missing")
+		&& credential.code == QStringLiteral("asset_missing"))
+		return {QStringLiteral("project_identity_unverified"), {}};
+	if (binding.code == QStringLiteral("asset_missing") || witness.code == QStringLiteral("asset_missing")
+		|| credential.code == QStringLiteral("asset_missing"))
+		return {QStringLiteral("asset_incomplete"), {}};
+	if (!binding.owner) return binding;
+	if (!witness.owner) return witness;
+	if (credential.bytes != witnessBytes || binding.owner->projectId != witness.owner->projectId
+		|| binding.owner->rootId != witness.owner->rootId
+		|| binding.owner->fileIdentity != witness.owner->fileIdentity
+		|| binding.owner->documentSha256 != witness.owner->documentSha256)
+		return {QStringLiteral("asset_integrity_failed"), {}};
+	return binding;
+}
+
+QString publishRecord(const std::shared_ptr<ManagedVocalAssetRootState>& root, const QString& name, const QByteArray& bytes)
+{
+	using namespace managed_vocal_detail;
+	if (bytes.size() > MaxRecordBytes) return QStringLiteral("asset_write_failed");
+	std::shared_ptr<FileState> temporary;
+	const auto stage = QStringLiteral("vocal-owner-stage-") + QUuid::createUuid().toString(QUuid::WithoutBraces);
+	const auto created = createNewFile(root, stage, MaxRecordBytes, temporary);
+	if (created != QStringLiteral("ok")) return created;
+	if (!write(temporary, bytes.constData(), bytes.size()) || !flush(temporary))
+	{
+		removeOwnedFile(temporary);
+		return QStringLiteral("asset_write_failed");
+	}
+	const auto published = renameNoReplace(temporary, name);
+	if (published != QStringLiteral("ok")) removeOwnedFile(temporary);
+	return published;
+}
 }
 
 ManagedVocalProjectOwnerStore::ManagedVocalProjectOwnerStore(std::shared_ptr<ManagedVocalAssetRoot> root)
@@ -130,6 +282,7 @@ ManagedVocalProjectOwnerStore::ManagedVocalProjectOwnerStore(std::shared_ptr<Man
 
 ManagedVocalProjectOwnerStore::Result ManagedVocalProjectOwnerStore::lookup(const QString& projectPath) const
 {
+	const std::lock_guard lock(ownerStoreMutex);
 	if (!m_root || !m_root->isAuthorized()) return {QStringLiteral("asset_root_revoked"), {}};
 	const auto current = snapshot(projectPath, m_root->m_state);
 	if (!current) return {QStringLiteral("project_identity_unverified"), {}};
@@ -139,6 +292,7 @@ ManagedVocalProjectOwnerStore::Result ManagedVocalProjectOwnerStore::lookup(cons
 ManagedVocalProjectOwnerStore::Result ManagedVocalProjectOwnerStore::ensure(const QString& projectPath) const
 {
 	using namespace managed_vocal_detail;
+	const std::lock_guard lock(ownerStoreMutex);
 	if (!m_root || !m_root->isAuthorized()) return {QStringLiteral("asset_root_revoked"), {}};
 	const auto current = snapshot(projectPath, m_root->m_state);
 	if (!current) return {QStringLiteral("project_identity_unverified"), {}};
@@ -146,24 +300,26 @@ ManagedVocalProjectOwnerStore::Result ManagedVocalProjectOwnerStore::ensure(cons
 	const auto previous = readBinding(m_root->m_state, rootId, *current);
 	if (previous.code != QStringLiteral("project_identity_unverified")) return previous;
 	const auto projectId = QUuid::createUuid().toString(QUuid::WithoutBraces);
-	const auto bytes = QJsonDocument(QJsonObject{{"schema",1},{"project_id",projectId},{"root_id",rootId},
+	const auto plaintext = QJsonDocument(QJsonObject{{"schema",1},{"project_id",projectId},{"root_id",rootId},
 		{"file_id",current->fileId},{"document_sha256",current->digest}}).toJson(QJsonDocument::Compact);
-	std::shared_ptr<FileState> temporary;
-	const auto stage = QStringLiteral("vocal-owner-stage-") + QUuid::createUuid().toString(QUuid::WithoutBraces);
-	const auto created = createNewFile(m_root->m_state, stage, MaxRecordBytes, temporary);
-	if (created != QStringLiteral("ok")) return {created, {}};
-	if (!write(temporary, bytes.constData(), bytes.size()) || !flush(temporary))
-	{
-		removeOwnedFile(temporary);
-		return {QStringLiteral("asset_write_failed"), {}};
-	}
-	const auto published = renameNoReplace(temporary, recordName(*current));
-	if (published != QStringLiteral("ok"))
-	{
-		removeOwnedFile(temporary);
-		if (published != QStringLiteral("asset_exists")) return {published, {}};
-	}
-	temporary.reset();
+	const auto binding = protectRecord(plaintext, protectionEntropy(rootId, *current, QByteArrayLiteral("binding")));
+	const auto witness = protectRecord(plaintext, protectionEntropy(rootId, *current, QByteArrayLiteral("witness")));
+	if (!binding || !witness) return {QStringLiteral("asset_write_failed"), {}};
+	const auto envelope = [](const QByteArray& value) {
+		return QJsonDocument(QJsonObject{{"schema",2},{"protected",QString::fromLatin1(value.toBase64())}})
+			.toJson(QJsonDocument::Compact);
+	};
+	const auto witnessBytes = envelope(*witness);
+	// The user-bound credential is created first. If either root publication is
+	// interrupted, a later lookup fails closed instead of minting another owner.
+	const auto credentialCode = createCredential(credentialName(rootId, *current), witnessBytes);
+	if (credentialCode != QStringLiteral("ok")) return {credentialCode, {}};
+	const auto witnessCode = publishRecord(m_root->m_state, witnessName(*current), witnessBytes);
+	if (witnessCode != QStringLiteral("ok"))
+		return witnessCode == QStringLiteral("asset_exists")
+			? readBinding(m_root->m_state, rootId, *current) : Result{witnessCode, {}};
+	const auto bindingCode = publishRecord(m_root->m_state, recordName(*current), envelope(*binding));
+	if (bindingCode != QStringLiteral("ok")) return {bindingCode, {}};
 	return readBinding(m_root->m_state, rootId, *current);
 }
 
