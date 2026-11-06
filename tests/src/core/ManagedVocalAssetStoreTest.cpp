@@ -231,6 +231,49 @@ private slots:
 #endif
 	}
 
+	void coldOwnerLookupRejectsForeignOwnerSubstitution()
+	{
+#ifndef Q_OS_WIN
+		QSKIP("Managed vocal project ownership requires Windows file identities");
+#else
+		QTemporaryDir rootDir, projectDir;
+		QVERIFY(rootDir.isValid() && projectDir.isValid());
+		const auto firstPath = projectDir.filePath(QStringLiteral("first.mmp"));
+		const auto secondPath = projectDir.filePath(QStringLiteral("second.mmp"));
+		for (const auto& path : {firstPath, secondPath})
+		{
+			QFile file(path);
+			QVERIFY(file.open(QIODevice::WriteOnly | QIODevice::NewOnly));
+			QCOMPARE(file.write("project"), qint64(7));
+		}
+		{
+			auto approval = ManagedVocalAssetRoot::authorizeLocalRoot(rootDir.path());
+			QVERIFY(approval.root);
+			ManagedVocalProjectOwnerStore store(approval.root);
+			const auto first = store.ensure(firstPath);
+			QVERIFY(first.owner);
+			const auto records = QDir(rootDir.path()).entryList({QStringLiteral("vocal-project-*.json")}, QDir::Files);
+			QCOMPARE(records.size(), 1);
+			const auto firstRecord = rootDir.filePath(records.front());
+			const auto second = store.ensure(secondPath);
+			QVERIFY(second.owner);
+			QVERIFY(first.owner->projectId != second.owner->projectId);
+			auto object = QJsonDocument::fromJson(contents(firstRecord)).object();
+			object.insert(QStringLiteral("project_id"), second.owner->projectId);
+			const auto substituted = QJsonDocument(object).toJson(QJsonDocument::Compact);
+			QFile file(firstRecord);
+			QVERIFY(file.open(QIODevice::WriteOnly | QIODevice::Truncate));
+			QCOMPARE(file.write(substituted), qint64(substituted.size()));
+		}
+		auto approval = ManagedVocalAssetRoot::authorizeLocalRoot(rootDir.path());
+		QVERIFY(approval.root);
+		ManagedVocalProjectOwnerStore store(approval.root);
+		const auto result = store.lookup(firstPath);
+		QVERIFY2(result.code != QStringLiteral("ok") && !result.owner,
+			"A substituted foreign owner must not be trusted after restart");
+#endif
+	}
+
 	void projectOwnerRejectsReparseAncestor()
 	{
 #ifndef Q_OS_WIN
