@@ -317,6 +317,24 @@ private slots:
 		Engine::projectJournal()->setJournalling(false);
 	}
 
+	void unsavedProjectCannotPublishEvenWithRecordingIdentity()
+	{
+		auto* song = Engine::getSong();
+		QVERIFY(song->projectFileName().isEmpty());
+		song->recordingProjectIdentity().resetForNewProject();
+		QTemporaryDir recordingDirectory;
+		QVERIFY(recordingDirectory.isValid());
+		auto library = recording::RecordingLibrary::authorizeLocalRoot(recordingDirectory.path());
+		QVERIFY(library.library);
+		const auto identity = song->recordingProjectIdentity().getOrCreateForCurrentProject(*library.library);
+		QCOMPARE(identity.code, QStringLiteral("ok"));
+		const auto plan = AiBridgeVocalAssetActions::plan(request(), limits());
+		QCOMPARE(plan.code, QStringLiteral("ok"));
+		QVERIFY(plan.value);
+		QCOMPARE(AiBridgeVocalAssetActions::prepareRender(*plan.value).code,
+			QStringLiteral("project_identity_unverified"));
+	}
+
 	void dryRunIsSideEffectFreeAndRenderPublishesAProjectBoundDetachedVariant()
 	{
 		const auto sourceHash = fileHash(m_sourcePath);
@@ -1097,6 +1115,31 @@ private slots:
 		QCOMPARE(recovery.code, QStringLiteral("ok"));
 		QCOMPARE(recovery.totalItems, size_t(0));
 		QVERIFY(fileHash(m_sourcePath) != originalHash);
+	}
+
+	void savedImportedProjectCanRenderWithoutRecordingLibrarySetup()
+	{
+		auto* song = Engine::getSong();
+		song->recordingProjectIdentity().resetForNewProject();
+		QVERIFY(song->recordingProjectIdentity().cachedIdentity().id.isEmpty());
+		QTemporaryDir projectDirectory;
+		QVERIFY(projectDirectory.isValid());
+		const auto projectPath = projectDirectory.filePath(QStringLiteral("fresh-project.mmp"));
+		QVERIFY(song->guiSaveProjectAs(projectPath));
+		const auto originalHash = fileHash(m_sourcePath);
+		const auto plan = AiBridgeVocalAssetActions::plan(request(), limits());
+		QCOMPARE(plan.code, QStringLiteral("ok"));
+		QVERIFY(plan.value);
+		const auto prepared = AiBridgeVocalAssetActions::prepareRender(*plan.value);
+		QCOMPARE(prepared.code, QStringLiteral("ok"));
+		QVERIFY(prepared.value);
+		std::atomic_bool cancelled{false};
+		const auto rendered = std::async(std::launch::async, [&] {
+			return AiBridgeVocalAssetActions::render(*prepared.value, cancelled, [](VocalJobPhase) {});
+		}).get();
+		QCOMPARE(rendered.code, QStringLiteral("ok"));
+		QVERIFY(rendered.variant);
+		QCOMPARE(fileHash(m_sourcePath), originalHash);
 	}
 };
 
