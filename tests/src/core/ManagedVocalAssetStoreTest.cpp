@@ -717,6 +717,32 @@ private slots:
 #endif
 	}
 
+	void projectOwnerRetainsIdentityAfterPhysicalRename()
+	{
+#ifndef Q_OS_WIN
+		QSKIP("Managed vocal project ownership requires Windows file identities");
+#else
+		QTemporaryDir rootDir, projectDir;
+		QVERIFY(rootDir.isValid() && projectDir.isValid());
+		const auto original = projectDir.filePath(QStringLiteral("original.mmp"));
+		const auto renamed = projectDir.filePath(QStringLiteral("renamed.mmp"));
+		{ QFile file(original); QVERIFY(file.open(QIODevice::WriteOnly | QIODevice::NewOnly)); QCOMPARE(file.write("project"), qint64(7)); }
+		auto approval = ManagedVocalAssetRoot::authorizeLocalRoot(rootDir.path());
+		QVERIFY(approval.root);
+		QVERIFY(trackTemporaryRoot(approval.root));
+		ManagedVocalProjectOwnerStore store(approval.root);
+		const auto initial = store.ensure(original);
+		QVERIFY(initial.owner);
+		QVERIFY(QFile::rename(original, renamed));
+		const auto relocated = store.lookup(renamed);
+		QCOMPARE(relocated.code, QStringLiteral("ok"));
+		QVERIFY(relocated.owner);
+		QCOMPARE(relocated.owner->projectId, initial.owner->projectId);
+		QCOMPARE(store.verify(renamed, *initial.owner), QStringLiteral("ok"));
+		QCOMPARE(store.lookup(original).code, QStringLiteral("project_identity_unverified"));
+#endif
+	}
+
 	void projectOwnerSupportsProjectInsideManagedRoot()
 	{
 #ifndef Q_OS_WIN
