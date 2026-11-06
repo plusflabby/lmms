@@ -167,6 +167,9 @@ private slots:
 		QVERIFY(recordingRoot.library);
 		const auto identity=Engine::getSong()->recordingProjectIdentity().getOrCreateForCurrentProject(*recordingRoot.library);
 		QCOMPARE(identity.code,QStringLiteral("ok"));QVERIFY(!identity.identity.id.isEmpty());
+		QTemporaryDir projectDirectory;QVERIFY(projectDirectory.isValid());
+		QVERIFY2(Engine::getSong()->guiSaveProjectAs(projectDirectory.filePath(QStringLiteral("vocal-safety-project.mmp"))),
+			qPrintable(Engine::getSong()->recordingProjectIdentity().lastCode()));
 		recordingRoot.library.reset();
 		ConfigManager::inst()->setValue(QStringLiteral("vocal_assets"),QStringLiteral("managed_root"),managedRootPath);
 		ConfigManager::inst()->setValue("aibridge",keys[1],"100000");

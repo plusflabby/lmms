@@ -122,6 +122,9 @@ class AiBridgeVocalAssetActionsTest : public QObject
 	};
 	std::unique_ptr<QTemporaryDir> m_audioRoot;
 	std::unique_ptr<QTemporaryDir> m_assetRoot;
+	std::unique_ptr<QTemporaryDir> m_projectDirectory;
+	std::unique_ptr<QTemporaryDir> m_identityDirectory;
+	std::unique_ptr<recording::RecordingLibrary> m_identityLibrary;
 	std::vector<std::unique_ptr<QTemporaryDir>> m_recordingRoots;
 	std::unique_ptr<SampleTrack> m_track;
 	SampleClip* m_clip = nullptr;
@@ -228,15 +231,17 @@ class AiBridgeVocalAssetActionsTest : public QObject
 
 	void installPersistentProjectIdentity()
 	{
-		QDomDocument document;
-		auto head = document.createElement(QStringLiteral("head"));
-		document.appendChild(head);
-		auto identity = document.createElement(QStringLiteral("recording_project"));
-		identity.setAttribute(QStringLiteral("schema"), QStringLiteral("1"));
-		identity.setAttribute(QStringLiteral("id"), uuid());
-		identity.setAttribute(QStringLiteral("nonce"), uuid());
-		head.appendChild(identity);
-		Engine::getSong()->recordingProjectIdentity().acceptLoad(head, QString{});
+		m_identityDirectory = std::make_unique<QTemporaryDir>();
+		m_projectDirectory = std::make_unique<QTemporaryDir>();
+		QVERIFY(m_identityDirectory->isValid() && m_projectDirectory->isValid());
+		auto approval = recording::RecordingLibrary::authorizeLocalRoot(m_identityDirectory->path());
+		QVERIFY(approval.library);
+		m_identityLibrary = std::move(approval.library);
+		auto* song = Engine::getSong();
+		song->recordingProjectIdentity().resetForNewProject();
+		const auto identity = song->recordingProjectIdentity().getOrCreateForCurrentProject(*m_identityLibrary);
+		QCOMPARE(identity.code, QStringLiteral("ok"));
+		QVERIFY(song->guiSaveProjectAs(m_projectDirectory->filePath(QStringLiteral("project.mmp"))));
 	}
 
 private slots:
@@ -287,13 +292,17 @@ private slots:
 		auto imported = AudioImportPolicy::configured().prepare(m_sourcePath);
 		QCOMPARE(imported.code, QStringLiteral("ok"));
 		QCOMPARE(m_clip->adoptAuthorizedAudio(std::move(imported.audio)), QStringLiteral("ok"));
-		installPersistentProjectIdentity();
+		if (QByteArray(QTest::currentTestFunction()) != QByteArrayLiteral("unsavedProjectCannotPublishEvenWithRecordingIdentity"))
+			installPersistentProjectIdentity();
 	}
 
 	void cleanup()
 	{
 		m_track.reset();
 		m_clip = nullptr;
+		m_identityLibrary.reset();
+		m_identityDirectory.reset();
+		m_projectDirectory.reset();
 		const QStringList keys{QStringLiteral("audio_import_roots"),
 			QStringLiteral("audio_import_max_file_bytes"), QStringLiteral("audio_import_max_decoded_bytes")};
 		for (int i = 0; i < keys.size(); ++i)

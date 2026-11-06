@@ -359,6 +359,10 @@ VocalEditRenderInputResult AiBridgeVocalAssetActions::prepareRender(const VocalE
 		return {QStringLiteral("plan_stale"), {}};
 	}
 	auto* song = Engine::getSong();
+	if (!song || song->projectFileName().isEmpty())
+	{
+		return {QStringLiteral("project_identity_unverified"), {}};
+	}
 	const auto identity = song->recordingProjectIdentity().cachedIdentity();
 	if (!validUuid(identity.id))
 	{

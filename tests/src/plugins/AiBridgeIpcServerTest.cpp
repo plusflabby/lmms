@@ -200,6 +200,9 @@ private slots:
 		QVERIFY(identityRoot.library);
 		const auto projectIdentity=Engine::getSong()->recordingProjectIdentity().getOrCreateForCurrentProject(*identityRoot.library);
 		QCOMPARE(projectIdentity.code,QStringLiteral("ok"));
+		QTemporaryDir projectDirectory;QVERIFY(projectDirectory.isValid());
+		QVERIFY2(Engine::getSong()->guiSaveProjectAs(projectDirectory.filePath(QStringLiteral("vocal-ipc-project.mmp"))),
+			qPrintable(Engine::getSong()->recordingProjectIdentity().lastCode()));
 		identityRoot.library.reset();
 		QTemporaryDir managedRootDirectory;QVERIFY(managedRootDirectory.isValid());
 		ConfigManager::inst()->setValue(QStringLiteral("vocal_assets"),QStringLiteral("managed_root"),managedRootDirectory.path());
