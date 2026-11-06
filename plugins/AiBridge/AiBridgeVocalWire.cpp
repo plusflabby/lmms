@@ -412,7 +412,9 @@ AiBridgeProtocolResponse AiBridgeVocalWire::execute(const AiBridgeProtocolReques
 			{"project_generation",QString::number(s.generation)},{"volume",s.volume},{"panning",s.panning},{"muted",s.muted},{"solo",s.solo},{"mixer_channel_id",s.mixerId}});
 	}
 	const auto importLimits=SampleDecoder::configuredImportLimits();
+	const auto editWorldHash=vocalEditWorldHash(captureVocalEditWorld());
 	return reply("ok",QJsonObject{{"basis","decoded_source_pre_mixer"},{"algorithm","levels_v1"},{"source_validation","job_snapshot"},
+		{"vocal_edit_world_hash",editWorldHash.isEmpty()?QJsonValue(QJsonValue::Null):QJsonValue(editWorldHash)},
 		{"analysis_supported",true},{"import_roots_configured",roots.isArray() && !roots.array().isEmpty()},
 		{"eq_supported",false},{"eq_reason","deferred_native_model_lifetime"},{"track_property_writes_supported",false},{"track_property_writes_reason","deferred_native_model_lifetime"},
 		{"cancellation","cooperative_no_os_read_deadline"},{"jobs",states},{"tracks",tracks},{"track_page",QJsonObject{{"total",total},{"offset",0},{"limit",128},{"has_more",total>128}}},

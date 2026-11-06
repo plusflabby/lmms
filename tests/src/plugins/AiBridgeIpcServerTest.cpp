@@ -203,6 +203,9 @@ private slots:
 		identityRoot.library.reset();
 		QTemporaryDir managedRootDirectory;QVERIFY(managedRootDirectory.isValid());
 		ConfigManager::inst()->setValue(QStringLiteral("vocal_assets"),QStringLiteral("managed_root"),managedRootDirectory.path());
+		const auto publicWorldHash=call("get_vocal_capabilities",{}).value("data").toObject().value("vocal_edit_world_hash").toString();
+		QCOMPARE(publicWorldHash,vocalEditWorldHash(captureVocalEditWorld()));
+		QVERIFY(!publicWorldHash.isEmpty());
 		if(nativeVocalHost)
 		{
 			socket.disconnectFromServer();QTRY_VERIFY(socket.state()==QLocalSocket::UnconnectedState);QTest::qWait(5);
@@ -268,7 +271,7 @@ private slots:
 		}
 		QDir managedRoot(managedRootDirectory.path());const auto filesBeforeDryRun=managedRoot.entryList(QDir::AllEntries|QDir::NoDotAndDotDot);
 		QJsonObject planParameters{{"recipe_version",1},{"expected_project_generation",QString::number(Engine::getSong()->recordingProjectIdentity().revision())},
-			{"expected_world_hash",vocalEditWorldHash(captureVocalEditWorld())},
+			{"expected_world_hash",publicWorldHash},
 			{"selections",QJsonArray{QJsonObject{{"clip_id",id},{"expected_audio_state_hash",read.value("audio_state_hash")},
 				{"source_basis","source_pcm"},{"source_frames",QJsonObject{{"in_frame","0"},{"out_frame","44100"}}}}}},
 			{"input_kind","direct_source"},{"input_selection_index",0},
