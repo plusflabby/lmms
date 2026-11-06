@@ -291,11 +291,50 @@ ManagedVocalProjectOwnerStore::Result ManagedVocalProjectOwnerStore::lookup(cons
 
 ManagedVocalProjectOwnerStore::Result ManagedVocalProjectOwnerStore::ensure(const QString& projectPath) const
 {
+	return ensureImpl(projectPath, {}, {}, false);
+}
+
+ManagedVocalProjectOwnerStore::Result ManagedVocalProjectOwnerStore::ensureExpected(
+	const QString& projectPath, const QString& fileIdentity, const QString& documentSha256) const
+{
+	return ensureImpl(projectPath, fileIdentity, documentSha256, true);
+}
+
+ManagedVocalProjectOwnerStore::Result ManagedVocalProjectOwnerStore::ensureLoadedSnapshot(
+	const QString& projectPath, const QString& sourceFileId, const QByteArray& sourceSha256) const
+{
+	const auto invalid = [] { return Result{QStringLiteral("project_identity_unverified"), {}}; };
+	if (sourceFileId.size() != 26 || sourceFileId[8] != QLatin1Char(':') || sourceFileId[17] != QLatin1Char(':')
+		|| sourceSha256.size() != 64) return invalid();
+	for (int i = 0; i < sourceFileId.size(); ++i)
+	{
+		if (i == 8 || i == 17) continue;
+		const auto c = sourceFileId[i];
+		if (!((c >= QLatin1Char('0') && c <= QLatin1Char('9'))
+			|| (c >= QLatin1Char('a') && c <= QLatin1Char('f')))) return invalid();
+	}
+	for (const auto c : sourceSha256)
+		if (!((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f'))) return invalid();
+	bool volumeOk = false, highOk = false, lowOk = false;
+	const auto volume = sourceFileId.mid(0, 8).toUInt(&volumeOk, 16);
+	const auto high = sourceFileId.mid(9, 8).toUInt(&highOk, 16);
+	const auto low = sourceFileId.mid(18, 8).toUInt(&lowOk, 16);
+	if (!volumeOk || !highOk || !lowOk) return invalid();
+	const auto material = QByteArray::number(volume) + ':' + QByteArray::number(high) + ':' + QByteArray::number(low);
+	const auto expectedId = QString::fromLatin1(QCryptographicHash::hash(material, QCryptographicHash::Sha256).toHex());
+	return ensureExpected(projectPath, expectedId, QString::fromLatin1(sourceSha256));
+}
+
+ManagedVocalProjectOwnerStore::Result ManagedVocalProjectOwnerStore::ensureImpl(
+	const QString& projectPath, const QString& fileIdentity, const QString& documentSha256, bool requireExpected) const
+{
 	using namespace managed_vocal_detail;
 	const std::lock_guard lock(ownerStoreMutex);
 	if (!m_root || !m_root->isAuthorized()) return {QStringLiteral("asset_root_revoked"), {}};
 	const auto current = snapshot(projectPath, m_root->m_state);
 	if (!current) return {QStringLiteral("project_identity_unverified"), {}};
+	if (requireExpected && (current->fileId != fileIdentity || current->digest != documentSha256))
+		return {QStringLiteral("project_identity_unverified"), {}};
 	const auto rootId = m_root->rootId();
 	const auto previous = readBinding(m_root->m_state, rootId, *current);
 	if (previous.code != QStringLiteral("project_identity_unverified")) return previous;

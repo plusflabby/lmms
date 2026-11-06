@@ -206,6 +206,99 @@ private slots:
 #endif
 	}
 
+	void expectedProjectSnapshotRejectsByteIdenticalReplacementWithoutCreatingOwner()
+	{
+#ifndef Q_OS_WIN
+		QSKIP("Managed vocal project ownership requires Windows file identities");
+#else
+		QTemporaryDir rootDir, projectDir;
+		QVERIFY(rootDir.isValid() && projectDir.isValid());
+		const auto project = projectDir.filePath(QStringLiteral("project.mmp"));
+		const auto replacement = projectDir.filePath(QStringLiteral("replacement.mmp"));
+		for (const auto& path : {project, replacement})
+		{
+			QFile file(path); QVERIFY(file.open(QIODevice::WriteOnly | QIODevice::NewOnly));
+			QCOMPARE(file.write("project"), qint64(7));
+		}
+		auto approval = ManagedVocalAssetRoot::authorizeLocalRoot(rootDir.path());
+		QVERIFY(approval.root); QVERIFY(trackTemporaryRoot(approval.root));
+		ManagedVocalProjectOwnerStore store(approval.root);
+		const auto original = store.ensure(project); QVERIFY(original.owner);
+		QVERIFY(QFile::rename(project, projectDir.filePath(QStringLiteral("original.mmp"))));
+		QVERIFY(QFile::rename(replacement, project));
+		const auto rejected = store.ensureExpected(project, original.owner->fileIdentity, original.owner->documentSha256);
+		QCOMPARE(rejected.code, QStringLiteral("project_identity_unverified"));
+		QVERIFY(!rejected.owner);
+		QCOMPARE(store.lookup(project).code, QStringLiteral("project_identity_unverified"));
+#endif
+	}
+
+	void expectedProjectSnapshotCreatesOnlyForTheVerifiedFileAndDigest()
+	{
+#ifndef Q_OS_WIN
+		QSKIP("Managed vocal project ownership requires Windows file identities");
+#else
+		QTemporaryDir rootDir, projectDir;
+		QVERIFY(rootDir.isValid() && projectDir.isValid());
+		const auto project = projectDir.filePath(QStringLiteral("project.mmp"));
+		const QByteArray bytes("verified project");
+		{ QFile file(project); QVERIFY(file.open(QIODevice::WriteOnly | QIODevice::NewOnly));
+		  QCOMPARE(file.write(bytes), qint64(bytes.size())); }
+		const auto file = CreateFileW(reinterpret_cast<LPCWSTR>(project.utf16()), GENERIC_READ,
+			FILE_SHARE_READ, nullptr, OPEN_EXISTING, FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
+		QVERIFY(file != INVALID_HANDLE_VALUE);
+		BY_HANDLE_FILE_INFORMATION info{};
+		const bool gotInfo = GetFileInformationByHandle(file, &info); CloseHandle(file); QVERIFY(gotInfo);
+		const auto material = QByteArray::number(qulonglong(info.dwVolumeSerialNumber)) + ':'
+			+ QByteArray::number(qulonglong(info.nFileIndexHigh)) + ':' + QByteArray::number(qulonglong(info.nFileIndexLow));
+		const auto id = QString::fromLatin1(QCryptographicHash::hash(material, QCryptographicHash::Sha256).toHex());
+		const auto digest = QString::fromLatin1(QCryptographicHash::hash(bytes, QCryptographicHash::Sha256).toHex());
+		auto approval = ManagedVocalAssetRoot::authorizeLocalRoot(rootDir.path());
+		QVERIFY(approval.root); QVERIFY(trackTemporaryRoot(approval.root));
+		ManagedVocalProjectOwnerStore store(approval.root);
+		QCOMPARE(store.ensureExpected(project, id, QString(64, QLatin1Char('0'))).code,
+			QStringLiteral("project_identity_unverified"));
+		QCOMPARE(store.lookup(project).code, QStringLiteral("project_identity_unverified"));
+		const auto created = store.ensureExpected(project, id, digest);
+		QCOMPARE(created.code, QStringLiteral("ok")); QVERIFY(created.owner);
+		QCOMPARE(created.owner->fileIdentity, id); QCOMPARE(created.owner->documentSha256, digest);
+		QCOMPARE(store.verify(project, *created.owner), QStringLiteral("ok"));
+#endif
+	}
+
+	void nativeLoadedSnapshotRequiresValidMatchingIdentityAndDigest()
+	{
+#ifndef Q_OS_WIN
+		QSKIP("Managed vocal project ownership requires Windows file identities");
+#else
+		QTemporaryDir rootDir, projectDir;
+		QVERIFY(rootDir.isValid() && projectDir.isValid());
+		const auto project = projectDir.filePath(QStringLiteral("project.mmp"));
+		const QByteArray bytes("loaded project");
+		{ QFile file(project); QVERIFY(file.open(QIODevice::WriteOnly | QIODevice::NewOnly));
+		  QCOMPARE(file.write(bytes), qint64(bytes.size())); }
+		const auto file = CreateFileW(reinterpret_cast<LPCWSTR>(project.utf16()), GENERIC_READ,
+			FILE_SHARE_READ, nullptr, OPEN_EXISTING, FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
+		QVERIFY(file != INVALID_HANDLE_VALUE); BY_HANDLE_FILE_INFORMATION info{};
+		const bool gotInfo = GetFileInformationByHandle(file, &info); CloseHandle(file); QVERIFY(gotInfo);
+		const auto nativeId = QStringLiteral("%1:%2:%3").arg(info.dwVolumeSerialNumber, 8, 16, QLatin1Char('0'))
+			.arg(info.nFileIndexHigh, 8, 16, QLatin1Char('0')).arg(info.nFileIndexLow, 8, 16, QLatin1Char('0'));
+		const auto digest = QCryptographicHash::hash(bytes, QCryptographicHash::Sha256).toHex();
+		auto approval = ManagedVocalAssetRoot::authorizeLocalRoot(rootDir.path());
+		QVERIFY(approval.root); QVERIFY(trackTemporaryRoot(approval.root));
+		ManagedVocalProjectOwnerStore store(approval.root);
+		QCOMPARE(store.ensureLoadedSnapshot(project, QStringLiteral("not-an-identity"), digest).code,
+			QStringLiteral("project_identity_unverified"));
+		QCOMPARE(store.lookup(project).code, QStringLiteral("project_identity_unverified"));
+		QCOMPARE(store.ensureLoadedSnapshot(project, nativeId, QByteArray(64, '0')).code,
+			QStringLiteral("project_identity_unverified"));
+		QCOMPARE(store.lookup(project).code, QStringLiteral("project_identity_unverified"));
+		const auto created = store.ensureLoadedSnapshot(project, nativeId, digest);
+		QCOMPARE(created.code, QStringLiteral("ok")); QVERIFY(created.owner);
+		QCOMPARE(store.verify(project, *created.owner), QStringLiteral("ok"));
+#endif
+	}
+
 	void projectOwnerRejectsMissingOrHardlinkedProject()
 	{
 #ifndef Q_OS_WIN
