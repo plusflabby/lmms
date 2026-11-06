@@ -27,6 +27,13 @@ QString openReadFile(
 	const std::shared_ptr<ManagedVocalAssetRootState>& root,
 	const QString& name,
 	std::shared_ptr<FileState>& file);
+// Opens only a descendant of the pinned root; other parents return
+// project_not_in_root so callers can use their separately authorized path.
+QString openReadProjectInRoot(
+	const std::shared_ptr<ManagedVocalAssetRootState>& root,
+	const QString& absolutePath,
+	std::shared_ptr<FileState>& file,
+	QByteArray& identity);
 bool authorized(const std::shared_ptr<ManagedVocalAssetRootState>& root);
 bool write(const std::shared_ptr<FileState>& file, const char* data, qint64 length);
 bool flush(const std::shared_ptr<FileState>& file);

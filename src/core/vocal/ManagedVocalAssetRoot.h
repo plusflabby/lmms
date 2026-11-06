@@ -30,6 +30,7 @@ public:
 
 private:
 	friend class ManagedVocalAssetStore;
+	friend class ManagedVocalProjectOwnerStore;
 	explicit ManagedVocalAssetRoot(std::shared_ptr<ManagedVocalAssetRootState> state);
 	std::shared_ptr<ManagedVocalAssetRootState> m_state;
 };

@@ -5,6 +5,7 @@ set(LMMS_SRCS
 	core/vocal/ManagedVocalWaveReader.cpp
 	core/vocal/ManagedVocalAssetTypes.cpp
 	core/vocal/ManagedVocalAssetRoot.cpp
+	core/vocal/ManagedVocalProjectOwnerStore.cpp
 	core/vocal/ManagedVocalAssetStore.cpp
 	core/vocal/ManagedVocalPlayback.cpp
 	core/vocal/ManagedVocalPlaybackCache.cpp

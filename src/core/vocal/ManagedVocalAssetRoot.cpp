@@ -3,6 +3,9 @@
 #include "ManagedVocalAssetFileOps.h"
 #include "ConfigManager.h"
 #include <QCryptographicHash>
+#include <QFileInfo>
+#include <QDir>
+#include <QScopeGuard>
 #include <QStringList>
 #include <array>
 #include <algorithm>
@@ -27,6 +30,7 @@ struct ManagedVocalAssetRootState
 	HANDLE writerLock = INVALID_HANDLE_VALUE;
 	DWORD volume = 0;
 	QString finalPath;
+	QString selectedPath;
 	QString identity;
 	~ManagedVocalAssetRootState()
 	{
@@ -153,6 +157,7 @@ QString openRoot(const QString& selected, std::shared_ptr<ManagedVocalAssetRootS
 		return QStringLiteral("asset_root_denied");
 	}
 	auto state = std::make_shared<ManagedVocalAssetRootState>();
+	state->selectedPath = path;
 	auto anchor = CreateFileW(reinterpret_cast<LPCWSTR>(drive.utf16()),
 		FILE_READ_ATTRIBUTES | FILE_TRAVERSE, FILE_SHARE_READ, nullptr, OPEN_EXISTING,
 		FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
@@ -345,6 +350,7 @@ struct FileState
 	std::shared_ptr<ManagedVocalAssetRootState> root;
 #ifdef Q_OS_WIN
 	HANDLE handle = INVALID_HANDLE_VALUE;
+	std::vector<HANDLE> ancestors;
 	DWORD volume = 0;
 #endif
 	QString name;
@@ -357,6 +363,7 @@ struct FileState
 	{
 #ifdef Q_OS_WIN
 		if (handle != INVALID_HANDLE_VALUE) CloseHandle(handle);
+		for (auto it = ancestors.rbegin(); it != ancestors.rend(); ++it) CloseHandle(*it);
 #endif
 	}
 };
@@ -472,6 +479,80 @@ QString openReadFile(const std::shared_ptr<ManagedVocalAssetRootState>& root, co
 	return QStringLiteral("ok");
 #else
 	Q_UNUSED(root); Q_UNUSED(name); Q_UNUSED(output);
+	return QStringLiteral("unsupported_backend");
+#endif
+}
+
+QString openReadProjectInRoot(const std::shared_ptr<ManagedVocalAssetRootState>& root,
+	const QString& absolutePath, std::shared_ptr<FileState>& output, QByteArray& identity)
+{
+#ifdef Q_OS_WIN
+	if (!rootAuthorized(root)) return QStringLiteral("asset_root_revoked");
+	if (!QDir::isAbsolutePath(absolutePath)) return QStringLiteral("project_identity_unverified");
+	const QFileInfo candidate(absolutePath);
+	if (canonicalRoot(QDir::fromNativeSeparators(candidate.absoluteFilePath())).isEmpty())
+		return QStringLiteral("project_identity_unverified");
+	const auto parent = canonicalRoot(QDir::fromNativeSeparators(candidate.absolutePath()));
+	const auto prefix = root->selectedPath + QLatin1Char('/');
+	if (parent.isEmpty() || (parent.compare(root->selectedPath, Qt::CaseInsensitive) != 0
+		&& !parent.startsWith(prefix, Qt::CaseInsensitive)))
+		return QStringLiteral("project_not_in_root");
+	const auto name = candidate.fileName();
+	if (name.isEmpty() || name == QStringLiteral(".") || name == QStringLiteral("..")
+		|| name.size() > 255 || name.endsWith('.') || name.endsWith(' '))
+		return QStringLiteral("project_identity_unverified");
+	for (const auto ch : name)
+		if (ch.unicode() < 32 || QStringLiteral("\\/:*?\"<>|").contains(ch))
+			return QStringLiteral("project_identity_unverified");
+	std::vector<HANDLE> ancestors;
+	const auto closeAncestors = [&] { for (auto it = ancestors.rbegin(); it != ancestors.rend(); ++it) CloseHandle(*it); };
+	auto ancestorGuard = qScopeGuard(closeAncestors);
+	HANDLE parentHandle = root->directory;
+	QString relativeName;
+	if (parent.size() > root->selectedPath.size())
+	{
+		const auto components = parent.mid(prefix.size()).split('/');
+		ancestors.reserve(size_t(components.size()));
+		for (const auto& component : components)
+		{
+			NTSTATUS directoryStatus = 0;
+			const auto directory = relative(parentHandle, component, FILE_READ_ATTRIBUTES | FILE_TRAVERSE,
+				FILE_OPEN, true, directoryStatus, FILE_SHARE_READ | FILE_SHARE_WRITE);
+			if (directory == INVALID_HANDLE_VALUE) return QStringLiteral("project_identity_unverified");
+			ancestors.push_back(directory);
+			relativeName += component + QLatin1Char('/');
+			if (!ordinary(directory, true, root->volume) || finalName(directory) != root->finalPath + '/' + relativeName.chopped(1))
+				return QStringLiteral("project_identity_unverified");
+			parentHandle = directory;
+		}
+	}
+	relativeName += name;
+	NTSTATUS status = 0;
+	const auto handle = relative(parentHandle, name, GENERIC_READ, FILE_OPEN, false, status, FILE_SHARE_READ);
+	if (handle == INVALID_HANDLE_VALUE) return QStringLiteral("project_identity_unverified");
+	auto fileGuard = qScopeGuard([handle] { CloseHandle(handle); });
+	BY_HANDLE_FILE_INFORMATION info{};
+	if (!ordinary(handle, false, root->volume) || finalName(handle) != root->finalPath + '/' + relativeName
+		|| !GetFileInformationByHandle(handle, &info))
+	{
+		return QStringLiteral("project_identity_unverified");
+	}
+	const auto material = QByteArray::number(qulonglong(info.dwVolumeSerialNumber)) + ':'
+		+ QByteArray::number(qulonglong(info.nFileIndexHigh)) + ':' + QByteArray::number(qulonglong(info.nFileIndexLow));
+	identity = QCryptographicHash::hash(material, QCryptographicHash::Sha256);
+	auto file = std::make_shared<FileState>();
+	file->root = root;
+	file->handle = handle;
+	fileGuard.dismiss();
+	file->ancestors = std::move(ancestors);
+	ancestorGuard.dismiss();
+	file->volume = root->volume;
+	file->name = relativeName;
+	file->finalPath = root->finalPath + '/' + relativeName;
+	output = std::move(file);
+	return QStringLiteral("ok");
+#else
+	Q_UNUSED(root); Q_UNUSED(absolutePath); Q_UNUSED(output); Q_UNUSED(identity);
 	return QStringLiteral("unsupported_backend");
 #endif
 }
