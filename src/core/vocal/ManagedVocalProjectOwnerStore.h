@@ -24,6 +24,7 @@ class LMMS_EXPORT ManagedVocalProjectOwnerStore
 {
 public:
 	struct Result { QString code; std::optional<ManagedVocalProjectOwner> owner; };
+	struct HoldResult { QString code; std::shared_ptr<void> hold; };
 	explicit ManagedVocalProjectOwnerStore(std::shared_ptr<ManagedVocalAssetRoot> root);
 	Result lookup(const QString& projectPath) const;
 	Result ensure(const QString& projectPath) const;
@@ -37,6 +38,9 @@ public:
 	Result ensureLoadedSnapshot(const QString& projectPath, const QString& sourceFileId,
 		const QByteArray& sourceSha256) const;
 	QString verify(const QString& projectPath, const ManagedVocalProjectOwner& owner) const;
+	// The returned hold pins the validated file against writes and replacement.
+	// Release it on the acquiring thread; render-job handoff is not yet qualified.
+	HoldResult holdVerified(const QString& projectPath, const ManagedVocalProjectOwner& owner) const;
 
 private:
 	Result ensureImpl(const QString& projectPath, const QString& fileIdentity,

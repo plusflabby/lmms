@@ -299,6 +299,110 @@ private slots:
 #endif
 	}
 
+	void verifiedProjectHoldPreventsConcurrentWriteOrReplacement()
+	{
+#ifndef Q_OS_WIN
+		QSKIP("Managed vocal project ownership requires Windows file identities");
+#else
+		QTemporaryDir rootDir, projectDir;
+		QVERIFY(rootDir.isValid() && projectDir.isValid());
+		const auto project = projectDir.filePath(QStringLiteral("project.mmp"));
+		{ QFile file(project); QVERIFY(file.open(QIODevice::WriteOnly | QIODevice::NewOnly));
+		  QCOMPARE(file.write("original"), qint64(8)); }
+		auto approval = ManagedVocalAssetRoot::authorizeLocalRoot(rootDir.path());
+		QVERIFY(approval.root); QVERIFY(trackTemporaryRoot(approval.root));
+		ManagedVocalProjectOwnerStore store(approval.root);
+		const auto owner = store.ensure(project); QVERIFY(owner.owner);
+		auto held = store.holdVerified(project, *owner.owner);
+		QCOMPARE(held.code, QStringLiteral("ok")); QVERIFY(held.hold);
+		const auto writer = CreateFileW(reinterpret_cast<LPCWSTR>(project.utf16()), GENERIC_WRITE,
+			FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING,
+			FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
+		if (writer != INVALID_HANDLE_VALUE) CloseHandle(writer);
+		QVERIFY(writer == INVALID_HANDLE_VALUE);
+		const auto moved = projectDir.filePath(QStringLiteral("moved.mmp"));
+		QVERIFY(!QFile::rename(project, moved));
+		QCOMPARE(contents(project), QByteArray("original"));
+		held.hold.reset();
+		QVERIFY(QFile::rename(project, moved));
+		QCOMPARE(contents(moved), QByteArray("original"));
+#endif
+	}
+
+	void projectHoldRejectsForeignOwnerAndRevokedRoot()
+	{
+#ifndef Q_OS_WIN
+		QSKIP("Managed vocal project ownership requires Windows file identities");
+#else
+		QTemporaryDir rootDir, projectDir;
+		QVERIFY(rootDir.isValid() && projectDir.isValid());
+		const auto project = projectDir.filePath(QStringLiteral("project.mmp"));
+		{ QFile file(project); QVERIFY(file.open(QIODevice::WriteOnly | QIODevice::NewOnly));
+		  QCOMPARE(file.write("original"), qint64(8)); }
+		auto approval = ManagedVocalAssetRoot::authorizeLocalRoot(rootDir.path());
+		QVERIFY(approval.root); QVERIFY(trackTemporaryRoot(approval.root));
+		ManagedVocalProjectOwnerStore store(approval.root);
+		const auto owner = store.ensure(project); QVERIFY(owner.owner);
+		auto foreign = *owner.owner;
+		foreign.projectId = QUuid::createUuid().toString(QUuid::WithoutBraces);
+		const auto denied = store.holdVerified(project, foreign);
+		QCOMPARE(denied.code, QStringLiteral("project_identity_unverified")); QVERIFY(!denied.hold);
+		approval.root->revoke();
+		const auto revoked = store.holdVerified(project, *owner.owner);
+		QCOMPARE(revoked.code, QStringLiteral("asset_root_revoked")); QVERIFY(!revoked.hold);
+		QVERIFY(QFile::rename(project, projectDir.filePath(QStringLiteral("moved.mmp"))));
+#endif
+	}
+
+	void verifiedHoldWorksForProjectInsideManagedRoot()
+	{
+#ifndef Q_OS_WIN
+		QSKIP("Managed vocal project ownership requires Windows file identities");
+#else
+		QTemporaryDir rootDir; QVERIFY(rootDir.isValid());
+		const auto project = rootDir.filePath(QStringLiteral("project.mmp"));
+		{ QFile file(project); QVERIFY(file.open(QIODevice::WriteOnly | QIODevice::NewOnly));
+		  QCOMPARE(file.write("inside"), qint64(6)); }
+		auto approval = ManagedVocalAssetRoot::authorizeLocalRoot(rootDir.path());
+		QVERIFY(approval.root); QVERIFY(trackTemporaryRoot(approval.root));
+		ManagedVocalProjectOwnerStore store(approval.root);
+		const auto owner = store.ensure(project); QVERIFY(owner.owner);
+		auto held = store.holdVerified(project, *owner.owner);
+		QCOMPARE(held.code, QStringLiteral("ok")); QVERIFY(held.hold);
+		const auto moved = rootDir.filePath(QStringLiteral("moved.mmp"));
+		QVERIFY(!QFile::rename(project, moved));
+		held.hold.reset(); QVERIFY(QFile::rename(project, moved));
+		QCOMPARE(store.verify(moved, *owner.owner), QStringLiteral("ok"));
+#endif
+	}
+
+	void projectHoldRetainsExclusiveManagedRootLock()
+	{
+#ifndef Q_OS_WIN
+		QSKIP("Managed vocal project ownership requires Windows file identities");
+#else
+		QTemporaryDir rootDir, projectDir;
+		QVERIFY(rootDir.isValid() && projectDir.isValid());
+		const auto project = projectDir.filePath(QStringLiteral("project.mmp"));
+		{ QFile file(project); QVERIFY(file.open(QIODevice::WriteOnly | QIODevice::NewOnly));
+		  QCOMPARE(file.write("original"), qint64(8)); }
+		std::shared_ptr<void> hold;
+		{
+			auto approval = ManagedVocalAssetRoot::authorizeLocalRoot(rootDir.path());
+			QVERIFY(approval.root); QVERIFY(trackTemporaryRoot(approval.root));
+			ManagedVocalProjectOwnerStore store(approval.root);
+			const auto owner = store.ensure(project); QVERIFY(owner.owner);
+			auto result = store.holdVerified(project, *owner.owner);
+			QCOMPARE(result.code, QStringLiteral("ok")); QVERIFY(result.hold);
+			hold = std::move(result.hold);
+		}
+		QCOMPARE(ManagedVocalAssetRoot::authorizeLocalRoot(rootDir.path()).code, QStringLiteral("asset_root_busy"));
+		hold.reset();
+		auto reopened = ManagedVocalAssetRoot::authorizeLocalRoot(rootDir.path());
+		QCOMPARE(reopened.code, QStringLiteral("ok")); QVERIFY(reopened.root);
+#endif
+	}
+
 	void projectOwnerRejectsMissingOrHardlinkedProject()
 	{
 #ifndef Q_OS_WIN

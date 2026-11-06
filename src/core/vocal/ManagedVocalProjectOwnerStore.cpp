@@ -29,6 +29,11 @@ struct Snapshot
 	std::unique_ptr<QIODevice> pin;
 	std::shared_ptr<managed_vocal_detail::FileState> rootPin;
 };
+struct HeldSnapshot
+{
+	std::shared_ptr<ManagedVocalAssetRoot> root;
+	Snapshot snapshot;
+};
 
 std::optional<Snapshot> snapshot(const QString& path, const std::shared_ptr<ManagedVocalAssetRootState>& root)
 {
@@ -369,5 +374,22 @@ QString ManagedVocalProjectOwnerStore::verify(const QString& projectPath, const 
 	return found.owner->projectId == owner.projectId && found.owner->rootId == owner.rootId
 		&& found.owner->fileIdentity == owner.fileIdentity && found.owner->documentSha256 == owner.documentSha256
 		? QStringLiteral("ok") : QStringLiteral("project_identity_unverified");
+}
+
+ManagedVocalProjectOwnerStore::HoldResult ManagedVocalProjectOwnerStore::holdVerified(
+	const QString& projectPath, const ManagedVocalProjectOwner& owner) const
+{
+	const std::lock_guard lock(ownerStoreMutex);
+	if (!m_root || !m_root->isAuthorized()) return {QStringLiteral("asset_root_revoked"), {}};
+	auto current = snapshot(projectPath, m_root->m_state);
+	if (!current || owner.rootId != m_root->rootId() || current->fileId != owner.fileIdentity
+		|| current->digest != owner.documentSha256)
+		return {QStringLiteral("project_identity_unverified"), {}};
+	const auto binding = readBinding(m_root->m_state, owner.rootId, *current);
+	if (!binding.owner) return {binding.code, {}};
+	if (binding.owner->projectId != owner.projectId || binding.owner->rootId != owner.rootId
+		|| binding.owner->fileIdentity != owner.fileIdentity || binding.owner->documentSha256 != owner.documentSha256)
+		return {QStringLiteral("project_identity_unverified"), {}};
+	return {QStringLiteral("ok"), std::make_shared<HeldSnapshot>(HeldSnapshot{m_root, std::move(*current)})};
 }
 }
