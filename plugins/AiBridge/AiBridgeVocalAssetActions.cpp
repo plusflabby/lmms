@@ -364,7 +364,7 @@ VocalEditRenderInputResult AiBridgeVocalAssetActions::prepareRender(const VocalE
 		return {QStringLiteral("project_identity_unverified"), {}};
 	}
 	const auto identity = song->recordingProjectIdentity().cachedIdentity();
-	if (!validUuid(identity.id))
+	if (!validUuid(identity.id) || !song->recordingProjectIdentity().sourceIdentityTrusted())
 	{
 		return {QStringLiteral("project_identity_unverified"), {}};
 	}

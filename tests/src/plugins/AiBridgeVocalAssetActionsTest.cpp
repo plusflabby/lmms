@@ -1126,6 +1126,25 @@ private slots:
 		QVERIFY(fileHash(m_sourcePath) != originalHash);
 	}
 
+	void savedProjectWithUnpersistedRecordingIdentityCannotPublish()
+	{
+		auto* song = Engine::getSong();
+		QVERIFY(!song->projectFileName().isEmpty());
+		song->recordingProjectIdentity().resetForNewProject();
+		QTemporaryDir recordingDirectory;
+		QVERIFY(recordingDirectory.isValid());
+		auto library = recording::RecordingLibrary::authorizeLocalRoot(recordingDirectory.path());
+		QVERIFY(library.library);
+		const auto identity = song->recordingProjectIdentity().getOrCreateForCurrentProject(*library.library);
+		QCOMPARE(identity.code, QStringLiteral("ok"));
+		QVERIFY(!song->recordingProjectIdentity().sourceIdentityTrusted());
+		const auto plan = AiBridgeVocalAssetActions::plan(request(), limits());
+		QCOMPARE(plan.code, QStringLiteral("ok"));
+		QVERIFY(plan.value);
+		QCOMPARE(AiBridgeVocalAssetActions::prepareRender(*plan.value).code,
+			QStringLiteral("project_identity_unverified"));
+	}
+
 	void savedImportedProjectCanRenderWithoutRecordingLibrarySetup()
 	{
 		auto* song = Engine::getSong();
