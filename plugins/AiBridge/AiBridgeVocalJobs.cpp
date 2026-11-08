@@ -7,6 +7,7 @@
 #include "src/core/vocal/ManagedVocalAssetRoot.h"
 #include "RecordingProjectIdentity.h"
 #include "Song.h"
+#include "src/core/vocal/ManagedVocalProjectOwnerStore.h"
 #include <QPointer>
 #include <QThread>
 #include <QUuid>
@@ -152,7 +153,9 @@ void AiBridgeVocalJobs::checkLifetime()
 	const auto managedRootSetting=ConfigManager::inst()->value(QStringLiteral("vocal_assets"),
 		QStringLiteral("managed_root"));
 	auto* song=Engine::getSong();
-	const auto projectId=song ? song->recordingProjectIdentity().cachedIdentity().id : QString{};
+	const auto managedOwner=song ? song->managedVocalOwner() : nullptr;
+	const auto projectId=managedOwner ? managedOwner->projectId
+		: (song ? song->recordingProjectIdentity().cachedIdentity().id : QString{});
 	bool changed=false;
 	for(auto& [id,e]:m_entries)
 	{

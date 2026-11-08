@@ -35,6 +35,7 @@
 #include "AudioWindowPlayback.h"
 #include "src/core/vocal/ManagedVocalAssetRoot.h"
 #include "src/core/vocal/ManagedVocalAssetStore.h"
+#include "src/core/vocal/ManagedVocalProjectOwnerStore.h"
 #include "src/core/vocal/ManagedVocalPlaybackCache.h"
 #include "ConfigManager.h"
 
@@ -51,6 +52,27 @@ namespace lmms
 {
 namespace
 {
+QString managedVocalProjectId(Song* song)
+{
+	if (!song) return {};
+	const auto owner = song->managedVocalOwner();
+	return owner ? owner->projectId : song->recordingProjectIdentity().cachedIdentity().id;
+}
+
+QString holdManagedVocalOwner(Song* song, const std::shared_ptr<ManagedVocalAssetRoot>& root,
+	std::shared_ptr<void>& hold)
+{
+	const auto owner = song ? song->managedVocalOwner() : nullptr;
+	if (!owner) return QStringLiteral("ok");
+	if (!root || !root->isAuthorized() || root->rootId() != owner->rootId)
+		return QStringLiteral("project_identity_unverified");
+	ManagedVocalProjectOwnerStore owners(root);
+	const auto result = owners.holdVerified(song->projectFileName(), *owner);
+	if (!result.hold) return result.code;
+	hold = result.hold;
+	return QStringLiteral("ok");
+}
+
 #if defined(__clang__)
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Wdeprecated-declarations"
@@ -482,10 +504,14 @@ QString SampleClip::requestManagedVocalAsset(
 	if (QThread::currentThread() != thread()) return QStringLiteral("wrong_thread");
 	auto* song = Engine::getSong();
 	if (!song) return QStringLiteral("stale_id");
-	const auto projectId = song->recordingProjectIdentity().cachedIdentity().id;
+	const auto projectId = managedVocalProjectId(song);
 	if (projectId.isEmpty()) return QStringLiteral("project_identity_unverified");
-	auto approval = ManagedVocalAssetRoot::authorizeConfiguredRoot();
+	auto approval = ManagedVocalAssetRoot::authorizeConfiguredRoot(song->managedVocalOwner()
+		? song->recordingProjectIdentity().managedRootLibraryForOwner() : song->recordingProjectIdentity().managedRootLibrary());
 	if (!approval.root) return approval.code;
+	std::shared_ptr<void> projectHold;
+	const auto ownerCode = holdManagedVocalOwner(song, approval.root, projectHold);
+	if (ownerCode != QStringLiteral("ok")) return ownerCode;
 	if (approval.root->rootId() != reference.assetRootId)
 	{
 		return QStringLiteral("asset_root_mismatch");
@@ -612,7 +638,7 @@ void SampleClip::pollManagedVocalPlaybackLoad()
 	auto ticket = std::move(m_managedVocalPlaybackLoadTicket);
 	const auto result = ticket->result();
 	auto* song = Engine::getSong();
-	const auto currentProjectId = song ? song->recordingProjectIdentity().cachedIdentity().id : QString{};
+	const auto currentProjectId = managedVocalProjectId(song);
 	if (expectedProjectId.isEmpty() || currentProjectId != expectedProjectId)
 	{
 		m_managedVocalPreloadedReference = {};
@@ -620,6 +646,22 @@ void SampleClip::pollManagedVocalPlaybackLoad()
 		m_managedVocalPreloadedSamples.reset();
 		setManagedVocalVariantStatus(QStringLiteral("asset_project_mismatch"));
 		return;
+	}
+	std::shared_ptr<ManagedVocalAssetRoot> validatedRoot;
+	std::shared_ptr<void> validatedOwner;
+	if (song && song->managedVocalOwner())
+	{
+		auto approval = ManagedVocalAssetRoot::authorizeConfiguredRoot(song->recordingProjectIdentity().managedRootLibraryForOwner());
+		const auto ownerCode = approval.root ? holdManagedVocalOwner(song, approval.root, validatedOwner) : approval.code;
+		if (ownerCode != QStringLiteral("ok"))
+		{
+			m_managedVocalPreloadedReference = {};
+			m_managedVocalPreloadedProjectId.clear();
+			m_managedVocalPreloadedSamples.reset();
+			setManagedVocalVariantStatus(ownerCode);
+			return;
+		}
+		validatedRoot = std::move(approval.root);
 	}
 	if (result.code == QStringLiteral("ok") && result.samples
 		&& result.samples->size() == std::size_t(reference.frames) * std::size_t(reference.channels))
@@ -680,14 +722,24 @@ void SampleClip::refreshManagedVocalPlayback()
 		return;
 	}
 	std::shared_ptr<const std::vector<float>> samples;
+	std::shared_ptr<ManagedVocalAssetRoot> validatedRoot;
+	std::shared_ptr<void> validatedOwner;
 	auto* currentSong = Engine::getSong();
-	const auto currentProjectId = currentSong
-		? currentSong->recordingProjectIdentity().cachedIdentity().id : QString{};
-	if (previousView && m_managedVocalPreloadedSamples
+	const auto currentProjectId = managedVocalProjectId(currentSong);
+	if (currentSong && previousView && m_managedVocalPreloadedSamples
 		&& m_managedVocalPreloadedProjectId == currentProjectId
 		&& sameManagedVocalReference(m_managedVocalAssociation->active, m_managedVocalPreloadedReference))
 	{
-		samples = previousView->interleavedSamples;
+		if (!currentSong->managedVocalOwner()) samples = previousView->interleavedSamples;
+		else
+		{
+			auto approval = ManagedVocalAssetRoot::authorizeConfiguredRoot(currentSong->recordingProjectIdentity().managedRootLibraryForOwner());
+			if (approval.root && holdManagedVocalOwner(currentSong, approval.root, validatedOwner) == QStringLiteral("ok"))
+			{
+				validatedRoot = std::move(approval.root);
+				samples = previousView->interleavedSamples;
+			}
+		}
 	}
 	const auto loadCode = samples ? QStringLiteral("ok")
 		: requestManagedVocalAsset(m_managedVocalAssociation->active, samples);

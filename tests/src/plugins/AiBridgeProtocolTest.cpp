@@ -3,12 +3,24 @@
 #include <QJsonArray>
 
 #include "AiBridgeProtocol.h"
+#include "AiBridgeEndpoint.h"
 
 class AiBridgeProtocolTest : public QObject
 {
 	Q_OBJECT
 
 private slots:
+	void optionalTestEndpointNeverFallsBackToProductionOnInvalidInput()
+	{
+		using lmms::aiBridgeEndpoint;
+		QCOMPARE(aiBridgeEndpoint(false, {}), QStringLiteral("lmms-aibridge-v2"));
+		QCOMPARE(aiBridgeEndpoint(true, QByteArrayLiteral("abcDEF0123456789")),
+			QStringLiteral("lmms-aibridge-v2-abcDEF0123456789"));
+		for (const auto& suffix : {QByteArray{}, QByteArrayLiteral("short"), QByteArray(65, 'a'),
+			QByteArrayLiteral("../production-pipe"), QByteArrayLiteral("abcDEF01234567/9")})
+			QVERIFY(aiBridgeEndpoint(true, suffix).isEmpty());
+	}
+
 	void acceptsOnlyTheApprovedStrictAudioWireSurface()
 	{
 		auto parse=[](const QString& action,const QJsonObject& p){return lmms::AiBridgeProtocol::parseRequest(QJsonDocument(QJsonObject{{"version",2},{"request_id","audio"},{"action",action},{"parameters",p}}).toJson(QJsonDocument::Compact)+'\n');};

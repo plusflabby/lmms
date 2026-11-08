@@ -1,10 +1,10 @@
 #include "RecordingProjectIdentity.h"
 #include "Song.h"
 #include "DataFile.h"
+#include "ProjectSavePublication.h"
 #include <QCryptographicHash>
 #include <QFileInfo>
 #include <QJsonDocument>
-#include <QTextStream>
 #include <QUuid>
 #include <array>
 #ifdef Q_OS_WIN
@@ -44,6 +44,24 @@ Snapshot snapshot(const QString& path)
 #endif
  return result;
 }
+Snapshot loadedSongSnapshot(const Song* song)
+{
+ Snapshot result;
+#ifdef Q_OS_WIN
+ if(!song)return result;
+ const auto native=song->projectSourceFileId();const auto sha=song->projectSourceSha256();
+ if(native.size()!=26 || native[8]!=':' || native[17]!=':' || sha.size()!=64)return result;
+ for(int i=0;i<native.size();++i){if(i==8 || i==17)continue;const auto c=native[i];if(!((c>='0' && c<='9')||(c>='a' && c<='f')))return result;}
+ for(const auto c:sha)if(!((c>='0' && c<='9')||(c>='a' && c<='f')))return result;
+ bool a=false,b=false,c=false;const auto volume=native.mid(0,8).toUInt(&a,16),high=native.mid(9,8).toUInt(&b,16),low=native.mid(18,8).toUInt(&c,16);
+ if(!a || !b || !c)return result;
+ const auto material=QByteArray::number(volume)+':'+QByteArray::number(high)+':'+QByteArray::number(low);
+ result={"ok",QString::fromLatin1(QCryptographicHash::hash(material,QCryptographicHash::Sha256).toHex()),QString::fromLatin1(sha)};
+#else
+ Q_UNUSED(song);
+#endif
+ return result;
+}
 bool bindingValid(const QJsonObject& value,bool pending)
 {
  if(value.isEmpty())return true;
@@ -72,6 +90,10 @@ RecordingProjectIdentity::~RecordingProjectIdentity()=default;
 quint64 RecordingProjectIdentity::revision() const{return m_state->revision;}
 ProjectIdentity RecordingProjectIdentity::cachedIdentity() const{return m_state->identity;}
 bool RecordingProjectIdentity::sourceIdentityTrusted() const noexcept{return m_state->sourceTrusted;}
+RecordingLibrary* RecordingProjectIdentity::managedRootLibrary() const noexcept
+{return m_state->sourceTrusted?m_state->library.data():nullptr;}
+RecordingLibrary* RecordingProjectIdentity::managedRootLibraryForOwner() const noexcept
+{return m_state->library.data();}
 QString RecordingProjectIdentity::lastCode() const{return m_state->lastCode;}
 bool RecordingProjectIdentity::reject(const QString& code){m_state->lastCode=code;return false;}
 bool RecordingProjectIdentity::metadataSupported(const QDomElement& head)
@@ -92,6 +114,10 @@ void RecordingProjectIdentity::acceptLoad(const QDomElement& head,const QString&
 }
 RecordingProjectIdentity::IdentityResult RecordingProjectIdentity::getOrCreateForCurrentProject(RecordingLibrary& library)
 {
+ return resolveCurrentProject(library,true);
+}
+RecordingProjectIdentity::IdentityResult RecordingProjectIdentity::resolveCurrentProject(RecordingLibrary& library,bool allowFork)
+{
  if(m_state->pending.active)return {"recording_busy",{}};
  m_state->library=&library;
  if(m_state->identity.id.isEmpty()){m_state->identity={freshId(),1};m_state->sourcePath=m_state->owner->projectFileName().isEmpty()?QString{}:normalized(m_state->owner->projectFileName());m_state->sourceTrusted=false;}
@@ -111,6 +137,15 @@ RecordingProjectIdentity::IdentityResult RecordingProjectIdentity::getOrCreateFo
   m_state->sourceTrusted=code=="ok";
   return {code,code=="ok"?m_state->identity:ProjectIdentity{}};
  }
+ // A save must not rotate a live identity merely because its source changed.
+ // Explicit acquisition for a loaded copy can still establish a separate one.
+ if(!allowFork)
+ {
+  const auto loaded=loadedSongSnapshot(m_state->owner);
+  if(loaded.code!="ok" || loaded.id!=actual.id || loaded.sha!=actual.sha || current.isEmpty()
+   || current["nonce"]!=QJsonValue(m_state->nonce) || current["digest"]!=QJsonValue(actual.sha))
+  {m_state->sourceTrusted=false;return {"source_identity_changed",{}};}
+ }
  // A copied serialized UUID is not authority to reuse the original recording folder.
  m_state->identity={freshId(),1};m_state->loaded=false;m_state->nonce.clear();m_state->sourceTrusted=false;
  code=library.prepareProjectFolder(m_state->identity);return {code,code=="ok"?m_state->identity:ProjectIdentity{}};
@@ -122,13 +157,12 @@ bool RecordingProjectIdentity::beginSave(DataFile& file,const QString& target,bo
  if(!m_state->library)return reject("unauthorized_library");
  if(m_state->pending.active)return reject("recording_busy");
  if(withResources)return reject("unsupported_project_bundle");
- const auto resolved=getOrCreateForCurrentProject(*m_state->library);if(resolved.code!="ok")return reject(resolved.code);
+ const auto resolved=resolveCurrentProject(*m_state->library,false);if(resolved.code!="ok")return reject(resolved.code);
  const auto full=normalized(file.nameWithExtension(target));if(full.size()>1024)return reject("resource_limit");
  ProjectIdentity identity=m_state->identity;
  if(!m_state->sourcePath.isEmpty() && m_state->sourcePath!=full)identity={freshId(),1};
  const auto nonce=freshId();auto field=file.createElement("recording_project");field.setAttribute("schema",1);field.setAttribute("id",identity.id);field.setAttribute("nonce",nonce);file.head().appendChild(field);
- QString text;QTextStream stream(&text);file.write(stream);stream.flush();const auto xml=text.toUtf8();if(xml.size()>33554432)return false;
- const auto encoded=(full.endsWith(".mmpz") || full.endsWith(".xptz"))?qCompress(xml):xml;
+ QByteArray encoded;if(!file.serializeProjectForSave(full,encoded))return false;
  const auto sha=QString::fromLatin1(QCryptographicHash::hash(encoded,QCryptographicHash::Sha256).toHex());
  const auto folder=m_state->library->prepareProjectFolder(identity);if(folder!="ok")return reject(folder);
  QString code;const auto prior=m_state->library->identityRecord(identity,code);
@@ -151,5 +185,32 @@ bool RecordingProjectIdentity::finishSave(const QString& target,bool nativeResul
  const auto stored=m_state->library->storeIdentityRecord(pending.identity,recordFor(pending.identity,current,{}));if(stored!="ok")return reject(stored);
  m_state->identity=pending.identity;m_state->nonce=pending.nonce;m_state->sourcePath=pending.target;m_state->loaded=true;m_state->sourceTrusted=true;
  return true;
+}
+bool RecordingProjectIdentity::finishSave(const QString& target,bool nativeResult,const ProjectSavePublication& publication)
+{
+ if(m_state->identity.id.isEmpty())return nativeResult;
+ if(!m_state->pending.active || !m_state->library)return reject("unauthorized_library");
+ const auto pending=m_state->pending;
+ if(!nativeResult || normalized(target)!=pending.target){m_state->sourceTrusted=false;return reject("write_failed");}
+ ProjectSavePublication::Evidence evidence;
+ if(!publication.publishedEvidence(evidence) || normalized(evidence.target)!=pending.target
+  || evidence.stageIdentity.size()!=32 || evidence.stageSha256.toHex()!=pending.digest.toLatin1())
+ {m_state->sourceTrusted=false;return reject("project_publish_mismatch");}
+ const QJsonObject current{{"nonce",pending.nonce},{"path",pending.target},{"digest",pending.digest},
+  {"file_id",QString::fromLatin1(evidence.stageIdentity.toHex())}};
+ const auto stored=m_state->library->storeIdentityRecord(pending.identity,recordFor(pending.identity,current,{}));
+ if(stored!="ok"){m_state->sourceTrusted=false;return reject(stored);}
+ ProjectSavePublication::Evidence retained;
+ if(!publication.publishedEvidence(retained) || retained.target!=evidence.target
+  || retained.transactionId!=evidence.transactionId || retained.stageIdentity!=evidence.stageIdentity
+  || retained.stageSha256!=evidence.stageSha256)
+ {m_state->sourceTrusted=false;return reject("project_publish_mismatch");}
+ m_state->pending={};m_state->identity=pending.identity;m_state->nonce=pending.nonce;m_state->sourcePath=pending.target;
+ m_state->loaded=true;m_state->sourceTrusted=true;return true;
+}
+bool RecordingProjectIdentity::suspendUncertainSave(const QString& target)
+{
+ if(!m_state->pending.active || normalized(target)!=m_state->pending.target)return reject("write_failed");
+ m_state->sourceTrusted=false;m_state->lastCode=QStringLiteral("recovery_required");return true;
 }
 }

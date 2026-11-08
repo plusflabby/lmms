@@ -56,6 +56,35 @@ private slots:
 		QCOMPARE(lmms::AudioFileAuthorization::acquire(root, root + "/absent.wav").code, QStringLiteral("audio_source_missing"));
 	}
 #ifdef Q_OS_WIN
+	void independentNativePinSurvivesDeviceAndReleasesOnWorker()
+	{
+		QTemporaryDir directory; QVERIFY(directory.isValid());
+		const auto path = directory.filePath(QStringLiteral("project.mmp"));
+		{ QFile f(path); QVERIFY(f.open(QIODevice::WriteOnly | QIODevice::NewOnly)); QCOMPARE(f.write("original"), qint64(8)); }
+		auto result = lmms::AudioFileAuthorization::acquireWithRetainedPin(directory.path(), path);
+		QCOMPARE(result.code, QStringLiteral("ok")); QVERIFY(result.source); QVERIFY(result.pin);
+		QCOMPARE(result.source->readAll(), QByteArray("original")); result.source.reset();
+		const auto renamed = directory.filePath(QStringLiteral("renamed.mmp"));
+		QVERIFY(!QFile::rename(path, renamed));
+		std::thread worker([pin = std::move(result.pin)]() mutable { pin.reset(); }); worker.join();
+		QVERIFY(QFile::rename(path, renamed));
+		QFile f(renamed); QVERIFY(f.open(QIODevice::ReadOnly)); QCOMPARE(f.readAll(), QByteArray("original"));
+	}
+	void retainedProjectPinAllowsSiblingPublicationWithoutAllowingReplacement()
+	{
+		QTemporaryDir directory; QVERIFY(directory.isValid());
+		const auto parent = directory.filePath(QStringLiteral("projects")); QVERIFY(QDir().mkdir(parent));
+		const auto project = parent + QStringLiteral("/source.mmp");
+		{ QFile f(project); QVERIFY(f.open(QIODevice::WriteOnly | QIODevice::NewOnly)); QCOMPARE(f.write("original"), qint64(8)); }
+		auto result = lmms::AudioFileAuthorization::acquireWithRetainedPin(parent, project);
+		QVERIFY(result.pin); result.source.reset();
+		const auto parentHandle = CreateFileW(reinterpret_cast<LPCWSTR>(parent.utf16()), FILE_ADD_FILE,
+			FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, nullptr);
+		QVERIFY(parentHandle != INVALID_HANDLE_VALUE); CloseHandle(parentHandle);
+		QVERIFY(!MoveFileExW(reinterpret_cast<LPCWSTR>(parent.utf16()), reinterpret_cast<LPCWSTR>(directory.filePath("moved").utf16()), 0));
+		QVERIFY(!QFile::rename(project, parent + QStringLiteral("/replacement.mmp")));
+		QFile writer(project); QVERIFY(!writer.open(QIODevice::WriteOnly));
+	}
 	void rejectsAnExistingWritableFileMapping()
 	{
 		QTemporaryDir directory(QCoreApplication::applicationDirPath() + "/auth-XXXXXX");

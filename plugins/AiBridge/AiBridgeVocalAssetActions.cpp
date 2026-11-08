@@ -8,6 +8,7 @@
 #include "Engine.h"
 #include "src/core/vocal/ManagedVocalAssetRoot.h"
 #include "src/core/vocal/ManagedVocalAssetStore.h"
+#include "src/core/vocal/ManagedVocalProjectOwnerStore.h"
 #include "RecordingProjectIdentity.h"
 #include "Song.h"
 #include <QCoreApplication>
@@ -331,12 +332,24 @@ ManagedVocalAssetInspectResult AiBridgeVocalAssetActions::inspectVariant(const Q
 		return {QStringLiteral("wrong_thread")};
 	auto* song = Engine::getSong();
 	if (!song) return {QStringLiteral("project_identity_unverified")};
+	const auto independent = song->managedVocalOwner();
 	const auto identity = song->recordingProjectIdentity().cachedIdentity();
-	if (!validUuid(identity.id)) return {QStringLiteral("project_identity_unverified")};
-	auto approval = ManagedVocalAssetRoot::authorizeConfiguredRoot();
+	const auto projectId = independent ? independent->projectId : identity.id;
+	if (!validUuid(projectId)) return {QStringLiteral("project_identity_unverified")};
+	auto approval = ManagedVocalAssetRoot::authorizeConfiguredRoot(independent
+		? song->recordingProjectIdentity().managedRootLibraryForOwner() : song->recordingProjectIdentity().managedRootLibrary());
 	if (!approval.root) return {approval.code};
+	std::shared_ptr<void> projectHold;
+	if (independent)
+	{
+		if (approval.root->rootId() != independent->rootId) return {QStringLiteral("project_identity_unverified")};
+		ManagedVocalProjectOwnerStore owners(approval.root);
+		const auto held = owners.holdVerified(song->projectFileName(), *independent);
+		if (!held.hold) return {held.code};
+		projectHold = held.hold;
+	}
 	ManagedVocalAssetStore store(std::move(approval.root));
-	return store.inspectById(assetId, identity.id);
+	return store.inspectById(assetId, projectId);
 }
 
 VocalEditRenderInputResult AiBridgeVocalAssetActions::prepareRender(const VocalEditPlanTicket& ticket)
@@ -364,14 +377,31 @@ VocalEditRenderInputResult AiBridgeVocalAssetActions::prepareRender(const VocalE
 		return {QStringLiteral("project_identity_unverified"), {}};
 	}
 	const auto identity = song->recordingProjectIdentity().cachedIdentity();
-	if (!validUuid(identity.id) || !song->recordingProjectIdentity().sourceIdentityTrusted())
+	const auto independent = song->managedVocalOwner();
+	if (!independent && !identity.id.isEmpty()
+		&& (!validUuid(identity.id) || !song->recordingProjectIdentity().sourceIdentityTrusted()))
 	{
 		return {QStringLiteral("project_identity_unverified"), {}};
 	}
-	auto approval = ManagedVocalAssetRoot::authorizeConfiguredRoot();
+	auto approval = ManagedVocalAssetRoot::authorizeConfiguredRoot(independent
+		? song->recordingProjectIdentity().managedRootLibraryForOwner() : song->recordingProjectIdentity().managedRootLibrary());
 	if (!approval.root)
 	{
 		return {approval.code, {}};
+	}
+	if (independent || identity.id.isEmpty())
+	{
+		if (!independent && song->savedProjectHasRecordingIdentity())
+			return {QStringLiteral("project_identity_unverified"), {}};
+		ManagedVocalProjectOwnerStore store(approval.root);
+		const auto owner = store.ensureLoadedSnapshot(song->projectFileName(), song->projectSourceFileId(), song->projectSourceSha256());
+		if (!owner.owner) return {owner.code, {}};
+		if (independent && (independent->projectId != owner.owner->projectId || independent->rootId != owner.owner->rootId))
+			return {QStringLiteral("project_identity_unverified"), {}};
+		const auto held = store.holdSaveAsSource(song->projectFileName(), *owner.owner);
+		if (!held.source) return {held.code, {}};
+		if (!song->adoptManagedVocalOwner(held.source)) return {QStringLiteral("project_identity_unverified"), {}};
+		return {QStringLiteral("ok"), VocalEditRenderInput{ticket, std::move(approval.root), owner.owner->projectId, held.source}};
 	}
 	return {QStringLiteral("ok"), VocalEditRenderInput{ticket, std::move(approval.root), identity.id}};
 }
@@ -587,6 +617,10 @@ VocalVariantRenderResult AiBridgeVocalAssetActions::render(
 			: QStringLiteral("asset_root_not_configured"), {}, {}, 0};
 	}
 	if (!input.assetRoot->isAuthorized()) return {QStringLiteral("asset_root_revoked"), {}, {}, 0};
+	if (input.managedProjectHold && (!input.managedProjectHold->isAuthorized()
+		|| input.managedProjectHold->projectOwner().projectId != input.projectId
+		|| input.managedProjectHold->projectOwner().rootId != input.assetRoot->rootId()))
+		return {QStringLiteral("project_identity_unverified"), {}, {}, 0};
 	if (cancelled.load(std::memory_order_acquire)) return {QStringLiteral("cancelled"), {}, {}, 0};
 
 	ManagedVocalAssetStore store(input.assetRoot, VocalLimits::stagedOutputBytes);
@@ -1173,6 +1207,10 @@ VocalVariantRenderResult AiBridgeVocalAssetActions::render(
 		}
 	}
 	if (cancelled.load(std::memory_order_acquire)) return {QStringLiteral("cancelled"), {}, {}, budget.jobBytes};
+	if (input.managedProjectHold && (!input.managedProjectHold->isAuthorized()
+		|| input.managedProjectHold->projectOwner().projectId != input.projectId
+		|| input.managedProjectHold->projectOwner().rootId != input.assetRoot->rootId()))
+		return {QStringLiteral("project_identity_unverified"), {}, {}, budget.jobBytes};
 	auto published = store.publish(std::move(created.writer), std::move(manifest));
 	if (published.code != QStringLiteral("ok") || !published.value)
 	{

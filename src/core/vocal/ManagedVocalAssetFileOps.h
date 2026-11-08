@@ -27,6 +27,9 @@ QString openReadFile(
 	const std::shared_ptr<ManagedVocalAssetRootState>& root,
 	const QString& name,
 	std::shared_ptr<FileState>& file);
+// Removes only a handle-pinned root entry whose complete bounded bytes match.
+QString removeMatchingFile(const std::shared_ptr<ManagedVocalAssetRootState>& root,
+	const QString& name, const QByteArray& expected);
 // Opens only a descendant of the pinned root; other parents return
 // project_not_in_root so callers can use their separately authorized path.
 QString openReadProjectInRoot(

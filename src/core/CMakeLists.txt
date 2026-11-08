@@ -32,6 +32,7 @@ set(LMMS_SRCS
 	core/recording/RecordingServiceHost.cpp
 	core/recording/RecordingAudioBackendPolicy.cpp
 	core/AudioFileAuthorization.cpp
+	core/ProjectSavePublication.cpp
 	core/midi/StandardMidiWriter.cpp
 	core/midi/MidiExportService.cpp
 	core/midi/MidiExportOutput.cpp

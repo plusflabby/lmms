@@ -4,6 +4,7 @@
 #include "DataFile.h"
 #include "ProjectJournal.h"
 #include "ConfigManager.h"
+#include "ProjectSavePublication.h"
 #include <QtTest>
 #include <QTemporaryDir>
 #include <QFile>
@@ -11,6 +12,7 @@
 #include <QCryptographicHash>
 #ifdef Q_OS_WIN
 #include <windows.h>
+#include <wincred.h>
 #endif
 using namespace lmms;
 using namespace lmms::recording;
@@ -18,6 +20,16 @@ class RecordingProjectIdentityTest : public QObject
 {
  Q_OBJECT
  static QByteArray contents(const QString& path){QFile f(path);if(!f.open(QIODevice::ReadOnly))return {};return f.readAll();}
+#ifdef Q_OS_WIN
+ struct TemporaryCredential{QString name;bool owned=false;~TemporaryCredential(){if(owned)CredDeleteW(reinterpret_cast<LPCWSTR>(name.utf16()),CRED_TYPE_GENERIC,0);}};
+ static QString nativeSaveCredential(const QString& directory){
+  const auto h=CreateFileW(reinterpret_cast<LPCWSTR>(directory.utf16()),FILE_READ_ATTRIBUTES,FILE_SHARE_READ|FILE_SHARE_WRITE,nullptr,OPEN_EXISTING,FILE_FLAG_BACKUP_SEMANTICS|FILE_FLAG_OPEN_REPARSE_POINT,nullptr);
+  if(h==INVALID_HANDLE_VALUE)return {};
+  BY_HANDLE_FILE_INFORMATION i{};const bool ok=GetFileInformationByHandle(h,&i);CloseHandle(h);if(!ok)return {};
+  const auto material=QByteArray::number(qulonglong(i.dwVolumeSerialNumber))+':'+QByteArray::number(qulonglong(i.nFileIndexHigh))+':'+QByteArray::number(qulonglong(i.nFileIndexLow));
+  return QStringLiteral("LMMS/NativeProjectSave/v1/")+QString::fromLatin1(QCryptographicHash::hash(material,QCryptographicHash::Sha256).toHex());
+ }
+#endif
 private slots:
  void initTestCase(){Engine::init(true);}
  void cleanupTestCase(){Engine::destroy();}
@@ -76,6 +88,7 @@ private slots:
   const auto rebound=song->recordingProjectIdentity().getOrCreateForCurrentProject(*library.library);
   QCOMPARE(rebound.code,QString("ok"));QCOMPARE(rebound.identity.id,activeIdentity.id);
   QVERIFY(song->recordingProjectIdentity().sourceIdentityTrusted());
+  QVERIFY2(song->guiSaveProject(),qPrintable(song->recordingProjectIdentity().lastCode()));
  }
  void duplicatedSerializedUuidGetsSeparateFolder()
  {
@@ -83,6 +96,18 @@ private slots:
   const auto first=song->recordingProjectIdentity().getOrCreateForCurrentProject(*library.library);QCOMPARE(first.code,QString("ok"));const auto original=temp.filePath("source.mmp");QVERIFY(song->guiSaveProjectAs(original));
   const auto copy=temp.filePath("copy.mmp");QVERIFY(QFile::copy(original,copy));song->loadProject(copy);const auto copied=song->recordingProjectIdentity().getOrCreateForCurrentProject(*library.library);
   QCOMPARE(copied.code,QString("ok"));QVERIFY(copied.identity.id!=first.identity.id);QCOMPARE(contents(original),contents(copy));
+ }
+ void loadedCopyCanSaveWithoutReauthorizingTheRecordingLibrary()
+ {
+  QTemporaryDir temp;QVERIFY(temp.isValid());QVERIFY(QDir(temp.path()).mkdir("library"));
+  auto library=RecordingLibrary::authorizeLocalRoot(temp.filePath("library"));QVERIFY(library.library);auto* song=Engine::getSong();
+  const auto original=song->recordingProjectIdentity().getOrCreateForCurrentProject(*library.library);QCOMPARE(original.code,QString("ok"));
+  const auto source=temp.filePath("source.mmp");QVERIFY(song->guiSaveProjectAs(source));const auto sourceBytes=contents(source);
+  const auto copy=temp.filePath("copy.mmp");QVERIFY(QFile::copy(source,copy));song->loadProject(copy);
+  QCOMPARE(song->recordingProjectIdentity().cachedIdentity().id,original.identity.id);
+  QVERIFY2(song->guiSaveProject(),qPrintable(song->recordingProjectIdentity().lastCode()));
+  const auto copied=song->recordingProjectIdentity().getOrCreateForCurrentProject(*library.library);
+  QCOMPARE(copied.code,QString("ok"));QVERIFY(copied.identity.id!=original.identity.id);QCOMPARE(contents(source),sourceBytes);
  }
  void legacyProjectWithoutRecordingDoesNotAcquireMetadata()
  {
@@ -121,6 +146,95 @@ private slots:
    song->loadProject(path);QCOMPARE(song->recordingProjectIdentity().getOrCreateForCurrentProject(*library.library).identity.id,saved.identity.id);
   }
  }
+ void serializedProjectPayloadMatchesNativeWriter()
+ {
+  QTemporaryDir temp;QVERIFY(temp.isValid());
+  for(const auto& suffix:{QString("mmp"),QString("mmpz")}){
+   const auto path=temp.filePath("payload."+suffix);DataFile data(DataFile::Type::SongProject);
+   data.head().setAttribute("fixture",QString::fromUtf8("Hook \xCE\xA9"));QByteArray payload;
+   QVERIFY(data.serializeProjectForSave(path,payload));QVERIFY(!payload.isEmpty());
+   QVERIFY(data.writeFile(path));QCOMPARE(contents(path),payload);
+  }
+ }
+ void recordingIdentityCommitsWhilePublishedFileIsPinned()
+ {
+#ifndef Q_OS_WIN
+  QSKIP("Windows handle-bound publication");
+#else
+  QTemporaryDir temp;QVERIFY(temp.isValid());QVERIFY(QDir(temp.path()).mkdir("library"));
+  auto library=RecordingLibrary::authorizeLocalRoot(temp.filePath("library"));QVERIFY(library.library);auto* song=Engine::getSong();
+  const auto prior=song->recordingProjectIdentity().getOrCreateForCurrentProject(*library.library);QCOMPARE(prior.code,QString("ok"));
+  const auto source=temp.filePath("source.mmp");QVERIFY(song->guiSaveProjectAs(source));
+  const auto target=temp.filePath("target.mmp");DataFile previous(DataFile::Type::SongProject);QVERIFY(previous.writeFile(target));
+  TemporaryCredential credential;credential.name=nativeSaveCredential(temp.path());QVERIFY(!credential.name.isEmpty());PCREDENTIALW existing=nullptr;
+  const bool exists=CredReadW(reinterpret_cast<LPCWSTR>(credential.name.utf16()),CRED_TYPE_GENERIC,0,&existing);
+  const auto error=exists?DWORD(ERROR_SUCCESS):GetLastError();if(existing)CredFree(existing);QVERIFY(!exists);QCOMPARE(error,DWORD(ERROR_NOT_FOUND));credential.owned=true;
+  DataFile data(DataFile::Type::SongProject);QVERIFY(song->recordingProjectIdentity().beginSave(data,target,false));
+  QByteArray payload;QVERIFY(data.serializeProjectForSave(target,payload));
+  auto held=ProjectSavePublication::acquireSelectedTarget(target);QVERIFY(held.publication);
+  const auto tx=QUuid::createUuid().toString(QUuid::WithoutBraces);
+  QCOMPARE(held.publication->createStage(tx,payload),QString("ok"));QCOMPARE(held.publication->prepareNativeJournal(),QString("ok"));
+  QCOMPARE(held.publication->publishNativePending(),QString("ok"));
+  QVERIFY2(song->recordingProjectIdentity().finishSave(target,true,*held.publication),qPrintable(song->recordingProjectIdentity().lastCode()));
+  const auto savedId=song->recordingProjectIdentity().cachedIdentity().id;QVERIFY(!savedId.isEmpty());QVERIFY(savedId!=prior.identity.id);
+  QCOMPARE(ProjectSavePublication::nativeJournalStatus(target),QString("pending"));
+  QCOMPARE(held.publication->finalizeNativePublication(),QString("ok"));held.publication.reset();
+  QCOMPARE(song->recordingProjectIdentity().getOrCreateForCurrentProject(*library.library).identity.id,savedId);
+#endif
+ }
+ void uncertainPublishedSaveKeepsRecordingIdentityBlocked()
+ {
+#ifndef Q_OS_WIN
+  QSKIP("Windows handle-bound publication");
+#else
+  QTemporaryDir temp;QVERIFY(temp.isValid());QVERIFY(QDir(temp.path()).mkdir("library"));
+  auto library=RecordingLibrary::authorizeLocalRoot(temp.filePath("library"));QVERIFY(library.library);auto* song=Engine::getSong();
+  const auto prior=song->recordingProjectIdentity().getOrCreateForCurrentProject(*library.library);QCOMPARE(prior.code,QString("ok"));
+  const auto source=temp.filePath("source.mmp");QVERIFY(song->guiSaveProjectAs(source));const auto original=contents(source);
+  TemporaryCredential credential;credential.name=nativeSaveCredential(temp.path());QVERIFY(!credential.name.isEmpty());PCREDENTIALW existing=nullptr;
+  const bool exists=CredReadW(reinterpret_cast<LPCWSTR>(credential.name.utf16()),CRED_TYPE_GENERIC,0,&existing);
+  const auto error=exists?DWORD(ERROR_SUCCESS):GetLastError();if(existing)CredFree(existing);QVERIFY(!exists);QCOMPARE(error,DWORD(ERROR_NOT_FOUND));credential.owned=true;
+  DataFile data(DataFile::Type::SongProject);QVERIFY(song->recordingProjectIdentity().beginSave(data,source,false));
+  QByteArray payload;QVERIFY(data.serializeProjectForSave(source,payload));
+  auto held=ProjectSavePublication::acquireSelectedTarget(source);QVERIFY(held.publication);
+  const auto tx=QUuid::createUuid().toString(QUuid::WithoutBraces);
+  QCOMPARE(held.publication->createStage(tx,payload),QString("ok"));QCOMPARE(held.publication->prepareNativeJournal(),QString("ok"));
+  QCOMPARE(held.publication->publishNativePending(),QString("ok"));
+  QVERIFY(CredDeleteW(reinterpret_cast<LPCWSTR>(credential.name.utf16()),CRED_TYPE_GENERIC,0));
+  QVERIFY(held.publication->finalizeNativePublication()!=QString("ok"));
+  QVERIFY(song->recordingProjectIdentity().suspendUncertainSave(source));
+  QCOMPARE(song->recordingProjectIdentity().lastCode(),QString("recovery_required"));
+  QVERIFY(!song->recordingProjectIdentity().sourceIdentityTrusted());
+  QCOMPARE(song->recordingProjectIdentity().getOrCreateForCurrentProject(*library.library).code,QString("recording_busy"));
+  QCOMPARE(song->recordingProjectIdentity().cachedIdentity().id,prior.identity.id);
+  held.publication.reset();QCOMPARE(contents(temp.filePath(QStringLiteral(".lmms-vocal-backup-")+tx)),original);
+#endif
+ }
+ void failedIdentityCommitKeepsPublishedSavePending()
+ {
+#ifndef Q_OS_WIN
+  QSKIP("Windows handle-bound publication");
+#else
+  QTemporaryDir temp;QVERIFY(temp.isValid());QVERIFY(QDir(temp.path()).mkdir("library"));
+  auto library=RecordingLibrary::authorizeLocalRoot(temp.filePath("library"));QVERIFY(library.library);auto* song=Engine::getSong();
+  const auto prior=song->recordingProjectIdentity().getOrCreateForCurrentProject(*library.library);QCOMPARE(prior.code,QString("ok"));
+  const auto source=temp.filePath("source.mmp");QVERIFY(song->guiSaveProjectAs(source));const auto original=contents(source);
+  TemporaryCredential credential;credential.name=nativeSaveCredential(temp.path());QVERIFY(!credential.name.isEmpty());PCREDENTIALW existing=nullptr;
+  const bool exists=CredReadW(reinterpret_cast<LPCWSTR>(credential.name.utf16()),CRED_TYPE_GENERIC,0,&existing);
+  const auto error=exists?DWORD(ERROR_SUCCESS):GetLastError();if(existing)CredFree(existing);QVERIFY(!exists);QCOMPARE(error,DWORD(ERROR_NOT_FOUND));credential.owned=true;
+  DataFile data(DataFile::Type::SongProject);QVERIFY(song->recordingProjectIdentity().beginSave(data,source,false));
+  QByteArray payload;QVERIFY(data.serializeProjectForSave(source,payload));
+  auto held=ProjectSavePublication::acquireSelectedTarget(source);QVERIFY(held.publication);
+  const auto tx=QUuid::createUuid().toString(QUuid::WithoutBraces);
+  QCOMPARE(held.publication->createStage(tx,payload),QString("ok"));QCOMPARE(held.publication->prepareNativeJournal(),QString("ok"));
+  QCOMPARE(held.publication->publishNativePending(),QString("ok"));QCOMPARE(held.publication->finalizeNativePublication(),QString("ok"));
+  library.library->revoke();QVERIFY(!song->recordingProjectIdentity().finishSave(source,true,*held.publication));
+  QCOMPARE(song->recordingProjectIdentity().getOrCreateForCurrentProject(*library.library).code,QString("recording_busy"));
+  QVERIFY(!song->recordingProjectIdentity().sourceIdentityTrusted());
+  QCOMPARE(song->recordingProjectIdentity().cachedIdentity().id,prior.identity.id);
+  held.publication.reset();QCOMPARE(contents(temp.filePath(QStringLiteral(".lmms-vocal-backup-")+tx)),original);
+#endif
+ }
  void nativePublicationFailureCannotCommitNewIdentityOrFilename()
  {
 #ifdef Q_OS_WIN
@@ -133,6 +247,154 @@ private slots:
   QCOMPARE(song->recordingProjectIdentity().getOrCreateForCurrentProject(*library.library).identity.id,identity.identity.id);
 #else
   QSKIP("Windows publication gate");
+#endif
+ }
+ void failedPublicationPreservesPreexistingBackup()
+ {
+#ifdef Q_OS_WIN
+  QTemporaryDir temp;QVERIFY(temp.isValid());QVERIFY(QDir(temp.path()).mkdir("library"));
+  auto library=RecordingLibrary::authorizeLocalRoot(temp.filePath("library"));QVERIFY(library.library);auto* song=Engine::getSong();
+  const auto identity=song->recordingProjectIdentity().getOrCreateForCurrentProject(*library.library);QCOMPARE(identity.code,QString("ok"));
+  const auto source=temp.filePath("source.mmp");QVERIFY(song->guiSaveProjectAs(source));
+  const auto target=temp.filePath("locked.mmp");DataFile other(DataFile::Type::SongProject);QVERIFY(other.writeFile(target));const auto targetBefore=contents(target);
+  const auto backup=target+".bak";QFile backupFile(backup);QVERIFY(backupFile.open(QIODevice::WriteOnly | QIODevice::NewOnly));
+  QCOMPARE(backupFile.write("preexisting-backup"),qint64(18));backupFile.close();const auto backupBefore=contents(backup);
+  HANDLE held=CreateFileW(reinterpret_cast<LPCWSTR>(target.utf16()),GENERIC_READ,FILE_SHARE_READ|FILE_SHARE_WRITE,nullptr,OPEN_EXISTING,FILE_ATTRIBUTE_NORMAL,nullptr);QVERIFY(held!=INVALID_HANDLE_VALUE);
+  const bool saved=song->guiSaveProjectAs(target);CloseHandle(held);
+  QVERIFY(!saved);QCOMPARE(contents(target),targetBefore);QVERIFY(QFile::exists(backup));QCOMPARE(contents(backup),backupBefore);
+#else
+  QSKIP("Windows publication gate");
+#endif
+ }
+ void successfulRecordingSavePreservesExistingBackupAndOriginal()
+ {
+#ifndef Q_OS_WIN
+  QSKIP("Windows handle-bound publication");
+#else
+  QTemporaryDir temp;QVERIFY(temp.isValid());QVERIFY(QDir(temp.path()).mkdir("library"));
+  auto library=RecordingLibrary::authorizeLocalRoot(temp.filePath("library"));QVERIFY(library.library);auto* song=Engine::getSong();
+  const auto identity=song->recordingProjectIdentity().getOrCreateForCurrentProject(*library.library);QCOMPARE(identity.code,QString("ok"));
+  const auto source=temp.filePath("source.mmp");QVERIFY(song->guiSaveProjectAs(source));const auto original=contents(source);
+  const auto priorBackup=source+".bak";{QFile f(priorBackup);QVERIFY(f.open(QIODevice::WriteOnly|QIODevice::NewOnly));QCOMPARE(f.write("prior-backup"),qint64(12));}
+  auto* track=Track::create(Track::Type::Sample,song);QVERIFY(track);track->setName(QStringLiteral("Changed vocal"));
+  QVERIFY2(song->guiSaveProject(),qPrintable(song->recordingProjectIdentity().lastCode()));
+  QCOMPARE(contents(priorBackup),QByteArray("prior-backup"));QVERIFY(contents(source)!=original);
+  const auto retained=QDir(temp.path()).entryList({QStringLiteral(".lmms-vocal-backup-*")},QDir::Files|QDir::Hidden);
+  QCOMPARE(retained.size(),1);QCOMPARE(contents(temp.filePath(retained.front())),original);
+  QCOMPARE(song->recordingProjectIdentity().getOrCreateForCurrentProject(*library.library).identity.id,identity.identity.id);
+#endif
+ }
+ void replacedCurrentProjectCannotRotateIdentityDuringSave()
+ {
+#ifndef Q_OS_WIN
+  QSKIP("Windows handle-bound publication");
+#else
+  QTemporaryDir temp;QVERIFY(temp.isValid());QVERIFY(QDir(temp.path()).mkdir("library"));
+  auto library=RecordingLibrary::authorizeLocalRoot(temp.filePath("library"));QVERIFY(library.library);auto* song=Engine::getSong();
+  const auto identity=song->recordingProjectIdentity().getOrCreateForCurrentProject(*library.library);QCOMPARE(identity.code,QString("ok"));
+  const auto source=temp.filePath("source.mmp");QVERIFY(song->guiSaveProjectAs(source));const auto original=contents(source);
+  const auto retained=temp.filePath("retained.mmp");QVERIFY(QFile::rename(source,retained));QVERIFY(QFile::copy(retained,source));
+  const auto backup=source+".bak";{QFile f(backup);QVERIFY(f.open(QIODevice::WriteOnly|QIODevice::NewOnly));QCOMPARE(f.write("prior-backup"),qint64(12));}
+  QVERIFY(!song->guiSaveProject());
+  QCOMPARE(song->recordingProjectIdentity().cachedIdentity().id,identity.identity.id);
+  QCOMPARE(contents(source),original);QCOMPARE(contents(retained),original);QCOMPARE(contents(backup),QByteArray("prior-backup"));
+#endif
+ }
+ void recordingSaveRecoversAnInterruptedNativePublication()
+ {
+#ifndef Q_OS_WIN
+  QSKIP("Windows handle-bound publication");
+#else
+  QTemporaryDir temp;QVERIFY(temp.isValid());QVERIFY(QDir(temp.path()).mkdir("library"));
+  auto library=RecordingLibrary::authorizeLocalRoot(temp.filePath("library"));QVERIFY(library.library);auto* song=Engine::getSong();
+  const auto identity=song->recordingProjectIdentity().getOrCreateForCurrentProject(*library.library);QCOMPARE(identity.code,QString("ok"));
+  const auto source=temp.filePath("source.mmp");QVERIFY(song->guiSaveProjectAs(source));const auto sourceBytes=contents(source);
+  const auto target=temp.filePath("target.mmp");DataFile previous(DataFile::Type::SongProject);QVERIFY(previous.writeFile(target));const auto targetBytes=contents(target);
+  const auto backup=target+".bak";{QFile f(backup);QVERIFY(f.open(QIODevice::WriteOnly|QIODevice::NewOnly));QCOMPARE(f.write("prior-backup"),qint64(12));}
+  TemporaryCredential credential;credential.name=nativeSaveCredential(temp.path());QVERIFY(!credential.name.isEmpty());PCREDENTIALW existing=nullptr;
+  const bool exists=CredReadW(reinterpret_cast<LPCWSTR>(credential.name.utf16()),CRED_TYPE_GENERIC,0,&existing);
+  const auto error=exists?DWORD(ERROR_SUCCESS):GetLastError();if(existing)CredFree(existing);QVERIFY(!exists);QCOMPARE(error,DWORD(ERROR_NOT_FOUND));credential.owned=true;
+  const auto tx=QUuid::createUuid().toString(QUuid::WithoutBraces);
+  {auto held=ProjectSavePublication::acquireSelectedTarget(target);QVERIFY(held.publication);
+   QCOMPARE(held.publication->createStage(tx,QByteArray("interrupted")),QString("ok"));
+   QCOMPARE(held.publication->prepareNativeJournal(),QString("ok"));QCOMPARE(held.publication->moveOriginalToBackup(tx),QString("ok"));}
+  QVERIFY(!QFileInfo::exists(target));
+  QVERIFY2(song->guiSaveProjectAs(target),qPrintable(song->recordingProjectIdentity().lastCode()));
+  QCOMPARE(contents(source),sourceBytes);QCOMPARE(contents(backup),QByteArray("prior-backup"));
+  QCOMPARE(contents(temp.filePath(QStringLiteral(".lmms-vocal-stage-")+tx)),QByteArray("interrupted"));
+  const auto retained=QDir(temp.path()).entryList({QStringLiteral(".lmms-vocal-backup-*")},QDir::Files|QDir::Hidden);
+  bool foundOriginal=false;for(const auto& name:retained)if(contents(temp.filePath(name))==targetBytes)foundOriginal=true;
+  QVERIFY(foundOriginal);QCOMPARE(ProjectSavePublication::nativeJournalStatus(target),QString("none"));
+#endif
+ }
+ void loadingAnInterruptedRecordingProjectRecoversBeforeOpening()
+ {
+#ifndef Q_OS_WIN
+  QSKIP("Windows handle-bound publication");
+#else
+  QTemporaryDir temp;QVERIFY(temp.isValid());QVERIFY(QDir(temp.path()).mkdir("library"));
+  auto library=RecordingLibrary::authorizeLocalRoot(temp.filePath("library"));QVERIFY(library.library);auto* song=Engine::getSong();
+  const auto identity=song->recordingProjectIdentity().getOrCreateForCurrentProject(*library.library);QCOMPARE(identity.code,QString("ok"));
+  const auto source=temp.filePath("source.mmp");QVERIFY(song->guiSaveProjectAs(source));const auto original=contents(source);
+  TemporaryCredential credential;credential.name=nativeSaveCredential(temp.path());QVERIFY(!credential.name.isEmpty());PCREDENTIALW existing=nullptr;
+  const bool exists=CredReadW(reinterpret_cast<LPCWSTR>(credential.name.utf16()),CRED_TYPE_GENERIC,0,&existing);
+  const auto error=exists?DWORD(ERROR_SUCCESS):GetLastError();if(existing)CredFree(existing);QVERIFY(!exists);QCOMPARE(error,DWORD(ERROR_NOT_FOUND));credential.owned=true;
+  const auto tx=QUuid::createUuid().toString(QUuid::WithoutBraces);
+  {auto held=ProjectSavePublication::acquireSelectedTarget(source);QVERIFY(held.publication);
+   QCOMPARE(held.publication->createStage(tx,QByteArray("interrupted")),QString("ok"));
+   QCOMPARE(held.publication->prepareNativeJournal(),QString("ok"));QCOMPARE(held.publication->moveOriginalToBackup(tx),QString("ok"));}
+  QVERIFY(!QFileInfo::exists(source));song->loadProject(source);
+  QCOMPARE(contents(source),original);QCOMPARE(song->projectFileName(),source);
+  QCOMPARE(song->recordingProjectIdentity().getOrCreateForCurrentProject(*library.library).identity.id,identity.identity.id);
+  QCOMPARE(contents(temp.filePath(QStringLiteral(".lmms-vocal-stage-")+tx)),QByteArray("interrupted"));
+#endif
+ }
+ void interruptedActiveRecoverySnapshotKeepsRecordingMetadata()
+ {
+#ifndef Q_OS_WIN
+  QSKIP("Windows handle-bound publication");
+#else
+  QTemporaryDir temp;QVERIFY(temp.isValid());QVERIFY(QDir(temp.path()).mkdir("library"));
+  auto library=RecordingLibrary::authorizeLocalRoot(temp.filePath("library"));QVERIFY(library.library);auto* song=Engine::getSong();
+  const auto identity=song->recordingProjectIdentity().getOrCreateForCurrentProject(*library.library);QCOMPARE(identity.code,QString("ok"));
+  const auto source=temp.filePath("source.mmp");QVERIFY(song->guiSaveProjectAs(source));
+  TemporaryCredential credential;credential.name=nativeSaveCredential(temp.path());QVERIFY(!credential.name.isEmpty());PCREDENTIALW existing=nullptr;
+  const bool exists=CredReadW(reinterpret_cast<LPCWSTR>(credential.name.utf16()),CRED_TYPE_GENERIC,0,&existing);
+  const auto error=exists?DWORD(ERROR_SUCCESS):GetLastError();if(existing)CredFree(existing);QVERIFY(!exists);QCOMPARE(error,DWORD(ERROR_NOT_FOUND));credential.owned=true;
+  const auto tx=QUuid::createUuid().toString(QUuid::WithoutBraces);
+  {auto held=ProjectSavePublication::acquireSelectedTarget(source);QVERIFY(held.publication);
+   QCOMPARE(held.publication->createStage(tx,QByteArray("interrupted")),QString("ok"));
+   QCOMPARE(held.publication->prepareNativeJournal(),QString("ok"));QCOMPARE(held.publication->moveOriginalToBackup(tx),QString("ok"));}
+  QVERIFY(!QFileInfo::exists(source));
+  QVERIFY(song->saveProjectFile(source,false,Song::ProjectSavePurpose::RecoverySnapshot));
+  DataFile saved(source);const auto metadata=saved.head().firstChildElement("recording_project");QVERIFY(!metadata.isNull());
+  QCOMPARE(metadata.attribute("id"),identity.identity.id);
+  QCOMPARE(song->recordingProjectIdentity().getOrCreateForCurrentProject(*library.library).identity.id,identity.identity.id);
+#endif
+ }
+ void unresolvedRecoveryDoesNotReplaceUnsavedProject()
+ {
+#ifndef Q_OS_WIN
+  QSKIP("Windows handle-bound publication");
+#else
+  QTemporaryDir currentDir,targetDir;QVERIFY(currentDir.isValid()&&targetDir.isValid());
+  const auto current=currentDir.filePath("current.mmp");auto* song=Engine::getSong();QVERIFY(song->guiSaveProjectAs(current));
+  auto* track=Track::create(Track::Type::Sample,song);QVERIFY(track);track->setName(QStringLiteral("Unsaved vocal"));song->setModified();
+  const auto count=song->tracks().size();QVERIFY(song->isModified());
+  const auto target=targetDir.filePath("target.mmp");DataFile initial(DataFile::Type::SongProject);QVERIFY(initial.writeFile(target));
+  const auto original=contents(target);TemporaryCredential credential;credential.name=nativeSaveCredential(targetDir.path());QVERIFY(!credential.name.isEmpty());
+  PCREDENTIALW existing=nullptr;const bool exists=CredReadW(reinterpret_cast<LPCWSTR>(credential.name.utf16()),CRED_TYPE_GENERIC,0,&existing);
+  const auto error=exists?DWORD(ERROR_SUCCESS):GetLastError();if(existing)CredFree(existing);QVERIFY(!exists);QCOMPARE(error,DWORD(ERROR_NOT_FOUND));credential.owned=true;
+  const auto tx=QUuid::createUuid().toString(QUuid::WithoutBraces);
+  {auto held=ProjectSavePublication::acquireSelectedTarget(target);QVERIFY(held.publication);
+   QCOMPARE(held.publication->createStage(tx,QByteArray("edited")),QString("ok"));
+   QCOMPARE(held.publication->prepareNativeJournal(),QString("ok"));QCOMPARE(held.publication->moveOriginalToBackup(tx),QString("ok"));}
+  QVERIFY(CredDeleteW(reinterpret_cast<LPCWSTR>(credential.name.utf16()),CRED_TYPE_GENERIC,0));
+  song->loadProject(target);
+  QCOMPARE(song->projectFileName(),current);QVERIFY(song->isModified());QCOMPARE(song->tracks().size(),count);
+  QCOMPARE(track->name(),QStringLiteral("Unsaved vocal"));QVERIFY(!QFileInfo::exists(target));
+  QCOMPARE(contents(targetDir.filePath(QStringLiteral(".lmms-vocal-backup-")+tx)),original);
+  QCOMPARE(contents(targetDir.filePath(QStringLiteral(".lmms-vocal-stage-")+tx)),QByteArray("edited"));
 #endif
  }
 };

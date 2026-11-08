@@ -348,6 +348,20 @@ void DataFile::write( QTextStream & _strm )
 	save(_strm, 2);
 }
 
+bool DataFile::serializeProjectForSave(const QString& filename, QByteArray& output)
+{
+	output.clear();
+	QString text;
+	QTextStream stream(&text);
+	write(stream);
+	stream.flush();
+	const auto xml = text.toUtf8();
+	if (xml.size() > 33554432) return false;
+	output = (filename.endsWith(QStringLiteral(".mmpz")) || filename.endsWith(QStringLiteral(".xptz")))
+		? qCompress(xml) : xml;
+	return true;
+}
+
 
 
 

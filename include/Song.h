@@ -27,6 +27,7 @@
 
 #include <array>
 #include <memory>
+#include <vector>
 
 #include <QByteArray>
 #include <QString>
@@ -50,6 +51,9 @@ class DataFile;
 class Keymap;
 class MidiClip;
 class Scale;
+class ManagedVocalSaveAsSource;
+class ProjectSavePublication;
+struct ManagedVocalProjectOwner;
 
 namespace gui
 {
@@ -265,6 +269,9 @@ public:
 	QByteArray projectDocumentHash();
 	QByteArray projectObjectStateHash(SerializingObject &object);
 	recording::RecordingProjectIdentity& recordingProjectIdentity() {return m_recordingProjectIdentity;}
+	// Internal managed-vocal ownership is independent from recording identity.
+	bool adoptManagedVocalOwner(const std::shared_ptr<ManagedVocalSaveAsSource>& source);
+	std::shared_ptr<const ManagedVocalProjectOwner> managedVocalOwner() const { return m_managedVocalOwner; }
 
 	const QString & projectFileName() const
 	{
@@ -272,6 +279,7 @@ public:
 	}
 	QByteArray projectSourceSha256() const { return m_projectSourceSha256; }
 	QString projectSourceFileId() const { return m_projectSourceFileId; }
+	bool savedProjectHasRecordingIdentity() const { return m_projectHasRecordingMetadata; }
 
 	bool isLoadingProject() const
 	{
@@ -435,6 +443,7 @@ private:
 	QString m_oldFileName;
 	QByteArray m_projectSourceSha256;
 	QString m_projectSourceFileId;
+	bool m_projectHasRecordingMetadata = false;
 	bool m_modified;
 	bool m_loadOnLaunch;
 
@@ -449,6 +458,13 @@ private:
 	bool m_loadingProject;
 	bool m_audioWindowCompatibilityWarned=false;
 	recording::RecordingProjectIdentity m_recordingProjectIdentity{this};
+	std::shared_ptr<const ManagedVocalProjectOwner> m_managedVocalOwner;
+	std::shared_ptr<const ManagedVocalProjectOwner> m_pendingManagedSaveAsOwner;
+	QString m_pendingManagedSaveAsPath;
+	std::shared_ptr<ProjectSavePublication> m_guiSavePublication;
+	bool m_guiSaveInProgress = false;
+	bool m_guiSavedHasRecordingMetadata = false;
+	std::vector<std::weak_ptr<ManagedVocalSaveAsSource>> m_managedVocalHolds;
 	bool m_isCancelled;
 
 	SaveOptions m_saveOptions;

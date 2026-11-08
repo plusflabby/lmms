@@ -16,6 +16,10 @@
 #include <mutex>
 #include <numbers>
 #include <vector>
+#ifdef Q_OS_WIN
+#include <windows.h>
+#include <wincred.h>
+#endif
 #include "AiBridgeAudioContext.h"
 #include "AiBridgeVocalComp.h"
 #include "AiBridgeVocalContext.h"
@@ -27,10 +31,13 @@
 #include "AudioImportPolicy.h"
 #include "AudioDevice.h"
 #include "ConfigManager.h"
+#include "DataFile.h"
 #include "Engine.h"
 #include "ManagedVocalAssetRoot.h"
 #include "ManagedVocalAssetStore.h"
+#include "ManagedVocalProjectOwnerStore.h"
 #include "ProjectJournal.h"
+#include "ProjectSavePublication.h"
 #include "RecordedTakeSource.h"
 #include "RecordingServiceHost.h"
 #include "RecordingWriter.h"
@@ -126,11 +133,51 @@ class AiBridgeVocalAssetActionsTest : public QObject
 	std::unique_ptr<QTemporaryDir> m_identityDirectory;
 	std::unique_ptr<recording::RecordingLibrary> m_identityLibrary;
 	std::vector<std::unique_ptr<QTemporaryDir>> m_recordingRoots;
-	std::unique_ptr<SampleTrack> m_track;
+	QPointer<SampleTrack> m_track;
 	SampleClip* m_clip = nullptr;
 	QStringList m_oldAudioSettings;
 	QString m_oldManagedRoot;
 	QString m_sourcePath;
+	QString m_claimedOwnerRoot;
+	QString m_claimedNativeCredential;
+
+	bool claimTemporaryNativeDirectory(const QString& directory)
+	{
+#ifdef Q_OS_WIN
+		const auto h = CreateFileW(reinterpret_cast<LPCWSTR>(directory.utf16()), FILE_READ_ATTRIBUTES,
+			FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
+		if (h == INVALID_HANDLE_VALUE) return false;
+		BY_HANDLE_FILE_INFORMATION info{}; const bool valid = GetFileInformationByHandle(h, &info); CloseHandle(h); if (!valid) return false;
+		const auto material = QByteArray::number(qulonglong(info.dwVolumeSerialNumber)) + ':'
+			+ QByteArray::number(qulonglong(info.nFileIndexHigh)) + ':' + QByteArray::number(qulonglong(info.nFileIndexLow));
+		const auto name = QStringLiteral("LMMS/NativeProjectSave/v1/") + QString::fromLatin1(QCryptographicHash::hash(material, QCryptographicHash::Sha256).toHex());
+		PCREDENTIALW existing = nullptr;
+		if (CredReadW(reinterpret_cast<LPCWSTR>(name.utf16()), CRED_TYPE_GENERIC, 0, &existing)) { CredFree(existing); return false; }
+		if (GetLastError() != ERROR_NOT_FOUND) return false;
+		m_claimedNativeCredential = name; return true;
+#else
+		Q_UNUSED(directory); return false;
+#endif
+	}
+
+	bool claimTemporaryOwnerRoot()
+	{
+#ifdef Q_OS_WIN
+		auto approval = ManagedVocalAssetRoot::authorizeConfiguredRoot();
+		if (!approval.root) return false;
+		const auto id = approval.root->rootId(); if (id.size() != 64) return false;
+		const auto filter = QStringLiteral("LMMS/ManagedVocalOwner/v1/") + id + QStringLiteral("/*");
+		DWORD count = 0; PCREDENTIALW* values = nullptr;
+		if (CredEnumerateW(reinterpret_cast<LPCWSTR>(filter.utf16()), 0, &count, &values))
+		{
+			CredFree(values); if (count != 0) return false;
+		}
+		else if (GetLastError() != ERROR_NOT_FOUND) return false;
+		m_claimedOwnerRoot = id; return true;
+#else
+		return false;
+#endif
+	}
 
 	static QString uuid()
 	{
@@ -287,19 +334,50 @@ private slots:
 		ConfigManager::inst()->setValue(QStringLiteral("vocal_assets"), QStringLiteral("managed_root"),
 			QDir::fromNativeSeparators(m_assetRoot->path()));
 		AudioImportPolicy::configured().refresh();
-		m_track = std::make_unique<SampleTrack>(Engine::getSong());
-		m_clip = new SampleClip(m_track.get());
+		m_track = new SampleTrack(Engine::getSong());
+		m_clip = new SampleClip(m_track.data());
 		auto imported = AudioImportPolicy::configured().prepare(m_sourcePath);
 		QCOMPARE(imported.code, QStringLiteral("ok"));
 		QCOMPARE(m_clip->adoptAuthorizedAudio(std::move(imported.audio)), QStringLiteral("ok"));
-		if (QByteArray(QTest::currentTestFunction()) != QByteArrayLiteral("unsavedProjectCannotPublishEvenWithRecordingIdentity"))
+		const auto testName = QByteArray(QTest::currentTestFunction());
+		if (testName != QByteArrayLiteral("unsavedProjectCannotPublishEvenWithRecordingIdentity")
+			&& testName != QByteArrayLiteral("savedImportedProjectCanRenderWithoutRecordingLibrarySetup"))
 			installPersistentProjectIdentity();
 	}
 
 	void cleanup()
 	{
-		m_track.reset();
+		delete m_track.data();
+		m_track.clear();
 		m_clip = nullptr;
+		if (Engine::getSong()->managedVocalOwner()) Engine::getSong()->clearProject();
+#ifdef Q_OS_WIN
+		if (!m_claimedNativeCredential.isEmpty())
+		{
+			const auto name = m_claimedNativeCredential; m_claimedNativeCredential.clear();
+			const bool removed = CredDeleteW(reinterpret_cast<LPCWSTR>(name.utf16()), CRED_TYPE_GENERIC, 0)
+				|| GetLastError() == ERROR_NOT_FOUND;
+			QVERIFY2(removed, "Failed to remove only the test-owned native save credential");
+		}
+		if (!m_claimedOwnerRoot.isEmpty())
+		{
+			const auto prefix = QStringLiteral("LMMS/ManagedVocalOwner/v1/") + m_claimedOwnerRoot + QLatin1Char('/');
+			const auto filter = prefix + QLatin1Char('*'); DWORD count = 0; PCREDENTIALW* values = nullptr;
+			bool removed = true;
+			if (CredEnumerateW(reinterpret_cast<LPCWSTR>(filter.utf16()), 0, &count, &values))
+			{
+				for (DWORD i = 0; i < count; ++i)
+				{
+					const auto name = QString::fromWCharArray(values[i]->TargetName);
+					if (!name.startsWith(prefix, Qt::CaseInsensitive) || values[i]->Type != CRED_TYPE_GENERIC
+						|| !CredDeleteW(values[i]->TargetName, CRED_TYPE_GENERIC, 0)) removed = false;
+				}
+				CredFree(values);
+			}
+			else if (GetLastError() != ERROR_NOT_FOUND) removed = false;
+			m_claimedOwnerRoot.clear(); QVERIFY2(removed, "Failed to remove only test-owned owner credentials");
+		}
+#endif
 		m_identityLibrary.reset();
 		m_identityDirectory.reset();
 		m_projectDirectory.reset();
@@ -410,7 +488,7 @@ private slots:
 		QVERIFY(secondFile.open(QIODevice::WriteOnly | QIODevice::NewOnly));
 		QCOMPARE(secondFile.write(secondBytes), qint64(secondBytes.size()));
 		secondFile.close();
-		std::unique_ptr<SampleClip> second(new SampleClip(m_track.get()));
+		std::unique_ptr<SampleClip> second(new SampleClip(m_track.data()));
 		QVERIFY(second);
 		auto secondImport = AudioImportPolicy::configured().prepare(secondPath);
 		QCOMPARE(secondImport.code, QStringLiteral("ok"));
@@ -516,7 +594,7 @@ private slots:
 		sourceFile.close();
 		const auto sourceHash = fileHash(timingPath);
 
-		std::unique_ptr<SampleClip> clip(new SampleClip(m_track.get()));
+		std::unique_ptr<SampleClip> clip(new SampleClip(m_track.data()));
 		auto imported = AudioImportPolicy::configured().prepare(timingPath);
 		QCOMPARE(imported.code, QStringLiteral("ok"));
 		QCOMPARE(clip->adoptAuthorizedAudio(std::move(imported.audio)), QStringLiteral("ok"));
@@ -1147,6 +1225,7 @@ private slots:
 
 	void savedImportedProjectCanRenderWithoutRecordingLibrarySetup()
 	{
+		QVERIFY(!m_identityLibrary);
 		auto* song = Engine::getSong();
 		song->recordingProjectIdentity().resetForNewProject();
 		QVERIFY(song->recordingProjectIdentity().cachedIdentity().id.isEmpty());
@@ -1154,13 +1233,17 @@ private slots:
 		QVERIFY(projectDirectory.isValid());
 		const auto projectPath = projectDirectory.filePath(QStringLiteral("fresh-project.mmp"));
 		QVERIFY(song->guiSaveProjectAs(projectPath));
+		QVERIFY(claimTemporaryOwnerRoot());
 		const auto originalHash = fileHash(m_sourcePath);
+		const auto projectHash = fileHash(projectPath);
 		const auto plan = AiBridgeVocalAssetActions::plan(request(), limits());
 		QCOMPARE(plan.code, QStringLiteral("ok"));
 		QVERIFY(plan.value);
 		const auto prepared = AiBridgeVocalAssetActions::prepareRender(*plan.value);
 		QCOMPARE(prepared.code, QStringLiteral("ok"));
 		QVERIFY(prepared.value);
+		QVERIFY(!song->guiSaveProject());
+		QCOMPARE(fileHash(projectPath), projectHash);
 		std::atomic_bool cancelled{false};
 		const auto rendered = std::async(std::launch::async, [&] {
 			return AiBridgeVocalAssetActions::render(*prepared.value, cancelled, [](VocalJobPhase) {});
@@ -1168,6 +1251,415 @@ private slots:
 		QCOMPARE(rendered.code, QStringLiteral("ok"));
 		QVERIFY(rendered.variant);
 		QCOMPARE(fileHash(m_sourcePath), originalHash);
+	}
+
+	void recordedProjectCanRenderWhenManagedRootIsRecordingRoot()
+	{
+#ifndef Q_OS_WIN
+		QSKIP("Windows recording and managed root capability");
+#else
+		QVERIFY(m_identityDirectory && m_identityLibrary);
+		ConfigManager::inst()->setValue(QStringLiteral("vocal_assets"), QStringLiteral("managed_root"),
+			QDir::fromNativeSeparators(m_identityDirectory->path()));
+		const auto originalHash = fileHash(m_sourcePath);
+		const auto plan = AiBridgeVocalAssetActions::plan(request(), limits());
+		QCOMPARE(plan.code, QStringLiteral("ok")); QVERIFY(plan.value);
+		const auto prepared = AiBridgeVocalAssetActions::prepareRender(*plan.value);
+		QCOMPARE(prepared.code, QStringLiteral("ok")); QVERIFY(prepared.value);
+		std::atomic_bool cancelled{false};
+		const auto rendered = std::async(std::launch::async, [&] {
+			return AiBridgeVocalAssetActions::render(*prepared.value, cancelled, [](VocalJobPhase) {});
+		}).get();
+		QCOMPARE(rendered.code, QStringLiteral("ok")); QVERIFY(rendered.variant);
+		QCOMPARE(fileHash(m_sourcePath), originalHash);
+		QVERIFY(m_identityLibrary->prepareProjectFolder(Engine::getSong()->recordingProjectIdentity().cachedIdentity()) == QStringLiteral("ok"));
+#endif
+	}
+
+	void independentOwnerRenderJobRemainsValidThroughPublication()
+	{
+#ifndef Q_OS_WIN
+		QSKIP("Windows managed project ownership");
+#else
+		auto* song = Engine::getSong(); song->recordingProjectIdentity().resetForNewProject();
+		QTemporaryDir projectDirectory; QVERIFY(projectDirectory.isValid());
+		QVERIFY(song->guiSaveProjectAs(projectDirectory.filePath(QStringLiteral("fresh-project.mmp"))));
+		QVERIFY(claimTemporaryOwnerRoot()); const auto originalHash = fileHash(m_sourcePath);
+		const auto plan = AiBridgeVocalAssetActions::plan(request(), limits()); QVERIFY(plan.value);
+		const auto prepared = AiBridgeVocalAssetActions::prepareRender(*plan.value); QVERIFY(prepared.value);
+		AiBridgeVocalJobs jobs; const auto started = jobs.startRender(*prepared.value);
+		QCOMPARE(started.code, QStringLiteral("ok"));
+		QTRY_COMPARE_WITH_TIMEOUT(jobs.job(started.jobId).value->state, VocalJobState::Succeeded, 5000);
+		const auto rendered = jobs.renderedVariant(started.jobId);
+		QCOMPARE(rendered.code, QStringLiteral("ok")); QVERIFY(rendered.variant);
+		QCOMPARE(fileHash(m_sourcePath), originalHash);
+		QCOMPARE(jobs.release(started.jobId).code, QStringLiteral("ok"));
+#endif
+	}
+
+	void independentOwnerCanInspectRenderedVariant()
+	{
+#ifndef Q_OS_WIN
+		QSKIP("Windows managed project ownership");
+#else
+		auto* song = Engine::getSong(); song->recordingProjectIdentity().resetForNewProject();
+		QTemporaryDir directory; QVERIFY(directory.isValid()); QVERIFY(claimTemporaryNativeDirectory(directory.path()));
+		QVERIFY(song->guiSaveProjectAs(directory.filePath(QStringLiteral("source.mmp")))); QVERIFY(claimTemporaryOwnerRoot());
+		const auto audioHash = fileHash(m_sourcePath); QString ownerId, variantId;
+		{
+			const auto plan = AiBridgeVocalAssetActions::plan(request(), limits()); QVERIFY(plan.value);
+			const auto prepared = AiBridgeVocalAssetActions::prepareRender(*plan.value); QVERIFY(prepared.value);
+			ownerId = prepared.value->projectId;
+			std::atomic_bool cancelled{false};
+			const auto rendered = std::async(std::launch::async, [&] {
+				return AiBridgeVocalAssetActions::render(*prepared.value, cancelled, {});
+			}).get();
+			QCOMPARE(rendered.code, QStringLiteral("ok")); QVERIFY(rendered.variant); variantId = rendered.variant->assetId;
+		}
+		const auto inspected = AiBridgeVocalAssetActions::inspectVariant(variantId);
+		QCOMPARE(inspected.code, QStringLiteral("ok")); QCOMPARE(inspected.projectId, ownerId);
+		QCOMPARE(inspected.assetId, variantId); QCOMPARE(fileHash(m_sourcePath), audioHash);
+#endif
+	}
+
+	void independentOwnerCanAttachAndRevertRenderedVariant()
+	{
+#ifndef Q_OS_WIN
+		QSKIP("Windows managed project ownership");
+#else
+		auto* song = Engine::getSong(); song->recordingProjectIdentity().resetForNewProject();
+		QTemporaryDir directory; QVERIFY(directory.isValid()); QVERIFY(claimTemporaryNativeDirectory(directory.path()));
+		QVERIFY(song->guiSaveProjectAs(directory.filePath(QStringLiteral("source.mmp")))); QVERIFY(claimTemporaryOwnerRoot());
+		const auto audioHash = fileHash(m_sourcePath); QString variantId;
+		const auto edit = request();
+		{
+			const auto plan = AiBridgeVocalAssetActions::plan(edit, limits()); QVERIFY(plan.value);
+			const auto prepared = AiBridgeVocalAssetActions::prepareRender(*plan.value); QVERIFY(prepared.value);
+			std::atomic_bool cancelled{false};
+			const auto rendered = std::async(std::launch::async, [&] {
+				return AiBridgeVocalAssetActions::render(*prepared.value, cancelled, {});
+			}).get();
+			QCOMPARE(rendered.code, QStringLiteral("ok")); QVERIFY(rendered.variant); variantId = rendered.variant->assetId;
+		}
+		AiBridgeProjectContext ids; auto clipId = ids.idForClip(m_clip);
+		const auto before = AiBridgeAudioContext{}.clip(clipId); QVERIFY(before.value);
+		const auto track = captureVocalTrack(before.value->state.trackId); QVERIFY(track.value);
+		VocalVariantApplyRequest apply;
+		apply.variantId = variantId; apply.clipId = clipId; apply.mode = QStringLiteral("replace");
+		apply.expectedProjectGeneration = ids.projectGeneration(); apply.expectedWorldHash = edit.expectedWorldHash;
+		apply.expectedAudioStateHash = before.value->stateHash; apply.expectedTrackStateHash = track.value->hash;
+		VocalVariantApplyResult result;
+		for (int attempt = 0; attempt < 250; ++attempt)
+		{
+			result = AiBridgeVocalVariantAttachment::apply(apply);
+			if (result.code != QStringLiteral("asset_loading")) break;
+			QTest::qWait(20);
+		}
+		QCOMPARE(result.code, QStringLiteral("ok")); QVERIFY(m_clip->hasManagedVocalVariant());
+		QTRY_VERIFY_WITH_TIMEOUT(m_clip->managedVocalPlaybackView(), 5000);
+		const auto nextPlan = AiBridgeVocalAssetActions::plan(request(), limits());
+		QCOMPARE(nextPlan.code, QStringLiteral("ok")); QVERIFY(nextPlan.value);
+		QVERIFY(song->guiSaveProject());
+		const auto project = song->projectFileName();
+		song->loadProject(project);
+		SampleClip* restored = nullptr;
+		for (auto* currentTrack : song->tracks())
+			for (auto* currentClip : currentTrack->getClips())
+				if (auto* sample = dynamic_cast<SampleClip*>(currentClip); sample && sample->hasManagedVocalVariant()) restored = sample;
+		QVERIFY(restored); QCOMPARE(restored->managedVocalVariantAssetId(), variantId);
+		QTRY_VERIFY_WITH_TIMEOUT(restored->managedVocalPlaybackView(), 5000);
+		clipId = ids.idForClip(restored); apply.clipId = clipId;
+		apply.expectedProjectGeneration = ids.projectGeneration(); apply.expectedWorldHash = vocalEditWorldHash(world());
+		const auto after = AiBridgeAudioContext{}.clip(clipId); QVERIFY(after.value);
+		const auto afterTrack = captureVocalTrack(after.value->state.trackId); QVERIFY(afterTrack.value);
+		apply.mode = QStringLiteral("revert"); apply.expectedAudioStateHash = after.value->stateHash;
+		apply.expectedTrackStateHash = afterTrack.value->hash;
+		QCOMPARE(AiBridgeVocalVariantAttachment::apply(apply).code, QStringLiteral("ok"));
+		QVERIFY(!restored->hasManagedVocalVariant());
+		QCOMPARE(fileHash(m_sourcePath), audioHash);
+#endif
+	}
+
+	void independentOwnerSurvivesSameProjectSaveAndReload()
+	{
+#ifndef Q_OS_WIN
+		QSKIP("Windows managed project ownership");
+#else
+		auto* song = Engine::getSong(); song->recordingProjectIdentity().resetForNewProject();
+		QTemporaryDir projectDirectory; QVERIFY(projectDirectory.isValid()); QVERIFY(claimTemporaryNativeDirectory(projectDirectory.path()));
+		const auto project = projectDirectory.filePath(QStringLiteral("fresh-project.mmp"));
+		QVERIFY(song->guiSaveProjectAs(project)); QVERIFY(claimTemporaryOwnerRoot());
+		const auto sourceHash = fileHash(m_sourcePath); QString ownerId;
+		{
+			const auto plan = AiBridgeVocalAssetActions::plan(request(), limits()); QVERIFY(plan.value);
+			const auto prepared = AiBridgeVocalAssetActions::prepareRender(*plan.value); QVERIFY(prepared.value);
+			ownerId = prepared.value->projectId;
+		}
+		QVERIFY(song->managedVocalOwner());
+		song->setTempo(song->getTempo() == 120 ? 121 : 120);
+		QVERIFY(song->guiSaveProject());
+		QCOMPARE(fileHash(m_sourcePath), sourceHash);
+		song->loadProject(project);
+		QVERIFY(song->managedVocalOwner()); QCOMPARE(song->managedVocalOwner()->projectId, ownerId);
+		QCOMPARE(fileHash(m_sourcePath), sourceHash);
+#endif
+	}
+
+	void independentOwnerTransfersToNewSaveAsProject()
+	{
+#ifndef Q_OS_WIN
+		QSKIP("Windows managed project ownership");
+#else
+		auto* song = Engine::getSong(); song->recordingProjectIdentity().resetForNewProject();
+		QTemporaryDir directory; QVERIFY(directory.isValid()); QVERIFY(claimTemporaryNativeDirectory(directory.path()));
+		const auto source = directory.filePath(QStringLiteral("source.mmp"));
+		const auto destination = directory.filePath(QStringLiteral("destination.mmp"));
+		QVERIFY(song->guiSaveProjectAs(source)); QVERIFY(claimTemporaryOwnerRoot());
+		const auto audioHash = fileHash(m_sourcePath);
+		QString ownerId;
+		{
+			const auto plan = AiBridgeVocalAssetActions::plan(request(), limits()); QVERIFY(plan.value);
+			const auto prepared = AiBridgeVocalAssetActions::prepareRender(*plan.value); QVERIFY(prepared.value);
+			ownerId = prepared.value->projectId;
+		}
+		const auto sourceHash = fileHash(source);
+		QVERIFY(song->guiSaveProjectAs(destination));
+		QCOMPARE(fileHash(source), sourceHash);
+		QCOMPARE(fileHash(m_sourcePath), audioHash);
+		QVERIFY(song->managedVocalOwner()); QCOMPARE(song->managedVocalOwner()->projectId, ownerId);
+		song->loadProject(destination);
+		QVERIFY(song->managedVocalOwner()); QCOMPARE(song->managedVocalOwner()->projectId, ownerId);
+		QCOMPARE(fileHash(source), sourceHash); QCOMPARE(fileHash(m_sourcePath), audioHash);
+#endif
+	}
+
+	void independentOwnerSaveAsPreservesExistingDestinationAndBackup()
+	{
+#ifndef Q_OS_WIN
+		QSKIP("Windows managed project ownership");
+#else
+		auto* song = Engine::getSong(); song->recordingProjectIdentity().resetForNewProject();
+		QTemporaryDir directory; QVERIFY(directory.isValid()); QVERIFY(claimTemporaryNativeDirectory(directory.path()));
+		const auto source = directory.filePath(QStringLiteral("source.mmp"));
+		const auto destination = directory.filePath(QStringLiteral("destination.mmp"));
+		QVERIFY(song->guiSaveProjectAs(source)); QVERIFY(claimTemporaryOwnerRoot());
+		QString ownerId;
+		{
+			const auto plan = AiBridgeVocalAssetActions::plan(request(), limits()); QVERIFY(plan.value);
+			const auto prepared = AiBridgeVocalAssetActions::prepareRender(*plan.value); QVERIFY(prepared.value);
+			ownerId = prepared.value->projectId;
+		}
+		{ QFile f(destination); QVERIFY(f.open(QIODevice::WriteOnly | QIODevice::NewOnly)); QCOMPARE(f.write("existing project"), qint64(16)); }
+		{ QFile f(destination + ".bak"); QVERIFY(f.open(QIODevice::WriteOnly | QIODevice::NewOnly)); QCOMPARE(f.write("existing backup"), qint64(15)); }
+		const auto sourceHash = fileHash(source), audioHash = fileHash(m_sourcePath);
+		const auto destinationHash = fileHash(destination), backupHash = fileHash(destination + ".bak");
+		QVERIFY(song->guiSaveProjectAs(destination));
+		QCOMPARE(fileHash(source), sourceHash); QCOMPARE(fileHash(m_sourcePath), audioHash);
+		QCOMPARE(fileHash(destination + ".bak"), backupHash);
+		const auto backups = QDir(directory.path()).entryList({QStringLiteral(".lmms-vocal-backup-*")}, QDir::Files | QDir::Hidden);
+		QCOMPARE(backups.size(), 1); QCOMPARE(fileHash(directory.filePath(backups.first())), destinationHash);
+		song->loadProject(destination);
+		QVERIFY(song->managedVocalOwner()); QCOMPARE(song->managedVocalOwner()->projectId, ownerId);
+		QCOMPARE(fileHash(source), sourceHash); QCOMPARE(fileHash(m_sourcePath), audioHash);
+#endif
+	}
+
+	void interruptedNewSaveAsCleansBothJournalsWithoutChangingCurrentProject()
+	{
+#ifndef Q_OS_WIN
+		QSKIP("Windows managed project ownership");
+#else
+		auto* song = Engine::getSong(); song->recordingProjectIdentity().resetForNewProject();
+		QTemporaryDir directory; QVERIFY(directory.isValid()); QVERIFY(claimTemporaryNativeDirectory(directory.path()));
+		const auto source = directory.filePath(QStringLiteral("source.mmp"));
+		const auto destination = directory.filePath(QStringLiteral("destination.mmp"));
+		QVERIFY(song->guiSaveProjectAs(source)); QVERIFY(claimTemporaryOwnerRoot());
+		{
+			const auto plan = AiBridgeVocalAssetActions::plan(request(), limits()); QVERIFY(plan.value);
+			const auto prepared = AiBridgeVocalAssetActions::prepareRender(*plan.value); QVERIFY(prepared.value);
+		}
+		const auto owner = song->managedVocalOwner(); QVERIFY(owner);
+		const auto sourceHash = fileHash(source), audioHash = fileHash(m_sourcePath);
+		{
+			auto root = ManagedVocalAssetRoot::authorizeConfiguredRoot(); QVERIFY(root.root);
+			ManagedVocalProjectOwnerStore store(root.root);
+			const auto held = store.holdSaveAsSource(source, *owner); QVERIFY(held.source);
+			auto publication = ProjectSavePublication::acquireNewTarget(destination); QVERIFY(publication.publication);
+			QCOMPARE(publication.publication->createStage(QUuid::createUuid().toString(QUuid::WithoutBraces), QByteArray("staged")), QStringLiteral("ok"));
+			QCOMPARE(store.prepareSaveAsJournal(*held.source, *publication.publication).code, QStringLiteral("ok"));
+			QCOMPARE(publication.publication->prepareNativeJournal(), QStringLiteral("ok"));
+		}
+		song->loadProject(destination);
+		QCOMPARE(song->projectFileName(), source); QVERIFY(song->managedVocalOwner());
+		QCOMPARE(fileHash(source), sourceHash); QCOMPARE(fileHash(m_sourcePath), audioHash); QVERIFY(!QFileInfo::exists(destination));
+		QCOMPARE(ProjectSavePublication::nativeJournalStatus(destination), QStringLiteral("none"));
+		auto root = ManagedVocalAssetRoot::authorizeConfiguredRoot(); QVERIFY(root.root);
+		ManagedVocalProjectOwnerStore store(root.root);
+		QCOMPARE(store.recoverUnpublishedSaveAs(destination), QStringLiteral("asset_missing"));
+#endif
+	}
+
+	void retrySaveAsRecoversManagedJournalBeforeStartingNewPublication()
+	{
+#ifndef Q_OS_WIN
+		QSKIP("Windows managed project ownership");
+#else
+		auto* song = Engine::getSong(); song->recordingProjectIdentity().resetForNewProject();
+		QTemporaryDir directory; QVERIFY(directory.isValid()); QVERIFY(claimTemporaryNativeDirectory(directory.path()));
+		const auto source = directory.filePath(QStringLiteral("source.mmp"));
+		const auto destination = directory.filePath(QStringLiteral("destination.mmp"));
+		QVERIFY(song->guiSaveProjectAs(source)); QVERIFY(claimTemporaryOwnerRoot());
+		{
+			const auto plan = AiBridgeVocalAssetActions::plan(request(), limits()); QVERIFY(plan.value);
+			const auto prepared = AiBridgeVocalAssetActions::prepareRender(*plan.value); QVERIFY(prepared.value);
+		}
+		const auto owner = song->managedVocalOwner(); QVERIFY(owner);
+		const auto sourceHash = fileHash(source), audioHash = fileHash(m_sourcePath);
+		{
+			auto root = ManagedVocalAssetRoot::authorizeConfiguredRoot(); QVERIFY(root.root);
+			ManagedVocalProjectOwnerStore store(root.root);
+			const auto held = store.holdSaveAsSource(source, *owner); QVERIFY(held.source);
+			auto publication = ProjectSavePublication::acquireNewTarget(destination); QVERIFY(publication.publication);
+			QCOMPARE(publication.publication->createStage(QUuid::createUuid().toString(QUuid::WithoutBraces), QByteArray("staged")), QStringLiteral("ok"));
+			QCOMPARE(store.prepareSaveAsJournal(*held.source, *publication.publication).code, QStringLiteral("ok"));
+		}
+		QVERIFY(song->guiSaveProjectAs(destination));
+		QCOMPARE(fileHash(source), sourceHash); QCOMPARE(fileHash(m_sourcePath), audioHash);
+		QVERIFY(song->managedVocalOwner()); QCOMPARE(song->managedVocalOwner()->projectId, owner->projectId);
+#endif
+	}
+
+	void independentOwnerCoordinatesWithRecordingIdentityAcrossSaveAs()
+	{
+#ifndef Q_OS_WIN
+		QSKIP("Windows managed project ownership");
+#else
+		auto* song = Engine::getSong(); song->recordingProjectIdentity().resetForNewProject(); QVERIFY(m_identityLibrary);
+		QTemporaryDir directory; QVERIFY(directory.isValid()); QVERIFY(claimTemporaryNativeDirectory(directory.path()));
+		const auto source = directory.filePath(QStringLiteral("source.mmp"));
+		const auto destination = directory.filePath(QStringLiteral("destination.mmp"));
+		QVERIFY(song->guiSaveProjectAs(source)); QVERIFY(claimTemporaryOwnerRoot()); QString ownerId;
+		{
+			const auto plan = AiBridgeVocalAssetActions::plan(request(), limits()); QVERIFY(plan.value);
+			const auto prepared = AiBridgeVocalAssetActions::prepareRender(*plan.value); QVERIFY(prepared.value);
+			ownerId = prepared.value->projectId;
+		}
+		const auto recording = song->recordingProjectIdentity().getOrCreateForCurrentProject(*m_identityLibrary);
+		QCOMPARE(recording.code, QStringLiteral("ok")); QVERIFY(!recording.identity.id.isEmpty());
+		QVERIFY(song->guiSaveProject());
+		QCOMPARE(song->recordingProjectIdentity().cachedIdentity().id, recording.identity.id);
+		QVERIFY(song->recordingProjectIdentity().sourceIdentityTrusted());
+		QVERIFY(song->managedVocalOwner()); QCOMPARE(song->managedVocalOwner()->projectId, ownerId);
+		const auto sourceHash = fileHash(source), audioHash = fileHash(m_sourcePath);
+		QVERIFY(song->guiSaveProjectAs(destination));
+		QVERIFY(song->recordingProjectIdentity().sourceIdentityTrusted());
+		QVERIFY(song->recordingProjectIdentity().cachedIdentity().id != recording.identity.id);
+		QVERIFY(song->managedVocalOwner()); QCOMPARE(song->managedVocalOwner()->projectId, ownerId);
+		QCOMPARE(fileHash(source), sourceHash); QCOMPARE(fileHash(m_sourcePath), audioHash);
+		song->loadProject(destination);
+		QVERIFY(song->managedVocalOwner()); QCOMPARE(song->managedVocalOwner()->projectId, ownerId);
+		QCOMPARE(fileHash(source), sourceHash); QCOMPARE(fileHash(m_sourcePath), audioHash);
+#endif
+	}
+
+	void independentOwnerSavesWithNewRecordingIdentityOnSharedRoot()
+	{
+#ifndef Q_OS_WIN
+		QSKIP("Windows managed project ownership");
+#else
+		auto* song = Engine::getSong(); song->recordingProjectIdentity().resetForNewProject();
+		QTemporaryDir directory; QVERIFY(directory.isValid()); QVERIFY(claimTemporaryNativeDirectory(directory.path()));
+		const auto project = directory.filePath(QStringLiteral("source.mmp"));
+		QVERIFY(song->guiSaveProjectAs(project));
+		QVERIFY(claimTemporaryOwnerRoot()); QString ownerId;
+		{
+			const auto plan = AiBridgeVocalAssetActions::plan(request(), limits()); QVERIFY(plan.value);
+			const auto prepared = AiBridgeVocalAssetActions::prepareRender(*plan.value); QVERIFY(prepared.value);
+			ownerId = prepared.value->projectId;
+		}
+		const auto audioHash = fileHash(m_sourcePath);
+		auto sharedLibrary = recording::RecordingLibrary::authorizeLocalRoot(m_assetRoot->path());
+		QVERIFY(sharedLibrary.library);
+		const auto recording = song->recordingProjectIdentity().getOrCreateForCurrentProject(*sharedLibrary.library);
+		QCOMPARE(recording.code, QStringLiteral("ok")); QVERIFY(!recording.identity.id.isEmpty());
+		QVERIFY(!song->recordingProjectIdentity().sourceIdentityTrusted());
+		QVERIFY(song->guiSaveProject());
+		QVERIFY(song->recordingProjectIdentity().sourceIdentityTrusted());
+		QCOMPARE(song->recordingProjectIdentity().cachedIdentity().id, recording.identity.id);
+		QVERIFY(song->managedVocalOwner()); QCOMPARE(song->managedVocalOwner()->projectId, ownerId);
+		QCOMPARE(fileHash(m_sourcePath), audioHash);
+		song->loadProject(project);
+		QVERIFY(song->managedVocalOwner()); QCOMPARE(song->managedVocalOwner()->projectId, ownerId);
+		QVERIFY(!song->recordingProjectIdentity().sourceIdentityTrusted());
+		QVERIFY(song->guiSaveProject());
+		QVERIFY(song->recordingProjectIdentity().sourceIdentityTrusted());
+		QVERIFY(song->managedVocalOwner()); QCOMPARE(song->managedVocalOwner()->projectId, ownerId);
+		QCOMPARE(fileHash(m_sourcePath), audioHash);
+#endif
+	}
+
+	void saveAsPinsPublishedDestinationThroughFilenameObservers()
+	{
+#ifndef Q_OS_WIN
+		QSKIP("Windows managed project ownership");
+#else
+		auto* song = Engine::getSong(); song->recordingProjectIdentity().resetForNewProject();
+		QTemporaryDir directory; QVERIFY(directory.isValid()); QVERIFY(claimTemporaryNativeDirectory(directory.path()));
+		const auto source = directory.filePath(QStringLiteral("source.mmp"));
+		const auto destination = directory.filePath(QStringLiteral("destination.mmp"));
+		const auto displaced = directory.filePath(QStringLiteral("competing-move.mmp"));
+		QVERIFY(song->guiSaveProjectAs(source)); QVERIFY(claimTemporaryOwnerRoot());
+		{
+			const auto plan = AiBridgeVocalAssetActions::plan(request(), limits()); QVERIFY(plan.value);
+			const auto prepared = AiBridgeVocalAssetActions::prepareRender(*plan.value); QVERIFY(prepared.value);
+		}
+		const auto originalHash = fileHash(source), audioHash = fileHash(m_sourcePath);
+		bool attempted = false, moved = false;
+		const auto connection = connect(song, &Song::projectFileNameChanged, song, [&] {
+			if (song->projectFileName() == destination) { attempted = true; moved = QFile::rename(destination, displaced); }
+		});
+		const bool saved = song->guiSaveProjectAs(destination);
+		disconnect(connection);
+		QVERIFY(saved); QVERIFY(attempted); QVERIFY(!moved);
+		QVERIFY(QFileInfo::exists(destination)); QVERIFY(!QFileInfo::exists(displaced));
+		QVERIFY(song->managedVocalOwner()); QCOMPARE(fileHash(source), originalHash); QCOMPARE(fileHash(m_sourcePath), audioHash);
+#endif
+	}
+
+	void independentOwnerRecoversPublishedSaveBeforeReload()
+	{
+#ifndef Q_OS_WIN
+		QSKIP("Windows managed project ownership");
+#else
+		auto* song = Engine::getSong(); song->recordingProjectIdentity().resetForNewProject();
+		QTemporaryDir projectDirectory; QVERIFY(projectDirectory.isValid()); QVERIFY(claimTemporaryNativeDirectory(projectDirectory.path()));
+		const auto project = projectDirectory.filePath(QStringLiteral("fresh-project.mmp"));
+		QVERIFY(song->guiSaveProjectAs(project)); QVERIFY(claimTemporaryOwnerRoot());
+		const auto sourceHash = fileHash(m_sourcePath); QString ownerId;
+		{
+			const auto plan = AiBridgeVocalAssetActions::plan(request(), limits()); QVERIFY(plan.value);
+			const auto prepared = AiBridgeVocalAssetActions::prepareRender(*plan.value); QVERIFY(prepared.value);
+			ownerId = prepared.value->projectId;
+		}
+		const auto original = song->managedVocalOwner(); QVERIFY(original);
+		DataFile document(project); document.head().setAttribute(QStringLiteral("recovery_fixture"), QStringLiteral("published"));
+		QByteArray encoded; QVERIFY(document.serializeProjectForSave(project, encoded));
+		const auto tx = QUuid::createUuid().toString(QUuid::WithoutBraces);
+		{
+			auto root = ManagedVocalAssetRoot::authorizeConfiguredRoot(); QVERIFY(root.root);
+			ManagedVocalProjectOwnerStore store(root.root);
+			auto publication = ProjectSavePublication::acquire(project, QByteArray::fromHex(original->fileIdentity.toLatin1()),
+				QByteArray::fromHex(original->documentSha256.toLatin1()));
+			QVERIFY(publication.publication); QCOMPARE(publication.publication->createStage(tx, encoded), QStringLiteral("ok"));
+			QCOMPARE(store.prepareSaveJournal(*publication.publication, *original).code, QStringLiteral("ok"));
+			QCOMPARE(publication.publication->prepareNativeJournal(), QStringLiteral("ok"));
+			QCOMPARE(publication.publication->publishNativePending(), QStringLiteral("ok"));
+		}
+		song->loadProject(project);
+		QVERIFY(song->managedVocalOwner()); QCOMPARE(song->managedVocalOwner()->projectId, ownerId);
+		QCOMPARE(fileHash(m_sourcePath), sourceHash);
+		QCOMPARE(ProjectSavePublication::nativeJournalStatus(project), QStringLiteral("none"));
+#endif
 	}
 };
 

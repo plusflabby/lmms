@@ -78,6 +78,8 @@ CopiedSource copySource(const QString& id,bool requireAuthorized=true)
 	s.playbackFrequency=t.geometry.frequency;s.amplification=t.geometry.amplification;
 	s.sourceReferenceHash=QCryptographicHash::hash(clip->sampleFile().toUtf8(),QCryptographicHash::Sha256);
 	s.sourceIdentity=clip->sourceFileIdentity();s.sourceDigest=t.expectedInfo.sourceSha256;
+	s.managedVariantAssetId=clip->managedVocalVariantAssetId();
+	s.managedVariantStateDigest=clip->managedVocalVariantStateDigest();
 	s.sourceFrames=t.expectedInfo.frames;s.sampleRate=t.expectedInfo.sampleRate;s.sourceChannels=t.expectedInfo.channels;s.sourceStatus=t.sourceStatus;
 	if (clip->sampleFile().isEmpty())
 		s.sourceStatus = clip->sample().sampleSize() ? QStringLiteral("embedded") : QStringLiteral("empty");

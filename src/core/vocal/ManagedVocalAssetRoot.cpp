@@ -2,6 +2,7 @@
 
 #include "ManagedVocalAssetFileOps.h"
 #include "ConfigManager.h"
+#include "RecordingLibrary.h"
 #include <QCryptographicHash>
 #include <QFileInfo>
 #include <QDir>
@@ -14,6 +15,7 @@
 #include <cstring>
 #include <limits>
 #include <map>
+#include <functional>
 #include <mutex>
 #include <vector>
 #ifdef Q_OS_WIN
@@ -28,13 +30,15 @@ struct ManagedVocalAssetRootState
 #ifdef Q_OS_WIN
 	HANDLE directory = INVALID_HANDLE_VALUE;
 	HANDLE writerLock = INVALID_HANDLE_VALUE;
+	std::shared_ptr<void> borrowedLock;
+	std::function<bool()> parentValid;
 	DWORD volume = 0;
 	QString finalPath;
 	QString selectedPath;
 	QString identity;
 	~ManagedVocalAssetRootState()
 	{
-		if (writerLock != INVALID_HANDLE_VALUE) CloseHandle(writerLock);
+		if (writerLock != INVALID_HANDLE_VALUE && !borrowedLock) CloseHandle(writerLock);
 		if (directory != INVALID_HANDLE_VALUE) CloseHandle(directory);
 	}
 #endif
@@ -131,7 +135,7 @@ HANDLE relative(HANDLE parent, const QString& component, ACCESS_MASK access, ULO
 
 bool rootAuthorized(const std::shared_ptr<ManagedVocalAssetRootState>& root)
 {
-	if (!root || root->revoked.load(std::memory_order_acquire)
+	if (!root || root->revoked.load(std::memory_order_acquire) || (root->parentValid && !root->parentValid())
 		|| root->directory == INVALID_HANDLE_VALUE || root->writerLock == INVALID_HANDLE_VALUE)
 	{
 		return false;
@@ -143,7 +147,8 @@ bool rootAuthorized(const std::shared_ptr<ManagedVocalAssetRootState>& root)
 		&& GetFileSizeEx(root->writerLock, &size) && size.QuadPart == 0;
 }
 
-QString openRoot(const QString& selected, std::shared_ptr<ManagedVocalAssetRootState>& result)
+QString openRoot(const QString& selected, std::shared_ptr<ManagedVocalAssetRootState>& result,
+	std::shared_ptr<void> borrowedLock = {}, std::function<bool()> parentValid = {})
 {
 	const auto path = canonicalRoot(selected);
 	if (path.isEmpty())
@@ -232,7 +237,13 @@ QString openRoot(const QString& selected, std::shared_ptr<ManagedVocalAssetRootS
 	}
 
 	NTSTATUS lockStatus = 0;
-	state->writerLock = relative(state->directory, QStringLiteral("recording-library.lock"),
+	if (borrowedLock)
+	{
+		state->borrowedLock = std::move(borrowedLock);
+		state->parentValid = std::move(parentValid);
+		state->writerLock = static_cast<HANDLE>(state->borrowedLock.get());
+	}
+	else state->writerLock = relative(state->directory, QStringLiteral("recording-library.lock"),
 		GENERIC_READ | GENERIC_WRITE, FILE_OPEN_IF, false, lockStatus, 0);
 	LARGE_INTEGER lockSize{};
 	if (state->writerLock == INVALID_HANDLE_VALUE || !ordinary(state->writerLock, false, state->volume)
@@ -257,6 +268,39 @@ ManagedVocalAssetRoot::ManagedVocalAssetRoot(std::shared_ptr<ManagedVocalAssetRo
 }
 
 ManagedVocalAssetRoot::~ManagedVocalAssetRoot() = default;
+
+ManagedVocalAssetRoot::Approval ManagedVocalAssetRoot::authorizeRecordingRoot(recording::RecordingLibrary& library)
+{
+#ifdef Q_OS_WIN
+	auto grant = library.managedRootGrant();
+	if (grant.code != QStringLiteral("ok") || !grant.lock || !grant.valid || !grant.valid())
+		return {QStringLiteral("asset_root_denied"), {}};
+	std::shared_ptr<ManagedVocalAssetRootState> state;
+	const auto code = openRoot(grant.selectedPath, state, std::move(grant.lock), std::move(grant.valid));
+	if (code != QStringLiteral("ok")) return {code, {}};
+	return {code, std::shared_ptr<ManagedVocalAssetRoot>(new ManagedVocalAssetRoot(std::move(state)))};
+#else
+	Q_UNUSED(library); return {QStringLiteral("unsupported_backend"), {}};
+#endif
+}
+
+ManagedVocalAssetRoot::Approval ManagedVocalAssetRoot::authorizeRecordingRoot(
+	recording::RecordingLibrary& library, const QString& expectedRoot)
+{
+#ifdef Q_OS_WIN
+	auto grant = library.managedRootGrant();
+	const auto expected = canonicalRoot(expectedRoot);
+	const auto selected = canonicalRoot(grant.selectedPath);
+	if (grant.code != QStringLiteral("ok") || !grant.lock || !grant.valid || !grant.valid()
+		|| expected.isEmpty() || expected != selected) return {QStringLiteral("asset_root_denied"), {}};
+	std::shared_ptr<ManagedVocalAssetRootState> state;
+	const auto code = openRoot(selected, state, std::move(grant.lock), std::move(grant.valid));
+	if (code != QStringLiteral("ok")) return {code, {}};
+	return {code, std::shared_ptr<ManagedVocalAssetRoot>(new ManagedVocalAssetRoot(std::move(state)))};
+#else
+	Q_UNUSED(library); Q_UNUSED(expectedRoot); return {QStringLiteral("unsupported_backend"), {}};
+#endif
+}
 
 ManagedVocalAssetRoot::Approval ManagedVocalAssetRoot::authorizeLocalRoot(const QString& selectedRoot)
 {
@@ -316,6 +360,14 @@ ManagedVocalAssetRoot::Approval ManagedVocalAssetRoot::authorizeConfiguredRoot()
 #else
 	return authorizeLocalRoot(selected);
 #endif
+}
+
+ManagedVocalAssetRoot::Approval ManagedVocalAssetRoot::authorizeConfiguredRoot(recording::RecordingLibrary* sharedRecordingLibrary)
+{
+	auto approval = authorizeConfiguredRoot();
+	if (approval.root || approval.code != QStringLiteral("asset_root_busy") || !sharedRecordingLibrary) return approval;
+	const auto configured = ConfigManager::inst()->value(QStringLiteral("vocal_assets"), QStringLiteral("managed_root"));
+	return authorizeRecordingRoot(*sharedRecordingLibrary, configured);
 }
 
 bool ManagedVocalAssetRoot::isAuthorized() const
@@ -483,6 +535,31 @@ QString openReadFile(const std::shared_ptr<ManagedVocalAssetRootState>& root, co
 #endif
 }
 
+QString removeMatchingFile(const std::shared_ptr<ManagedVocalAssetRootState>& root,
+	const QString& name, const QByteArray& expected)
+{
+#ifdef Q_OS_WIN
+	if (!rootAuthorized(root) || !safeName(name) || expected.isEmpty() || expected.size() > 2048)
+		return QStringLiteral("asset_integrity_failed");
+	NTSTATUS status = 0;
+	const auto handle = relative(root->directory, name, GENERIC_READ | DELETE, FILE_OPEN, false, status, FILE_SHARE_READ);
+	if (handle == INVALID_HANDLE_VALUE)
+		return quint32(status) == 0xc0000034u ? QStringLiteral("asset_missing") : QStringLiteral("asset_integrity_failed");
+	const auto release = qScopeGuard([handle] { CloseHandle(handle); });
+	LARGE_INTEGER length{};
+	if (!ordinary(handle, false, root->volume) || finalName(handle) != root->finalPath + '/' + name
+		|| !GetFileSizeEx(handle, &length) || length.QuadPart != expected.size()) return QStringLiteral("asset_integrity_failed");
+	QByteArray actual(expected.size(), Qt::Uninitialized); DWORD received = 0;
+	if (!ReadFile(handle, actual.data(), DWORD(actual.size()), &received, nullptr)
+		|| received != DWORD(actual.size()) || actual != expected || !rootAuthorized(root)) return QStringLiteral("asset_integrity_failed");
+	FILE_DISPOSITION_INFO disposition{TRUE};
+	return SetFileInformationByHandle(handle, FileDispositionInfo, &disposition, sizeof(disposition))
+		? QStringLiteral("ok") : QStringLiteral("asset_write_failed");
+#else
+	Q_UNUSED(root); Q_UNUSED(name); Q_UNUSED(expected); return QStringLiteral("unsupported_backend");
+#endif
+}
+
 QString openReadProjectInRoot(const std::shared_ptr<ManagedVocalAssetRootState>& root,
 	const QString& absolutePath, std::shared_ptr<FileState>& output, QByteArray& identity)
 {
@@ -529,7 +606,9 @@ QString openReadProjectInRoot(const std::shared_ptr<ManagedVocalAssetRootState>&
 	relativeName += name;
 	NTSTATUS status = 0;
 	const auto handle = relative(parentHandle, name, GENERIC_READ, FILE_OPEN, false, status, FILE_SHARE_READ);
-	if (handle == INVALID_HANDLE_VALUE) return QStringLiteral("project_identity_unverified");
+	if (handle == INVALID_HANDLE_VALUE)
+		return quint32(status) == 0xc0000034u ? QStringLiteral("project_missing")
+			: QStringLiteral("project_identity_unverified");
 	auto fileGuard = qScopeGuard([handle] { CloseHandle(handle); });
 	BY_HANDLE_FILE_INFORMATION info{};
 	if (!ordinary(handle, false, root->volume) || finalName(handle) != root->finalPath + '/' + relativeName

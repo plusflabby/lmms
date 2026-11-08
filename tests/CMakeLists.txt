@@ -20,6 +20,7 @@ set(LMMS_TESTS
 	src/core/RecordingAttachmentTest.cpp
 	src/core/RecordingRecoveryTest.cpp
 	src/core/RecordingProjectIdentityTest.cpp
+	src/core/ProjectSavePublicationTest.cpp
 	src/core/RecordingRingTest.cpp
 	src/core/RecordingPcm16Test.cpp
 	src/core/RecordingInputRuntimeTest.cpp

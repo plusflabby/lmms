@@ -7,6 +7,8 @@
 
 namespace lmms {
 
+namespace recording { class RecordingLibrary; }
+
 struct ManagedVocalAssetRootState;
 
 class LMMS_EXPORT ManagedVocalAssetRoot
@@ -20,6 +22,11 @@ public:
 
 	static Approval authorizeLocalRoot(const QString& selectedRoot);
 	static Approval authorizeConfiguredRoot();
+	static Approval authorizeConfiguredRoot(recording::RecordingLibrary* sharedRecordingLibrary);
+	// Explicitly shares an already authorized recording capability; independent
+	// authorizations retain the existing exclusive interprocess lock.
+	static Approval authorizeRecordingRoot(recording::RecordingLibrary& library);
+	static Approval authorizeRecordingRoot(recording::RecordingLibrary& library, const QString& expectedRoot);
 	~ManagedVocalAssetRoot();
 	ManagedVocalAssetRoot(const ManagedVocalAssetRoot&) = delete;
 	ManagedVocalAssetRoot& operator=(const ManagedVocalAssetRoot&) = delete;

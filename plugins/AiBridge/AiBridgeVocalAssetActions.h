@@ -12,6 +12,7 @@
 namespace lmms {
 
 class ManagedVocalAssetRoot;
+class ManagedVocalSaveAsSource;
 
 struct VocalEditPlanTicket
 {
@@ -33,6 +34,7 @@ struct VocalEditRenderInput
 	VocalEditPlanTicket ticket;
 	std::shared_ptr<ManagedVocalAssetRoot> assetRoot;
 	QString projectId;
+	std::shared_ptr<ManagedVocalSaveAsSource> managedProjectHold;
 };
 
 struct VocalEditRenderInputResult

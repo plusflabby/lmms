@@ -95,6 +95,7 @@ struct RecordingLibrary::RootState
 #ifdef Q_OS_WIN
  std::vector<HANDLE> ancestors;
  QString finalPath;
+	QString selectedPath;
  DWORD volume=0;
  std::uint64_t projectUse=0;
  HANDLE writerLock=INVALID_HANDLE_VALUE;
@@ -368,7 +369,7 @@ RecordingLibrary::Approval RecordingLibrary::authorizeLocalRoot(const QString& s
   if(part.isEmpty() || part=="." || part==".." || part.endsWith('.') || part.endsWith(' '))return {"unauthorized_library",{}};
   for(const auto c:part)if(c.unicode()<32 || QStringLiteral(":*?\"<>|").contains(c))return {"unauthorized_library",{}};
  }
- auto root=std::make_shared<RootState>();const auto drive=path.left(3).replace('/','\\');
+ auto root=std::make_shared<RootState>();root->selectedPath=path;const auto drive=path.left(3).replace('/','\\');
  const auto driveType=GetDriveTypeW(reinterpret_cast<LPCWSTR>(drive.utf16()));if(driveType!=DRIVE_FIXED && driveType!=DRIVE_REMOVABLE)return {"unauthorized_library",{}};
  auto anchor=CreateFileW(reinterpret_cast<LPCWSTR>(drive.utf16()),FILE_READ_ATTRIBUTES|FILE_TRAVERSE,FILE_SHARE_READ,nullptr,OPEN_EXISTING,FILE_FLAG_BACKUP_SEMANTICS|FILE_FLAG_OPEN_REPARSE_POINT,nullptr);
  if(anchor==INVALID_HANDLE_VALUE)return {"unauthorized_library",{}};
@@ -399,6 +400,22 @@ RecordingLibrary::Approval RecordingLibrary::authorizeLocalRoot(const QString& s
  return {"ok",std::unique_ptr<RecordingLibrary>(new RecordingLibrary(std::move(root)))};
 #else
  return {"unsupported_backend",{}};
+#endif
+}
+RecordingLibrary::ManagedRootGrant RecordingLibrary::managedRootGrant() const
+{
+#ifdef Q_OS_WIN
+ const auto root=m_root;
+ if(!authorized(root) || root->writerLock==INVALID_HANDLE_VALUE)return {"unauthorized_library",{},{},{}};
+ HANDLE duplicate=INVALID_HANDLE_VALUE;
+ if(!DuplicateHandle(GetCurrentProcess(),root->writerLock,GetCurrentProcess(),&duplicate,0,FALSE,DUPLICATE_SAME_ACCESS))
+  return {"unauthorized_library",{},{},{}};
+ auto lock=std::shared_ptr<void>(duplicate,[](void* value){if(value && value!=INVALID_HANDLE_VALUE)CloseHandle(value);});
+ const auto valid=[root]{return authorized(root) && root->writerLock!=INVALID_HANDLE_VALUE;};
+ if(!valid())return {"unauthorized_library",{},{},{}};
+ return {"ok",root->selectedPath,std::move(lock),valid};
+#else
+ return {"unsupported_backend",{},{},{}};
 #endif
 }
 QString RecordingLibrary::prepareProjectFolder(const ProjectIdentity& project)

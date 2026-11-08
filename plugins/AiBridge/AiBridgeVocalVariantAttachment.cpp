@@ -10,6 +10,7 @@
 #include "SampleTrack.h"
 #include "Song.h"
 #include "src/core/vocal/ManagedVocalAssetRoot.h"
+#include "src/core/vocal/ManagedVocalProjectOwnerStore.h"
 #include "src/core/vocal/ManagedVocalPlayback.h"
 #include <QCoreApplication>
 #include <QCryptographicHash>
@@ -116,7 +117,21 @@ VocalVariantApplyResult AiBridgeVocalVariantAttachment::apply(const VocalVariant
 	if(!song)return fail(QStringLiteral("stale_id"));
 	const auto identity=song->recordingProjectIdentity().cachedIdentity();
 	const auto identityRevision=song->recordingProjectIdentity().revision();
-	if(!validUuid(identity.id))return fail(QStringLiteral("project_identity_unverified"));
+	const auto independent=song->managedVocalOwner();
+	const auto projectId=independent?independent->projectId:identity.id;
+	if(!validUuid(projectId))return fail(QStringLiteral("project_identity_unverified"));
+	std::shared_ptr<ManagedVocalAssetRoot> ownerRoot;
+	std::shared_ptr<void> projectHold;
+	if(independent)
+	{
+		auto approval=ManagedVocalAssetRoot::authorizeConfiguredRoot(song->recordingProjectIdentity().managedRootLibraryForOwner());
+		if(!approval.root)return fail(approval.code);
+		if(approval.root->rootId()!=independent->rootId)return fail(QStringLiteral("project_identity_unverified"));
+		ManagedVocalProjectOwnerStore owners(approval.root);
+		const auto held=owners.holdVerified(song->projectFileName(),*independent);
+		if(!held.hold)return fail(held.code);
+		ownerRoot=std::move(approval.root);projectHold=held.hold;
+	}
 	AiBridgeProjectContext ids;
 	const auto generation=ids.projectGeneration();
 	if(generation!=request.expectedProjectGeneration)return fail(QStringLiteral("plan_stale"));
@@ -186,7 +201,7 @@ VocalVariantApplyResult AiBridgeVocalVariantAttachment::apply(const VocalVariant
 	{
 		const auto inspected=AiBridgeVocalAssetActions::inspectVariant(request.variantId);
 		if(inspected.code!=QStringLiteral("ok"))return fail(inspected.code);
-		if(inspected.projectId!=identity.id)return fail(QStringLiteral("asset_project_mismatch"));
+		if(inspected.projectId!=projectId)return fail(QStringLiteral("asset_project_mismatch"));
 		if(!matchingSource(inspected,*source.value,*native))return fail(QStringLiteral("source_changed"));
 		if(inspected.sampleRate!=world.outputRate || (inspected.sampleRate!=44100 && inspected.sampleRate!=48000))
 			return fail(QStringLiteral("unsupported_playback_world"));
@@ -233,6 +248,8 @@ VocalVariantApplyResult AiBridgeVocalVariantAttachment::apply(const VocalVariant
 			|| !song || !nativeGuard || ids.projectGeneration()!=generation
 			|| song->recordingProjectIdentity().cachedIdentity().id!=identity.id
 			|| song->recordingProjectIdentity().revision()!=identityRevision
+			|| song->managedVocalOwner()!=independent
+			|| (ownerRoot && !ownerRoot->isAuthorized())
 			|| vocalEditWorldHash(captureVocalEditWorld())!=worldHash)
 			return fail(QStringLiteral("plan_stale"));
 		const auto reverted=nativeGuard->revertManagedVocalVariant();
@@ -251,6 +268,8 @@ VocalVariantApplyResult AiBridgeVocalVariantAttachment::apply(const VocalVariant
 			|| !song || !nativeGuard || ids.projectGeneration()!=generation
 			|| song->recordingProjectIdentity().cachedIdentity().id!=identity.id
 			|| song->recordingProjectIdentity().revision()!=identityRevision
+			|| song->managedVocalOwner()!=independent
+			|| (ownerRoot && !ownerRoot->isAuthorized())
 			|| vocalEditWorldHash(captureVocalEditWorld())!=worldHash)
 			return fail(QStringLiteral("plan_stale"));
 
