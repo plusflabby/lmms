@@ -28,6 +28,7 @@
 #include "AiBridgeProjectContext.h"
 #include "AiBridgeVocalContext.h"
 #include "AiBridgeVocalTrackActions.h"
+#include "src/core/vocal/VocalRuntimeQualification.h"
 #include "Engine.h"
 #include "Instrument.h"
 #include "InstrumentTrack.h"
@@ -281,7 +282,16 @@ private slots:
 			{"operations",QJsonArray{QJsonObject{{"operation","gain_envelope"},{"points",QJsonArray{
 				QJsonObject{{"render_input_frame","0"},{"gain_db",0.0}},
 				QJsonObject{{"render_input_frame","44100"},{"gain_db",0.0}}}}}}}};
-		const auto vocalPlan=call("plan_vocal_edit",planParameters);QCOMPARE(vocalPlan.value("code").toString(),QStringLiteral("ok"));
+		const auto vocalPlan=call("plan_vocal_edit",planParameters);
+		if (!qualifiedVocalSamplerateRuntime())
+		{
+			QCOMPARE(vocalPlan.value("code").toString(),QStringLiteral("feature_unavailable"));
+			QCOMPARE(managedRoot.entryList(QDir::AllEntries|QDir::NoDotAndDotDot),filesBeforeDryRun);
+			QCOMPARE(call("get_audio_clip",{{"clip_id",id}}).value("data").toObject().value("audio_state_hash"),read.value("audio_state_hash"));
+		}
+		else
+		{
+		QCOMPARE(vocalPlan.value("code").toString(),QStringLiteral("ok"));
 		const auto planData=vocalPlan.value("data").toObject();const auto planId=planData.value("plan_id").toString();
 		const auto planHash=planData.value("plan_hash").toString();QVERIFY(!planId.isEmpty());QVERIFY(!planHash.isEmpty());
 		const auto dryRun=call("render_vocal_variant",{{"plan_id",planId},{"plan_hash",planHash},{"dry_run",true}});
@@ -337,6 +347,7 @@ private slots:
 		QCOMPARE(revertApply.value("code").toString(),QStringLiteral("ok"));
 		QCOMPARE(call("get_audio_clip",{{"clip_id",id}}).value("data").toObject().value("audio_state_hash"),read.value("audio_state_hash"));
 		QCOMPARE(call("get_vocal_job",{{"job_id",renderJobId},{"mode","release"}}).value("code").toString(),QStringLiteral("ok"));
+		}
 		QCOMPARE(call("get_vocal_capabilities",{}).value("code").toString(),QString("ok"));
 		const auto vocalStart=call("analyze_vocal_audio",vocalRequest);QCOMPARE(vocalStart["code"].toString(),QString("ok"));
 		const auto jobId=vocalStart["data"].toObject()["job_id"].toString();QVERIFY(!jobId.isEmpty());

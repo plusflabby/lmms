@@ -19,6 +19,7 @@
 #include "AiBridgeVocalContext.h"
 #include "AiBridgeVocalWire.h"
 #include "AiBridgeVocalTrackActions.h"
+#include "src/core/vocal/VocalRuntimeQualification.h"
 #include "AutomationClip.h"
 #include "AutomationTrack.h"
 #include "AutomatableModel.h"
@@ -117,7 +118,8 @@ private slots:
 				QJsonObject{{"render_input_frame","100"},{"gain_db",0.0}}}}}}}};
 		const auto before=vocalClipStateHash(req.selections[0].clipId);
 		const auto response=AiBridgeVocalWire::execute({2,"plan-test","plan_vocal_edit",request},&jobs);
-		QCOMPARE(response.code,QStringLiteral("unsupported_sample_rate"));
+		QCOMPARE(response.code, qualifiedVocalSamplerateRuntime()
+			? QStringLiteral("unsupported_sample_rate") : QStringLiteral("feature_unavailable"));
 		QCOMPARE(vocalClipStateHash(req.selections[0].clipId),before);
 	}
 	void renderRouteRejectsUnknownImmutablePlan()
@@ -125,7 +127,8 @@ private slots:
 		AiBridgeVocalJobs jobs;
 		const auto response=AiBridgeVocalWire::execute({2,"render-test","render_vocal_variant",
 			{{"plan_id","00000000-0000-4000-8000-000000000001"},{"plan_hash",QString(64,'a')},{"dry_run",true}}},&jobs);
-		QCOMPARE(response.code,QStringLiteral("stale_id"));
+		QCOMPARE(response.code, qualifiedVocalSamplerateRuntime()
+			? QStringLiteral("stale_id") : QStringLiteral("feature_unavailable"));
 	}
 	void applyRouteRejectsUnidentifiedProject()
 	{

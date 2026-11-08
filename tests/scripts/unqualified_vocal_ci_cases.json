@@ -1,0 +1,96 @@
+{
+  "AiBridgeVocalAssetActionsTest": {
+    "unqualified": [
+      "compBlockUsesExplicitOneFrameCrossfadeLawsAndStereoSources",
+      "unqualifiedRuntimeRejectsVocalEditWithoutMutation"
+    ],
+    "qualified_only": [
+      "admitsFullDurationStereoRenderWithinSeparateMemoryAndStagingCaps",
+      "applyRejectsByteIdenticalAudioFromDifferentFileIdentity",
+      "cancellationRemovesOnlyTheIncompleteRenderStage",
+      "compRenderCrossfadesTwoPreservedSourceSelections",
+      "defaultRenderJobPublishesDetachedVariantAndRetainsOnlyItsBoundedResult",
+      "dryRunIsSideEffectFreeAndRenderPublishesAProjectBoundDetachedVariant",
+      "independentOwnerCanAttachAndRevertRenderedVariant",
+      "independentOwnerCanInspectRenderedVariant",
+      "independentOwnerCoordinatesWithRecordingIdentityAcrossSaveAs",
+      "independentOwnerRecoversPublishedSaveBeforeReload",
+      "independentOwnerRenderJobRemainsValidThroughPublication",
+      "independentOwnerSaveAsPreservesExistingDestinationAndBackup",
+      "independentOwnerSavesWithNewRecordingIdentityOnSharedRoot",
+      "independentOwnerSurvivesSameProjectSaveAndReload",
+      "independentOwnerTransfersToNewSaveAsProject",
+      "interruptedNewSaveAsCleansBothJournalsWithoutChangingCurrentProject",
+      "plansAndRendersARealSealedTakeWithImportRootsEmpty",
+      "projectOrPolicyInvalidationCancelsBeforePublishingAndRemovesOwnedStage",
+      "recordedProjectCanRenderWhenManagedRootIsRecordingRoot",
+      "refusesRenderWithoutPersistentProjectIdentity",
+      "renderAdmissionObserverCanShutdownWithoutReportingSuccess",
+      "renderAndAnalysisShareOneWorkerAndRetainChargeUntilWorkerExit",
+      "renderDryRunRejectsTimingSegmentsWithoutBackendContext",
+      "renderInvalidationRetainsWorkerChargeUntilWorkerExit",
+      "renderPreflightRejectsTamperedResolvedTimingMap",
+      "renderRejectsSourceReplacementBeforePublishing",
+      "renderUsesImmutableRecordedBufferSnapshotWithoutImportRoots",
+      "retrySaveAsRecoversManagedJournalBeforeStartingNewPublication",
+      "saveAsPinsPublishedDestinationThroughFilenameObservers",
+      "savedImportedProjectCanRenderWithoutRecordingLibrarySetup",
+      "savedProjectWithUnpersistedRecordingIdentityCannotPublish",
+      "timingRenderPublishesExactAnchorsWithoutTouchingTheSourceWave",
+      "unsavedProjectCannotPublishEvenWithRecordingIdentity"
+    ]
+  },
+  "SampleClipManagedVocalVariantTest": {
+    "unqualified": [
+      "unqualifiedRuntimeQuarantinesVariantAndAllowsRevert"
+    ],
+    "qualified_only": [
+      "allowsVerifiedVariantPlaybackWhenTheOriginalReferenceIsMissing",
+      "applyingManagedVariantPreservesTheRecordedTakeReference",
+      "explicitRevertRestoresOriginalAfterMultipleVariantReplacements",
+      "fullProjectRelocationRendersManagedVariantInFreshProcess",
+      "missingOrCorruptVariantRetainsAssociationAndBlocksOriginalFallback",
+      "playbackQuarantinesAVariantOwnedByAnotherProject",
+      "preservesUnknownAssociationMetadataAndNeverFallsBack",
+      "quarantinesAtChangedTempoAndRequalifiesOnlyWhenWorldIsRestored",
+      "refusesSilentLookupFromAnotherManagedAssetRoot",
+      "savesReloadsAndClonesManagedVariantWithoutReplacingOriginalBuffer"
+    ]
+  },
+  "AiBridgeVocalJobSafetyTest": {
+    "unqualified": [
+      "admissionObserverMayProcessActualCompletion",
+      "analysisLifecycleDoesNotMutateNativeProjectOrSource",
+      "applyRouteRejectsUnidentifiedProject",
+      "backendFailureCodeCannotLeakPrivateText",
+      "cancellationBeforePublicationRetainsSlotUntilWorkerExit",
+      "capabilitiesRejectOversizedPolicyBeforeJsonDiscovery",
+      "completionNotificationCanDestroyOwner",
+      "destructionDuringAdmissionCannotReportSuccess",
+      "invalidationNotificationCannotReenterAdmission",
+      "lifecycleHookRunsBeforeEarlyServiceNotification",
+      "planRouteChecksCurrentSourceAndWorld",
+      "policyNotificationShutdownStopsStatusAndAdmission",
+      "policyTeardownFromEachReadCannotReturnStaleData",
+      "projectBindingCeilingIncludesGlobalAutomation",
+      "projectClipCeilingKeepsTerminalStatusAndReleaseAvailable",
+      "projectTrackCeilingRejectsBeforeDiscovery",
+      "reentrantCancelIsIdempotentAndDoesNotReemit",
+      "renderRouteRejectsUnknownImmutablePlan",
+      "repeatedInvalidationDoesNotReemitRecursively",
+      "shutdownDuringAdmissionCannotReportSuccess",
+      "shutdownReturnsOnlyAfterCooperativeWorkerExit",
+      "startupExceptionAfterLaunchJoinsBeforeUncharging",
+      "strictWireAdmissionAndPrivateFieldRejection",
+      "threadStartupFailureReleasesAdmissionAndCharge",
+      "variantLookupDoesNotFallThroughToCapabilities",
+      "wireCapabilitiesCannotSucceedAfterServiceShutdown",
+      "wireLifecyclePrivacyAndCompleteEnvelopeLimit",
+      "wireRejectsOldProjectAndPolicyResults",
+      "wireWrongThreadRejectsBeforeServiceOrNativeAccess"
+    ],
+    "qualified_only": [
+      "compareReplaceAndRevertKeepTheAuthorizedOriginalAndTrackSettings"
+    ]
+  }
+}

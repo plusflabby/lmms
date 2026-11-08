@@ -24,3 +24,19 @@ disabling Phase 3J-B does not repair or qualify that generic playback path.
 MSVC, Windows ARM64 and non-Windows Phase 3J-B runtimes have not been
 qualified by this profile. A compatible build and authorized asset roots are
 required to play saved managed variants.
+
+The MSVC CTest configuration runs explicit rejection and quarantine cases
+for the unqualified runtime, while the full positive vocal cases run in the
+qualified UCRT64 CI job. The test runner also retains the runtime-independent
+cases from those suites and fails if its case inventory changes without
+classification. Set `LMMS_UNQUALIFIED_RUNTIME_PATH` to the exact samplerate
+DLL loaded by the tests and provide Python 3.9 or newer when running this
+MSVC test selection. The tests verify that the loaded DLL's SHA-256 matches
+the supplied file. This configuration is not evidence of MSVC qualification.
+
+The existing CI matrix explicitly quarantines `AiBridgeViewTest` and
+`RecordingPortAudioDiagnosticTest` because their diagnostic execution is
+unsafe; it continues to run `AiBridgeAudioRangeNativeTest` and report its
+result. The qualified UCRT64 safe-suite job also excludes the separately
+documented legacy AudioRange exception. Historical failures and exclusions
+must not be represented as successful test runs.

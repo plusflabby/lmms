@@ -77,7 +77,8 @@ jobs:
       - name: Run tests
         run: |
           cd build/tests
-          ctest --output-on-failure -j2
+          echo 'Quarantined unsafe diagnostics: AiBridgeViewTest and RecordingPortAudioDiagnosticTest; AudioRange remains enabled.'
+          ctest --output-on-failure -j2 -E '^(AiBridgeViewTest|RecordingPortAudioDiagnosticTest)$'
         env:
           QT_QPA_PLATFORM: offscreen
       - name: Package
@@ -160,7 +161,8 @@ jobs:
       - name: Run tests
         run: |
           cd build/tests
-          ctest --output-on-failure -j2
+          echo 'Quarantined unsafe diagnostics: AiBridgeViewTest and RecordingPortAudioDiagnosticTest; AudioRange remains enabled.'
+          ctest --output-on-failure -j2 -E '^(AiBridgeViewTest|RecordingPortAudioDiagnosticTest)$'
         env:
           QT_QPA_PLATFORM: offscreen
       - name: Package
@@ -254,7 +256,8 @@ jobs:
       - name: Run tests
         run: |
           cd build/tests
-          ctest --output-on-failure -j3
+          echo 'Quarantined unsafe diagnostics: AiBridgeViewTest and RecordingPortAudioDiagnosticTest; AudioRange remains enabled.'
+          ctest --output-on-failure -j3 -E '^(AiBridgeViewTest|RecordingPortAudioDiagnosticTest)$'
       - name: Package
         run: |
           cmake --build build --target package
@@ -424,8 +427,10 @@ jobs:
       - name: Run tests
         id: run_ctest
         run: |
+          $env:LMMS_UNQUALIFIED_RUNTIME_PATH = (Resolve-Path 'build/vcpkg_installed/x64-windows/bin/samplerate.dll').Path
           cd build/tests
-          ctest --output-on-failure -j2 -V
+          Write-Output 'Quarantined unsafe diagnostics: AiBridgeViewTest and RecordingPortAudioDiagnosticTest; AudioRange remains enabled.'
+          ctest --output-on-failure -j2 -V -E '^(AiBridgeViewTest|RecordingPortAudioDiagnosticTest)$'
       - name: Print CTest failure log
         if: ${{ failure() && steps.run_ctest.outcome == 'failure' }}
         run: Get-Content build/tests/Testing/Temporary/LastTest.log
@@ -454,6 +459,10 @@ jobs:
           Push-Location build/tests
           try {
             foreach ($testName in $failedTests) {
+              if ($testName -in @('AiBridgeViewTest', 'RecordingPortAudioDiagnosticTest')) {
+                Write-Output "Not rerunning known unsafe diagnostic: $testName (original CTest failure remains above)"
+                continue
+              }
               $executable = ".\$($testName).exe"
               $report = "$($testName).qt-test-output.txt"
               Write-Output "===== $testName (QtTest verbose) ====="

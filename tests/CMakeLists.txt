@@ -26,6 +26,16 @@ endif()
 set(CMAKE_INCLUDE_CURRENT_DIR ON)
 set(CMAKE_AUTOMOC ON)
 
+if(MSVC AND NOT LMMS_REQUIRE_QUALIFIED_VOCAL_RUNTIME)
+	find_package(Python3 3.9 COMPONENTS Interpreter QUIET)
+	if(NOT Python3_Interpreter_FOUND)
+		message(WARNING "Python 3 is needed to run the unqualified vocal regression tests")
+		set(Python3_EXECUTABLE python)
+	endif()
+	add_test(NAME UnqualifiedVocalCiPolicyTest
+		COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/scripts/unqualified_vocal_ci_policy_test.py")
+endif()
+
 set(LMMS_TESTS
 	src/core/MidiExportPlannerTest.cpp
 	src/core/MidiExportFixtureTest.cpp
@@ -195,7 +205,14 @@ foreach(LMMS_TEST_SRC IN LISTS LMMS_TESTS)
 		lmms_require_qualified_samplerate(${LMMS_TEST_NAME})
 		add_dependencies(${LMMS_TEST_NAME} lmms_prepare_qualified_test_runtime)
 	endif()
-	add_test(NAME ${LMMS_TEST_NAME} COMMAND ${LMMS_TEST_NAME})
+	if(MSVC AND NOT LMMS_REQUIRE_QUALIFIED_VOCAL_RUNTIME AND
+		(LMMS_TEST_NAME STREQUAL "AiBridgeVocalAssetActionsTest" OR LMMS_TEST_NAME STREQUAL "SampleClipManagedVocalVariantTest"
+			OR LMMS_TEST_NAME STREQUAL "AiBridgeVocalJobSafetyTest"))
+		add_test(NAME ${LMMS_TEST_NAME} COMMAND "${Python3_EXECUTABLE}"
+			"${CMAKE_CURRENT_SOURCE_DIR}/scripts/unqualified_vocal_ci.py" --executable "$<TARGET_FILE:${LMMS_TEST_NAME}>")
+	else()
+		add_test(NAME ${LMMS_TEST_NAME} COMMAND ${LMMS_TEST_NAME})
+	endif()
 	if(LMMS_BUILD_WIN32 AND LMMS_REQUIRE_QUALIFIED_VOCAL_RUNTIME)
 		lmms_guard_qualified_test_runtime(${LMMS_TEST_NAME})
 	endif()

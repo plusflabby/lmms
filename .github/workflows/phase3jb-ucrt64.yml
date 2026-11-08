@@ -1,0 +1,90 @@
+---
+name: Phase 3J-B qualified UCRT64
+'on': [push, pull_request, workflow_dispatch]
+
+jobs:
+  vocal-ucrt64:
+    name: Phase 3J-B qualified UCRT64
+    runs-on: windows-2022
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - name: Install UCRT64
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: UCRT64
+          # The pinned builder verifies its tools under C:\msys64.
+          release: false
+          update: true
+          install: >-
+            base-devel
+            git
+            mingw-w64-ucrt-x86_64-gcc
+            mingw-w64-ucrt-x86_64-cmake
+            mingw-w64-ucrt-x86_64-ninja
+            mingw-w64-ucrt-x86_64-python
+            mingw-w64-ucrt-x86_64-SDL2
+            mingw-w64-ucrt-x86_64-fftw
+            mingw-w64-ucrt-x86_64-fltk
+            mingw-w64-ucrt-x86_64-fluidsynth
+            mingw-w64-ucrt-x86_64-libgig
+            mingw-w64-ucrt-x86_64-libsamplerate
+            mingw-w64-ucrt-x86_64-libsndfile
+            mingw-w64-ucrt-x86_64-lilv
+            mingw-w64-ucrt-x86_64-lv2
+            mingw-w64-ucrt-x86_64-portaudio
+            mingw-w64-ucrt-x86_64-qt5-base
+            mingw-w64-ucrt-x86_64-qt5-svg
+            mingw-w64-ucrt-x86_64-stk
+            perl-List-MoreUtils
+            perl-XML-Parser
+      - name: Build and verify pinned libsamplerate
+        shell: pwsh
+        run: |
+          ./tools/phase3jb/Build-PatchedSamplerate.ps1 -OutputRoot "$PWD/ci-phase3jb-dependency"
+      - name: Configure qualified build
+        shell: pwsh
+        run: |
+          $env:PATH = "C:\msys64\ucrt64\bin;C:\msys64\usr\bin;$env:PATH"
+          $prefix = "$PWD/ci-phase3jb-dependency/prefix"
+          cmake -S . -B ci-phase3jb-build -G Ninja `
+            -DCMAKE_BUILD_TYPE=Release -DUSE_WERROR=OFF `
+            -DLMMS_REQUIRE_QUALIFIED_VOCAL_RUNTIME=ON `
+            "-DLMMS_QUALIFIED_SAMPLERATE_PREFIX=$prefix" "-DCMAKE_PREFIX_PATH=$prefix"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Build
+        shell: pwsh
+        run: |
+          $env:PATH = "C:\msys64\ucrt64\bin;C:\msys64\usr\bin;$env:PATH"
+          cmake --build ci-phase3jb-build
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Run approved safe native regression suite
+        shell: pwsh
+        run: |
+          $env:PATH = "C:\msys64\ucrt64\bin;C:\msys64\usr\bin;$env:PATH"
+          $env:QT_QPA_PLATFORM = 'offscreen'
+          $env:LMMS_EXPECTED_SAMPLERATE_SHA256 = 'BF275A0636DC7DADAC8A691842C06B460109EFC213C68B5EF6576A216E55D734'
+          $env:LMMS_EXPECTED_SAMPLERATE_DIR = "$PWD/ci-phase3jb-build/tests"
+          Write-Host 'Separately documented exclusions: AiBridgeViewTest, AiBridgeAudioRangeNativeTest, RecordingPortAudioDiagnosticTest'
+          ctest --test-dir ci-phase3jb-build/tests --output-on-failure -E '^(AiBridgeViewTest|AiBridgeAudioRangeNativeTest|RecordingPortAudioDiagnosticTest)$'
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Install disposable package and verify DLL and license
+        shell: pwsh
+        run: |
+          $env:PATH = "C:\msys64\ucrt64\bin;C:\msys64\usr\bin;$env:PATH"
+          cmake --install ci-phase3jb-build --prefix "$PWD/ci-phase3jb-stage"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $files = @{
+            'ci-phase3jb-stage/libsamplerate-0.dll' = 'BF275A0636DC7DADAC8A691842C06B460109EFC213C68B5EF6576A216E55D734'
+            'ci-phase3jb-stage/data/licenses/libsamplerate/COPYING' = '2C1F76CE2EFFDDDB425018405D5690C0B1AB4E6976E35296B0A6DB65C5E1A55D'
+          }
+          foreach ($path in $files.Keys) {
+            if (-not (Test-Path -LiteralPath $path -PathType Leaf) -or (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash -ne $files[$path]) {
+              throw "Missing or mismatched qualified package file: $path"
+            }
+          }
+          $builtPlugin = Get-FileHash -LiteralPath 'ci-phase3jb-build/plugins/aibridge.dll' -Algorithm SHA256
+          $stagedPlugin = Get-FileHash -LiteralPath 'ci-phase3jb-stage/plugins/aibridge.dll' -Algorithm SHA256
+          if ($builtPlugin.Hash -ne $stagedPlugin.Hash) { throw 'Packaged AiBridge DLL differs from this build' }
