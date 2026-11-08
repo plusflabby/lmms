@@ -67,8 +67,9 @@ jobs:
           $env:QT_QPA_PLATFORM = 'offscreen'
           $env:LMMS_EXPECTED_SAMPLERATE_SHA256 = 'BF275A0636DC7DADAC8A691842C06B460109EFC213C68B5EF6576A216E55D734'
           $env:LMMS_EXPECTED_SAMPLERATE_DIR = "$PWD/ci-phase3jb-build/tests"
-          Write-Host 'Separately documented exclusions: AiBridgeViewTest, AiBridgeAudioRangeNativeTest, RecordingPortAudioDiagnosticTest'
-          ctest --test-dir ci-phase3jb-build/tests --output-on-failure -E '^(AiBridgeViewTest|AiBridgeAudioRangeNativeTest|RecordingPortAudioDiagnosticTest)$'
+          Write-Host 'Excluded: AiBridgeViewTest, AiBridgeAudioRangeNativeTest, RecordingPortAudioDiagnosticTest'
+          $excluded = '^(AiBridgeViewTest|AiBridgeAudioRangeNativeTest|' + 'RecordingPortAudioDiagnosticTest)$'
+          ctest --test-dir ci-phase3jb-build/tests --output-on-failure -E $excluded
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Install disposable package and verify DLL and license
         shell: pwsh
@@ -76,12 +77,16 @@ jobs:
           $env:PATH = "C:\msys64\ucrt64\bin;C:\msys64\usr\bin;$env:PATH"
           cmake --install ci-phase3jb-build --prefix "$PWD/ci-phase3jb-stage"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $dllHash = 'BF275A0636DC7DADAC8A691842C06B460109EFC213C68B5EF6576A216E55D734'
+          $licenseHash = '2C1F76CE2EFFDDDB425018405D5690C0B1AB4E6976E35296B0A6DB65C5E1A55D'
           $files = @{
-            'ci-phase3jb-stage/libsamplerate-0.dll' = 'BF275A0636DC7DADAC8A691842C06B460109EFC213C68B5EF6576A216E55D734'
-            'ci-phase3jb-stage/data/licenses/libsamplerate/COPYING' = '2C1F76CE2EFFDDDB425018405D5690C0B1AB4E6976E35296B0A6DB65C5E1A55D'
+            'ci-phase3jb-stage/libsamplerate-0.dll' = $dllHash
+            'ci-phase3jb-stage/data/licenses/libsamplerate/COPYING' = $licenseHash
           }
           foreach ($path in $files.Keys) {
-            if (-not (Test-Path -LiteralPath $path -PathType Leaf) -or (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash -ne $files[$path]) {
+            if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { throw "Missing package file: $path" }
+            $actualHash = (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash
+            if ($actualHash -ne $files[$path]) {
               throw "Missing or mismatched qualified package file: $path"
             }
           }
