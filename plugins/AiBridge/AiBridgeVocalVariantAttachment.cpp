@@ -12,6 +12,7 @@
 #include "src/core/vocal/ManagedVocalAssetRoot.h"
 #include "src/core/vocal/ManagedVocalProjectOwnerStore.h"
 #include "src/core/vocal/ManagedVocalPlayback.h"
+#include "src/core/vocal/VocalRuntimeQualification.h"
 #include <QCoreApplication>
 #include <QCryptographicHash>
 #include <QPointer>
@@ -144,6 +145,8 @@ VocalVariantApplyResult AiBridgeVocalVariantAttachment::apply(const VocalVariant
 		return fail(QStringLiteral("unsupported_playback_world"));
 	if(request.mode!=QStringLiteral("compare") && request.mode!=QStringLiteral("replace")
 		&& request.mode!=QStringLiteral("revert"))return fail(QStringLiteral("invalid_parameter"));
+	if(request.mode!=QStringLiteral("revert") && !qualifiedVocalSamplerateRuntime())
+		return fail(QStringLiteral("feature_unavailable"));
 	auto* native=dynamic_cast<SampleClip*>(ids.resolveClip(request.clipId));
 	if(!native)return fail(QStringLiteral("stale_id"));
 	QPointer<SampleClip> nativeGuard(native);

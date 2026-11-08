@@ -37,6 +37,7 @@
 #include "src/core/vocal/ManagedVocalAssetStore.h"
 #include "src/core/vocal/ManagedVocalProjectOwnerStore.h"
 #include "src/core/vocal/ManagedVocalPlaybackCache.h"
+#include "src/core/vocal/VocalRuntimeQualification.h"
 #include "ConfigManager.h"
 
 #include "PatternStore.h"
@@ -721,6 +722,12 @@ void SampleClip::refreshManagedVocalPlayback()
 		}
 		return;
 	}
+	if (!qualifiedVocalSamplerateRuntime())
+	{
+		setIsPlaying(false);
+		setManagedVocalVariantStatus(QStringLiteral("vocal_runtime_unqualified"));
+		return;
+	}
 	std::shared_ptr<const std::vector<float>> samples;
 	std::shared_ptr<ManagedVocalAssetRoot> validatedRoot;
 	std::shared_ptr<void> validatedOwner;
@@ -869,6 +876,7 @@ QString SampleClip::applyManagedVocalVariantAssociationInternal(
 	{
 		return QStringLiteral("wrong_thread");
 	}
+	if (!qualifiedVocalSamplerateRuntime()) return QStringLiteral("vocal_runtime_unqualified");
 	if (m_loadingManagedVocalAssociation.load(std::memory_order_acquire))
 	{
 		return QStringLiteral("unsupported_audio_operation");

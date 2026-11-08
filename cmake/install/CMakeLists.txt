@@ -43,7 +43,7 @@ ENDIF()
 # LMMS was linked against an explicitly selected project-local SampleRate
 # package. Install the imported target's own runtime image after dependency
 # collection so the staged package uses the same qualified DLL as the link.
-if(LMMS_BUILD_WIN32 AND TARGET SampleRate::samplerate)
+if(LMMS_BUILD_WIN32 AND LMMS_REQUIRE_QUALIFIED_VOCAL_RUNTIME AND TARGET SampleRate::samplerate)
 	get_target_property(SAMPLERATE_RUNTIME_IMAGE SampleRate::samplerate IMPORTED_LOCATION_RELEASE)
 	if(NOT SAMPLERATE_RUNTIME_IMAGE)
 		get_target_property(SAMPLERATE_RUNTIME_IMAGE SampleRate::samplerate IMPORTED_LOCATION)
@@ -63,6 +63,7 @@ if(LMMS_BUILD_WIN32 AND TARGET SampleRate::samplerate)
 		install(FILES "${SAMPLERATE_RUNTIME_IMAGE}" DESTINATION "${BIN_DIR}")
 	endif()
 	install(FILES "${SAMPLERATE_LICENSE}" DESTINATION "${DATA_DIR}/licenses/libsamplerate")
+	lmms_verify_installed_samplerate("${BIN_DIR}")
 endif()
 
 # Install STK rawwaves

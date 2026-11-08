@@ -5,6 +5,7 @@
 #include "ConfigManager.h"
 #include "Engine.h"
 #include "src/core/vocal/ManagedVocalAssetRoot.h"
+#include "src/core/vocal/VocalRuntimeQualification.h"
 #include "RecordingProjectIdentity.h"
 #include "Song.h"
 #include "src/core/vocal/ManagedVocalProjectOwnerStore.h"
@@ -37,7 +38,7 @@ QString failureCode(const QString& code)
 
 QString renderFailureCode(const QString& code)
 {
-	for (const auto* known : {"ok", "cancelled", "feature_unavailable", "resource_limit", "invalid_parameter",
+	for (const auto* known : {"ok", "cancelled", "feature_unavailable", "vocal_runtime_unqualified", "resource_limit", "invalid_parameter",
 		"wrong_thread", "plan_stale", "job_invalidated", "asset_root_not_configured", "asset_root_denied",
 		"asset_root_busy", "asset_root_revoked", "asset_integrity_failed", "asset_write_failed", "asset_incomplete",
 		"project_identity_unverified", "asset_project_mismatch", "asset_missing", "source_changed",
@@ -327,6 +328,7 @@ VocalRenderAdmissionResult AiBridgeVocalJobs::renderPlan(
 	VocalRenderAdmissionResult result;result.planId=planId;result.planHash=planHash;result.dryRun=dryRun;
 	if(QThread::currentThread()!=thread()){result.code=QStringLiteral("wrong_thread");return result;}
 	if(!isAvailable()){result.code=QStringLiteral("job_invalidated");return result;}
+	if(!qualifiedVocalSamplerateRuntime()){result.code=QStringLiteral("feature_unavailable");return result;}
 	const QPointer<AiBridgeVocalJobs> self(this);
 	checkLifetime();
 	if(!self || m_stopping){result.code=QStringLiteral("job_invalidated");return result;}

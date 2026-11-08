@@ -9,6 +9,7 @@
 #include "src/core/vocal/ManagedVocalAssetRoot.h"
 #include "src/core/vocal/ManagedVocalAssetStore.h"
 #include "src/core/vocal/ManagedVocalProjectOwnerStore.h"
+#include "src/core/vocal/VocalRuntimeQualification.h"
 #include "RecordingProjectIdentity.h"
 #include "Song.h"
 #include <QCoreApplication>
@@ -310,6 +311,7 @@ VocalEditPlanCaptureResult AiBridgeVocalAssetActions::plan(
 	{
 		return {code, {}};
 	}
+	if (!qualifiedVocalSamplerateRuntime()) return {QStringLiteral("feature_unavailable"), {}};
 	const auto captured = captureVocalInputs(analysisRequest(request));
 	if (!captured.value)
 	{
@@ -358,6 +360,7 @@ VocalEditRenderInputResult AiBridgeVocalAssetActions::prepareRender(const VocalE
 	{
 		return {QStringLiteral("wrong_thread"), {}};
 	}
+	if (!qualifiedVocalSamplerateRuntime()) return {QStringLiteral("feature_unavailable"), {}};
 	if (const auto code = validateTicket(ticket); code != QStringLiteral("ok"))
 	{
 		return {code, {}};

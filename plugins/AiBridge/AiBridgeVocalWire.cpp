@@ -9,6 +9,7 @@
 #include "SampleTrack.h"
 #include "Song.h"
 #include "src/core/vocal/ManagedVocalPlayback.h"
+#include "src/core/vocal/VocalRuntimeQualification.h"
 #include <QCoreApplication>
 #include <QJsonDocument>
 #include <QThread>
@@ -75,7 +76,9 @@ QJsonObject variantJson(const ManagedVocalAssetInspectResult& asset)
 	const auto world=captureVocalEditWorld();
 	const auto worldHash=vocalEditWorldHash(world);
 	QString eligibility=QStringLiteral("eligible_for_target_preflight");
-	if(world.tempoAutomationPresent || world.tempoBpm<=0 || world.ticksPerQuarterNote!=48
+	if(!qualifiedVocalSamplerateRuntime())
+		eligibility=QStringLiteral("vocal_runtime_unqualified");
+	else if(world.tempoAutomationPresent || world.tempoBpm<=0 || world.ticksPerQuarterNote!=48
 		|| world.timeSignatureNumerator<1 || world.timeSignatureNumerator>32
 		|| world.timeSignatureDenominator<1 || world.timeSignatureDenominator>32)
 		eligibility=QStringLiteral("unsupported_playback_world");

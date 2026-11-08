@@ -87,7 +87,11 @@ void SampleClipView::updateSample()
 	// sample-clip contains
 	if (m_clip->hasManagedVocalVariant())
 	{
-		setToolTip(m_clip->managedVocalVariantStatus() == QStringLiteral("ok")
+		if (m_clip->managedVocalVariantStatus() == QStringLiteral("vocal_runtime_unqualified"))
+		{
+			setToolTip(tr("Managed vocal variant unavailable: this build's loaded audio runtime is not qualified. The original source is retained; explicit revert restores it."));
+		}
+		else setToolTip(m_clip->managedVocalVariantStatus() == QStringLiteral("ok")
 			? tr("Managed vocal variant. Original source is retained. Playback requires a compatible new LMMS build.")
 			: tr("Managed vocal variant unavailable: %1. Original source is retained and is not used for playback. Compatible new LMMS builds are required for managed playback.")
 				.arg(m_clip->managedVocalVariantStatus()));

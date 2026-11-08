@@ -1,6 +1,7 @@
 #cmakedefine LMMS_BUILD_LINUX
 #cmakedefine LMMS_BUILD_WIN32
 #cmakedefine LMMS_BUILD_WIN64
+#cmakedefine LMMS_REQUIRE_QUALIFIED_VOCAL_RUNTIME
 #cmakedefine LMMS_BUILD_APPLE
 #cmakedefine LMMS_BUILD_OPENBSD
 #cmakedefine LMMS_BUILD_FREEBSD

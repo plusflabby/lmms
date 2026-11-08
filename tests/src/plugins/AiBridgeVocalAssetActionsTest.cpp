@@ -16,6 +16,7 @@
 #include <mutex>
 #include <numbers>
 #include <vector>
+#include <samplerate.h>
 #ifdef Q_OS_WIN
 #include <windows.h>
 #include <wincred.h>
@@ -128,6 +129,7 @@ class AiBridgeVocalAssetActionsTest : public QObject
 		}
 	};
 	std::unique_ptr<QTemporaryDir> m_audioRoot;
+	std::unique_ptr<QTemporaryDir> m_unqualifiedConfig;
 	std::unique_ptr<QTemporaryDir> m_assetRoot;
 	std::unique_ptr<QTemporaryDir> m_projectDirectory;
 	std::unique_ptr<QTemporaryDir> m_identityDirectory;
@@ -294,6 +296,12 @@ class AiBridgeVocalAssetActionsTest : public QObject
 private slots:
 	void initTestCase()
 	{
+		if (qEnvironmentVariableIsSet("LMMS_TEST_EXPECT_UNQUALIFIED_VOCAL_RUNTIME"))
+		{
+			m_unqualifiedConfig = std::make_unique<QTemporaryDir>();
+			QVERIFY(m_unqualifiedConfig->isValid());
+			ConfigManager::inst()->loadConfigFile(m_unqualifiedConfig->filePath(QStringLiteral("lmmsrc.xml")));
+		}
 		Engine::init(true);
 		Engine::audioEngine()->audioDev()->stopProcessing();
 		Engine::audioEngine()->setAudioDevice(new VocalAssetProbeDevice(Engine::audioEngine()), false);
@@ -341,7 +349,8 @@ private slots:
 		QCOMPARE(m_clip->adoptAuthorizedAudio(std::move(imported.audio)), QStringLiteral("ok"));
 		const auto testName = QByteArray(QTest::currentTestFunction());
 		if (testName != QByteArrayLiteral("unsavedProjectCannotPublishEvenWithRecordingIdentity")
-			&& testName != QByteArrayLiteral("savedImportedProjectCanRenderWithoutRecordingLibrarySetup"))
+			&& testName != QByteArrayLiteral("savedImportedProjectCanRenderWithoutRecordingLibrarySetup")
+			&& testName != QByteArrayLiteral("unqualifiedRuntimeRejectsVocalEditWithoutMutation"))
 			installPersistentProjectIdentity();
 	}
 
@@ -402,6 +411,46 @@ private slots:
 		m_sourcePath.clear();
 		Engine::projectJournal()->clearJournal();
 		Engine::projectJournal()->setJournalling(false);
+	}
+
+	void unqualifiedRuntimeRejectsVocalEditWithoutMutation()
+	{
+		if (!qEnvironmentVariableIsSet("LMMS_TEST_EXPECT_UNQUALIFIED_VOCAL_RUNTIME"))
+			QSKIP("Run by the dedicated unqualified-runtime process test");
+#ifdef Q_OS_WIN
+		HMODULE module = nullptr;
+		QVERIFY(GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+			reinterpret_cast<LPCWSTR>(src_get_version()), &module));
+		std::array<wchar_t, 32768> path{};
+		const auto length = GetModuleFileNameW(module, path.data(), DWORD(path.size()));
+		QVERIFY(length > 0 && length < path.size());
+		const auto loadedHash = fileHash(QString::fromWCharArray(path.data(), int(length)));
+		QCOMPARE(loadedHash.toLatin1(), qgetenv("LMMS_TEST_EXPECT_UNQUALIFIED_VOCAL_RUNTIME"));
+#endif
+		const auto before = fileHash(m_sourcePath);
+		const auto clipBefore = AiBridgeAudioContext{}.clip(AiBridgeProjectContext{}.idForClip(m_clip));
+		QVERIFY(clipBefore.value);
+		const auto result = AiBridgeVocalAssetActions::plan(request(), limits());
+		QCOMPARE(result.code, QStringLiteral("feature_unavailable"));
+		QVERIFY(!result.value);
+		QCOMPARE(AiBridgeVocalAssetActions::prepareRender(VocalEditPlanTicket{}).code,
+			QStringLiteral("feature_unavailable"));
+		AiBridgeVocalJobs jobs;
+		QCOMPARE(jobs.renderPlan(uuid(), QString(64, QLatin1Char('a')), false).code,
+			QStringLiteral("feature_unavailable"));
+		installPersistentProjectIdentity();
+		AiBridgeProjectContext ids;
+		VocalVariantApplyRequest apply;
+		apply.variantId = uuid();
+		apply.clipId = ids.idForClip(m_clip);
+		apply.mode = QStringLiteral("replace");
+		apply.expectedProjectGeneration = ids.projectGeneration();
+		apply.expectedWorldHash = vocalEditWorldHash(world());
+		QCOMPARE(AiBridgeVocalVariantAttachment::apply(apply).code, QStringLiteral("feature_unavailable"));
+		QCOMPARE(fileHash(m_sourcePath), before);
+		const auto clipAfter = AiBridgeAudioContext{}.clip(AiBridgeProjectContext{}.idForClip(m_clip));
+		QVERIFY(clipAfter.value);
+		QCOMPARE(clipAfter.value->stateHash, clipBefore.value->stateHash);
 	}
 
 	void unsavedProjectCannotPublishEvenWithRecordingIdentity()

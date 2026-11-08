@@ -14,6 +14,10 @@
 #include <memory>
 #include <numeric>
 #include <vector>
+#include <samplerate.h>
+#ifdef Q_OS_WIN
+#include <windows.h>
+#endif
 #include "ConfigManager.h"
 #include "AudioDevice.h"
 #include "Engine.h"
@@ -48,6 +52,7 @@ class SampleClipManagedVocalVariantTest : public QObject
 	Q_OBJECT
 
 	QString m_oldRoot;
+	std::unique_ptr<QTemporaryDir> m_unqualifiedConfig;
 	std::unique_ptr<QTemporaryDir> m_identityRoot;
 	std::unique_ptr<recording::RecordingLibrary> m_identityLibrary;
 
@@ -127,6 +132,12 @@ class SampleClipManagedVocalVariantTest : public QObject
 private slots:
 	void initTestCase()
 	{
+		if (qEnvironmentVariableIsSet("LMMS_TEST_EXPECT_UNQUALIFIED_VOCAL_RUNTIME"))
+		{
+			m_unqualifiedConfig = std::make_unique<QTemporaryDir>();
+			QVERIFY(m_unqualifiedConfig->isValid());
+			ConfigManager::inst()->loadConfigFile(m_unqualifiedConfig->filePath(QStringLiteral("lmmsrc.xml")));
+		}
 		Engine::init(true);
 		m_oldRoot = ConfigManager::inst()->value(QStringLiteral("vocal_assets"),
 			QStringLiteral("managed_root"), QStringLiteral("__unset__"));
@@ -170,6 +181,58 @@ private slots:
 		const auto identity = Engine::getSong()->recordingProjectIdentity()
 			.getOrCreateForCurrentProject(*m_identityLibrary);
 		QCOMPARE(identity.code, QStringLiteral("ok"));
+#endif
+	}
+
+	void unqualifiedRuntimeQuarantinesVariantAndAllowsRevert()
+	{
+#ifndef Q_OS_WIN
+		QSKIP("Managed asset root authorization is Windows-only");
+#else
+		if (!qEnvironmentVariableIsSet("LMMS_TEST_EXPECT_UNQUALIFIED_VOCAL_RUNTIME"))
+			QSKIP("Run by the dedicated unqualified-runtime process test");
+		HMODULE module = nullptr;
+		QVERIFY(GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+			reinterpret_cast<LPCWSTR>(src_get_version()), &module));
+		std::array<wchar_t, 32768> path{};
+		const auto length = GetModuleFileNameW(module, path.data(), DWORD(path.size()));
+		QVERIFY(length > 0 && length < path.size());
+		QFile runtime(QString::fromWCharArray(path.data(), int(length)));
+		QVERIFY(runtime.open(QIODevice::ReadOnly));
+		QCOMPARE(QCryptographicHash::hash(runtime.readAll(), QCryptographicHash::Sha256).toHex(),
+			qgetenv("LMMS_TEST_EXPECT_UNQUALIFIED_VOCAL_RUNTIME"));
+		QTemporaryDir rootDirectory;
+		QVERIFY(rootDirectory.isValid());
+		ConfigManager::inst()->setValue(QStringLiteral("vocal_assets"), QStringLiteral("managed_root"),
+			QDir::fromNativeSeparators(rootDirectory.path()));
+		const auto sampleRate = int(Engine::audioEngine()->outputSampleRate());
+		const auto variant = createVariant(QStringLiteral("embedded:unqualified-source"), sampleRate);
+		QVERIFY(!variant.assetId.isEmpty());
+		SampleTrack sourceTrack(Engine::getSong());
+		SampleClip source(&sourceTrack);
+		source.setSampleBuffer(std::make_shared<const SampleBuffer>(
+			std::vector<SampleFrame>(8, SampleFrame(0.25f)), sampleRate));
+		source.setAutoResize(false);
+		source.changeLength(TimePos(1));
+		const auto planned = association(variant, *Engine::getSong(), sampleRate, variant.frames);
+		QCOMPARE(source.applyManagedVocalVariantAssociation(planned), QStringLiteral("vocal_runtime_unqualified"));
+		QVERIFY(!source.hasManagedVocalVariant());
+		QDomDocument document;
+		auto settings = originalClipSettings(document, source, 1);
+		settings.appendChild(writeManagedVocalVariantAssociation(document, planned));
+		SampleTrack restoredTrack(Engine::getSong());
+		SampleClip restored(&restoredTrack);
+		restored.loadSettings(settings);
+		QVERIFY(restored.hasManagedVocalVariant());
+		QCOMPARE(restored.managedVocalVariantStatus(), QStringLiteral("vocal_runtime_unqualified"));
+		QVERIFY(!restored.managedVocalPlaybackView());
+		QVERIFY(!restoredTrack.play(TimePos(0), Engine::audioEngine()->framesPerPeriod(), 0, -1));
+		QCOMPARE(restored.sample().sampleSize(), size_t(8));
+		QCOMPARE(restored.sample().data()[0].left(), 0.25f);
+		QCOMPARE(restored.revertManagedVocalVariant(), QStringLiteral("ok"));
+		QVERIFY(!restored.hasManagedVocalVariant());
+		QCOMPARE(restored.sample().data()[0].left(), 0.25f);
+		QVERIFY(restoredTrack.play(TimePos(0), Engine::audioEngine()->framesPerPeriod(), 0, -1));
 #endif
 	}
 

@@ -204,6 +204,10 @@ SET(LMMS_REQUIRED_LIBS ${LMMS_REQUIRED_LIBS}
 target_link_libraries(lmmsobjs
 	${LMMS_REQUIRED_LIBS}
 )
+if(LMMS_BUILD_WIN32 AND LMMS_REQUIRE_QUALIFIED_VOCAL_RUNTIME)
+	lmms_stage_qualified_samplerate(lmms)
+	lmms_require_qualified_samplerate(lmmsobjs)
+endif()
 target_static_libraries(lmmsobjs ringbuffer)
 
 set_target_properties(lmms PROPERTIES

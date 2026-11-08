@@ -1,6 +1,28 @@
 include(CTest)
 find_package(Qt${QT_VERSION_MAJOR} COMPONENTS Network REQUIRED)
 
+if(LMMS_BUILD_WIN32 AND LMMS_REQUIRE_QUALIFIED_VOCAL_RUNTIME)
+	find_package(Python3 COMPONENTS Interpreter QUIET)
+	if(Python3_Interpreter_FOUND)
+		add_test(NAME QualifiedSamplerateSelectionTest
+			COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/scripts/qualified_samplerate_selection_test.py")
+		set_tests_properties(QualifiedSamplerateSelectionTest PROPERTIES
+			ENVIRONMENT "LMMS_QUALIFIED_SAMPLERATE_TEST_PREFIX=${LMMS_QUALIFIED_SAMPLERATE_PREFIX}")
+		add_test(NAME QualifiedSamplerateRuntimeTest
+			COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/scripts/qualified_samplerate_runtime_test.py")
+		set_tests_properties(QualifiedSamplerateRuntimeTest PROPERTIES
+			ENVIRONMENT "LMMS_QUALIFIED_SAMPLERATE_TEST_STAGE=$<TARGET_FILE_DIR:lmms>")
+		add_test(NAME QualifiedSamplerateBuilderTest
+			COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/scripts/qualified_samplerate_builder_test.py")
+		add_test(NAME UnqualifiedVocalRuntimeTest
+			COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/scripts/unqualified_vocal_runtime_test.py")
+		set_tests_properties(UnqualifiedVocalRuntimeTest PROPERTIES
+			ENVIRONMENT "LMMS_UNQUALIFIED_TEST_BIN_DIR=$<TARGET_FILE_DIR:AiBridgeVocalAssetActionsTest>")
+	else()
+		message(WARNING "Python 3 was not found; qualified libsamplerate regression tests are unavailable")
+	endif()
+endif()
+
 set(CMAKE_INCLUDE_CURRENT_DIR ON)
 set(CMAKE_AUTOMOC ON)
 
@@ -154,12 +176,29 @@ if(WIN32 AND LMMS_HAVE_PORTAUDIO)
 	list(APPEND LMMS_TESTS src/core/RecordingPortAudioDiagnosticTest.cpp)
 endif()
 
+if(LMMS_BUILD_WIN32 AND LMMS_REQUIRE_QUALIFIED_VOCAL_RUNTIME)
+	get_property(_samplerate_stager GLOBAL PROPERTY LMMS_SAMPLERATE_STAGER)
+	add_custom_target(lmms_prepare_qualified_test_runtime
+		COMMAND powershell.exe -NoProfile -NonInteractive -File "${_samplerate_stager}"
+			-Source "${LMMS_QUALIFIED_SAMPLERATE_PREFIX}/bin/libsamplerate-0.dll"
+			-Destination "${CMAKE_CURRENT_BINARY_DIR}/libsamplerate-0.dll"
+		VERBATIM)
+	add_dependencies(lmms_prepare_qualified_test_runtime lmms_verify_qualified_samplerate)
+endif()
+
 foreach(LMMS_TEST_SRC IN LISTS LMMS_TESTS)
 	# TODO CMake 3.20: Use cmake_path
 	get_filename_component(LMMS_TEST_NAME ${LMMS_TEST_SRC} NAME_WE)
 
 	add_executable(${LMMS_TEST_NAME} ${LMMS_TEST_SRC})
+	if(LMMS_BUILD_WIN32 AND LMMS_REQUIRE_QUALIFIED_VOCAL_RUNTIME)
+		lmms_require_qualified_samplerate(${LMMS_TEST_NAME})
+		add_dependencies(${LMMS_TEST_NAME} lmms_prepare_qualified_test_runtime)
+	endif()
 	add_test(NAME ${LMMS_TEST_NAME} COMMAND ${LMMS_TEST_NAME})
+	if(LMMS_BUILD_WIN32 AND LMMS_REQUIRE_QUALIFIED_VOCAL_RUNTIME)
+		lmms_guard_qualified_test_runtime(${LMMS_TEST_NAME})
+	endif()
 	if(LMMS_TEST_NAME STREQUAL "AiBridgeIpcServerTest")
 		# This integration test loads the real instrument modules from build/plugins.
 		set_target_properties(${LMMS_TEST_NAME} PROPERTIES ENABLE_EXPORTS ON)

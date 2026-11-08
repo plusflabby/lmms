@@ -1,0 +1,147 @@
+{
+  "UpstreamTag": "0.2.2",
+  "UpstreamCommit": "c96f5e3de9c4488f4e6c97f59f5245f22fda22f7",
+  "SourceArchiveURL": "https://github.com/libsndfile/libsamplerate/releases/download/0.2.2/libsamplerate-0.2.2.tar.xz",
+  "SourceArchiveSHA256": "3258DA280511D24B49D6B08615BBE824D0CACC9842B0E4CAF11C52CF2B043893",
+  "SourceDateEpoch": 1630842492,
+  "PatchSHA256": "065DD14B04C2795FDB0D33EB5539AC62C4714A7248552A41199451DF8B595FA7",
+  "PatchedArchiveSourceSHA256": "12658E85973565BE762DF03F08BD815749DE699FC281FD7FB9C2BF1C5CEA529F",
+  "CandidateDLLSHA256": "BF275A0636DC7DADAC8A691842C06B460109EFC213C68B5EF6576A216E55D734",
+  "CandidateDLLLength": 1568359,
+  "OriginalSystemDLLSHA256Before": "4F7F9B2ECEA84BB8F5B27C8F36E85E8A100663C745AC25E82A512F485B663AC7",
+  "OriginalSystemDLLSHA256After": "4F7F9B2ECEA84BB8F5B27C8F36E85E8A100663C745AC25E82A512F485B663AC7",
+  "Toolchain": {
+    "CMake": "4.4.2",
+    "GCC": "16.2.0",
+    "Ninja": "1.13.2",
+    "BuildType": "Release"
+  },
+  "LicenseSHA256": "2C1F76CE2EFFDDDB425018405D5690C0B1AB4E6976E35296B0A6DB65C5E1A55D",
+  "StagedFiles": [
+    {
+      "Path": "bin/libsamplerate-0.dll",
+      "Length": 1568359,
+      "SHA256": "BF275A0636DC7DADAC8A691842C06B460109EFC213C68B5EF6576A216E55D734"
+    },
+    {
+      "Path": "include/samplerate.h",
+      "Length": 4971,
+      "SHA256": "DFE5F4107782BCF6E9B8421A9E7C4772E19446A4C18727C73B22286D3FBB6626"
+    },
+    {
+      "Path": "lib/cmake/SampleRate/SampleRateConfig.cmake",
+      "Length": 60,
+      "SHA256": "EB49B74E97FED7C053C0B7D84165959718782D3A49C8AB75AB2DAE919FCF9653"
+    },
+    {
+      "Path": "lib/cmake/SampleRate/SampleRateConfigVersion.cmake",
+      "Length": 2827,
+      "SHA256": "FE6F32C91FB7975D00A165E110D988AE7E59F88A06F67DA61465C37B57F0BAB8"
+    },
+    {
+      "Path": "lib/cmake/SampleRate/SampleRateTargets-release.cmake",
+      "Length": 982,
+      "SHA256": "57814BA6689DD6B292109C48543490F6EC453670E11F3FB3F90D72E464CD6826"
+    },
+    {
+      "Path": "lib/cmake/SampleRate/SampleRateTargets.cmake",
+      "Length": 4257,
+      "SHA256": "CAF5148E936977BBD79452B5C740FFEDA45AEEDD688FFBC32DF7C4F289CB237B"
+    },
+    {
+      "Path": "lib/libsamplerate.a",
+      "Length": 1497190,
+      "SHA256": "3696F1223FCFA4D9E2F6BEBDEBAF80538C0A96D733308EBB2AA54FB55C1CD5E2"
+    },
+    {
+      "Path": "lib/libsamplerate.dll.a",
+      "Length": 14084,
+      "SHA256": "CB98B78576FA6D70008EE8271A731946FABC8AEBFC3A17A6D075B62B2DDC671B"
+    },
+    {
+      "Path": "lib/pkgconfig/samplerate.pc",
+      "Length": 344,
+      "SHA256": "750320F07283965A20D44F10CB6846185DF129A335A5FA4ED1C6972E9A509AB2"
+    },
+    {
+      "Path": "share/doc/libsamplerate/api_callback.md",
+      "Length": 3588,
+      "SHA256": "4B58AE6C37104CD5CB702E8E9E772400B96B6C98689AB1B87F0A1600EEA08743"
+    },
+    {
+      "Path": "share/doc/libsamplerate/api_full.md",
+      "Length": 4614,
+      "SHA256": "74B58D6402938120302B6288CFFD755FA8EE559D55E9D2DA9994B209BF362543"
+    },
+    {
+      "Path": "share/doc/libsamplerate/api_misc.md",
+      "Length": 5789,
+      "SHA256": "16654B85973D9680F87BEE7B94205628CDE2CA7893F930490578E92724216CFE"
+    },
+    {
+      "Path": "share/doc/libsamplerate/api_simple.md",
+      "Length": 2429,
+      "SHA256": "8BF42FB81BFAD8D5F92960B0A1B8B65A69DA806C4D1DB3FFF87AB38BBB8E389A"
+    },
+    {
+      "Path": "share/doc/libsamplerate/api.md",
+      "Length": 1950,
+      "SHA256": "18E67D73DB8B49BC2FDCB3A02E10BB3DCA16B8CAFFB201CF48A5FDFAECF0FB08"
+    },
+    {
+      "Path": "share/doc/libsamplerate/bugs.md",
+      "Length": 1791,
+      "SHA256": "FA2344FC8D23D14E96E3ACE544292ED3306223B3E0689D6FDBAB66FBA21D707F"
+    },
+    {
+      "Path": "share/doc/libsamplerate/download.md",
+      "Length": 515,
+      "SHA256": "125FF9E2C3E2235516DEDB5884FD5B8E15468CED663D79221E19C60853CBA4F3"
+    },
+    {
+      "Path": "share/doc/libsamplerate/faq.md",
+      "Length": 10249,
+      "SHA256": "897F617B3A377B6A70480A02037A74313B41721FDD3BACAED3B6B2579E1E098C"
+    },
+    {
+      "Path": "share/doc/libsamplerate/history.md",
+      "Length": 1933,
+      "SHA256": "0035CB40D41B9ABDBC8E9040FDDE5C2BF3BA6FCB4FCF259EBE6BE35A4E3B6774"
+    },
+    {
+      "Path": "share/doc/libsamplerate/index.md",
+      "Length": 9180,
+      "SHA256": "39DF050E4A1243FB08F795C12AB3EA4CBD9212C2482FF38CDEA9964E3F9CA49C"
+    },
+    {
+      "Path": "share/doc/libsamplerate/license.md",
+      "Length": 377,
+      "SHA256": "9722032E4B5684F0ECD399480183A9029623636ADD1E9515621DEFAF8DBCF3ED"
+    },
+    {
+      "Path": "share/doc/libsamplerate/lists.md",
+      "Length": 479,
+      "SHA256": "A9D37B1A2802CD5999D55D149C69C325BC51E1BE95456ECD94516238E82BEB6B"
+    },
+    {
+      "Path": "share/doc/libsamplerate/quality.md",
+      "Length": 4060,
+      "SHA256": "137F9C66D3570FB59C45C7CB13603877E361D913C8B5C3919A571198450554CE"
+    },
+    {
+      "Path": "share/doc/libsamplerate/SRC.png",
+      "Length": 22775,
+      "SHA256": "1EB21D2890118CF1B78A36B7B710AC2105890C3BB0A53C1631221A8A3B62472D"
+    },
+    {
+      "Path": "share/doc/libsamplerate/win32.md",
+      "Length": 694,
+      "SHA256": "6338AF0904D8E6A0D3C5C59F745EB9F30B379328183351EEDA42EE350F40BC76"
+    },
+    {
+      "Path": "share/licenses/libsamplerate/COPYING",
+      "Length": 1334,
+      "SHA256": "2C1F76CE2EFFDDDB425018405D5690C0B1AB4E6976E35296B0A6DB65C5E1A55D"
+    }
+  ]
+}
