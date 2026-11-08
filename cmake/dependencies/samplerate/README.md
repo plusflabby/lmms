@@ -40,3 +40,7 @@ unsafe; it continues to run `AiBridgeAudioRangeNativeTest` and report its
 result. The qualified UCRT64 safe-suite job also excludes the separately
 documented legacy AudioRange exception. Historical failures and exclusions
 must not be represented as successful test runs.
+
+The qualified CI job uses the hosted runner's MSYS2 installation. Its builder
+requires the exact manifest toolchain versions and DLL hash; runner or package
+drift is reported as a failed check rather than accepted as qualification.
