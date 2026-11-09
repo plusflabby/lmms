@@ -40,6 +40,18 @@ jobs:
             mingw-w64-ucrt-x86_64-stk
             perl-List-MoreUtils
             perl-XML-Parser
+      - name: Install verified pinned CMake in the CI runner
+        shell: msys2 {0}
+        run: |
+          set -euo pipefail
+          file=mingw-w64-ucrt-x86_64-cmake-4.4.2-2-any.pkg.tar.zst
+          base=https://repo.msys2.org/mingw/ucrt64
+          archive="$(cygpath -u "$RUNNER_TEMP")/$file"
+          curl --fail --location --retry 3 "$base/$file" --output "$archive"
+          curl --fail --location --retry 3 "$base/$file.sig" --output "$archive.sig"
+          hash=A48AB920F631C58D332DE3A3BFC19E1ECE9A790D7923D6DDAAFA0D0870E43768
+          printf '%s  %s\n' "$hash" "$archive" | sha256sum --check
+          pacman --noconfirm -U "$archive"
       - name: Build and verify pinned libsamplerate
         shell: pwsh
         run: |

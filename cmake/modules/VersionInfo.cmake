@@ -86,13 +86,13 @@ IF(Git_FOUND AND NOT FORCE_VERSION)
 	ENDIF()
 
 	# If there is any pre-release data, append it after a hyphen
-	if(PRERELEASE_DATA)
+	if(FORCE_VERSION AND PRERELEASE_DATA)
 		string(REPLACE ";" "." PRERELEASE_DATA "${PRERELEASE_DATA}")
 		set(FORCE_VERSION "${FORCE_VERSION}-${PRERELEASE_DATA}")
 	endif()
 
 	# If there is any build metadata, append it after a plus
-	if(BUILD_METADATA)
+	if(FORCE_VERSION AND BUILD_METADATA)
 		string(REPLACE ";" "." BUILD_METADATA "${BUILD_METADATA}")
 		set(FORCE_VERSION "${FORCE_VERSION}+${BUILD_METADATA}")
 	endif()
