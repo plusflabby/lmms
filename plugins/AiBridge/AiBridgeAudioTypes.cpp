@@ -3,6 +3,7 @@
 #include <QJsonObject>
 #include <QJsonDocument>
 #include <QCryptographicHash>
+#include <QUuid>
 #include <algorithm>
 #include <cmath>
 namespace lmms {
@@ -33,6 +34,16 @@ QString audioStateHash(std::vector<AiBridgeAudioClipState> clips)
 			{"source_channels",s.sourceChannels ? QJsonValue(*s.sourceChannels) : QJsonValue(QJsonValue::Null)},
 			{"track_volume",s.trackVolume},{"track_panning",s.trackPanning},{"fx_channel",s.fxChannel},
 			{"track_muted",s.trackMuted},{"playback_frequency",s.playbackFrequency},{"amplification",s.amplification}};
+		if(!s.managedVariantAssetId.isEmpty() || !s.managedVariantStateDigest.isEmpty())
+		{
+			const auto variantId=QUuid(s.managedVariantAssetId);
+			if((!s.managedVariantAssetId.isEmpty()
+				&& (variantId.isNull() || variantId.toString(QUuid::WithoutBraces)!=s.managedVariantAssetId))
+				|| s.managedVariantStateDigest.size()!=32)return {};
+			row.insert(QStringLiteral("managed_variant"),QJsonObject{
+				{QStringLiteral("asset_id"),s.managedVariantAssetId.isEmpty()?QJsonValue(QJsonValue::Null):QJsonValue(s.managedVariantAssetId)},
+				{QStringLiteral("state_sha256"),QString::fromLatin1(s.managedVariantStateDigest.toHex())}});
+		}
 		const int rangeKinds=int(s.rangeWindow.has_value())+int(s.rangeWindowV2.has_value())+int(!s.invalidRangeMetadataDigest.isEmpty());
 		if(rangeKinds>1 || (rangeKinds && s.rangeStatus.isEmpty())) return {};
 		if(s.rangeWindow)

@@ -78,7 +78,7 @@ QByteArray fileIdentity(HANDLE handle)
 class AuthorizedDevice final : public QIODevice
 {
 public:
-	explicit AuthorizedDevice(std::unique_ptr<Handles> handles) : m_handles(std::move(handles))
+	explicit AuthorizedDevice(std::shared_ptr<Handles> handles) : m_handles(std::move(handles))
 	{
 		open(QIODevice::ReadOnly | QIODevice::Unbuffered);
 	}
@@ -93,6 +93,7 @@ public:
 		LARGE_INTEGER offset{}; offset.QuadPart = position;
 		return SetFilePointerEx(m_handles->values.back(), offset, nullptr, FILE_BEGIN) && QIODevice::seek(position);
 	}
+	std::shared_ptr<void> nativePin() const { return m_handles; }
 protected:
 	qint64 readData(char* data, qint64 length) override
 	{
@@ -103,7 +104,7 @@ protected:
 	}
 	qint64 writeData(const char*, qint64) override { return -1; }
 private:
-	std::unique_ptr<Handles> m_handles;
+	std::shared_ptr<Handles> m_handles;
 };
 #endif
 }
@@ -111,7 +112,7 @@ private:
 namespace {
 using Result = AudioFileAuthorization::Result;
 Result acquireImpl(const QString& approvedRoot, const QString& path, bool directoryTarget = false,
-	const QByteArray& expectedRootIdentity = {})
+	const QByteArray& expectedRootIdentity = {}, bool allowDirectoryWrites = false)
 {
 	const auto denied = [] { return Result{QStringLiteral("import_path_denied"), {}, {}}; };
 	if (approvedRoot.isEmpty()) return {QStringLiteral("import_root_not_configured"), {}, {}};
@@ -123,9 +124,9 @@ Result acquireImpl(const QString& approvedRoot, const QString& path, bool direct
 	const auto drive = root.left(3).replace('/', '\\');
 	const auto driveType = GetDriveTypeW(reinterpret_cast<LPCWSTR>(drive.utf16()));
 	if (driveType != DRIVE_FIXED && driveType != DRIVE_REMOVABLE) return denied();
-	auto handles = std::make_unique<Handles>();
+	auto handles = std::make_shared<Handles>();
 	auto anchor = CreateFileW(reinterpret_cast<LPCWSTR>(drive.utf16()), FILE_READ_ATTRIBUTES | FILE_TRAVERSE,
-		FILE_SHARE_READ, nullptr, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
+		FILE_SHARE_READ | (allowDirectoryWrites ? FILE_SHARE_WRITE : 0), nullptr, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
 	if (anchor == INVALID_HANDLE_VALUE) return denied();
 	handles->values.push_back(anchor);
 	BY_HANDLE_FILE_INFORMATION anchorInfo{};
@@ -156,7 +157,7 @@ Result acquireImpl(const QString& approvedRoot, const QString& path, bool direct
 		HANDLE opened = nullptr;
 		// One component relative to a pinned directory; never follow a reparse point.
 		const auto status = ntCreate(&opened, (directory ? FILE_READ_ATTRIBUTES | FILE_TRAVERSE : GENERIC_READ) | SYNCHRONIZE,
-			&attributes, &io, nullptr, 0, FILE_SHARE_READ, FILE_OPEN,
+			&attributes, &io, nullptr, 0, FILE_SHARE_READ | (directory && allowDirectoryWrites ? FILE_SHARE_WRITE : 0), FILE_OPEN,
 			FILE_OPEN_REPARSE_POINT | FILE_SYNCHRONOUS_IO_NONALERT | (directory ? FILE_DIRECTORY_FILE : FILE_NON_DIRECTORY_FILE), nullptr, 0);
 		if (status < 0)
 		{
@@ -184,6 +185,19 @@ Result acquireImpl(const QString& approvedRoot, const QString& path, bool direct
 AudioFileAuthorization::Result AudioFileAuthorization::acquire(const QString& approvedRoot, const QString& path)
 {
 	return acquireImpl(approvedRoot, path);
+}
+
+AudioFileAuthorization::PinnedResult AudioFileAuthorization::acquireWithRetainedPin(const QString& approvedRoot, const QString& path)
+{
+	auto result = acquireImpl(approvedRoot, path, false, {}, true);
+#ifdef Q_OS_WIN
+	if (result.source)
+	{
+		auto pin = static_cast<AuthorizedDevice*>(result.source.get())->nativePin();
+		return {result.code, result.identity, std::move(result.source), std::move(pin)};
+	}
+#endif
+	return {result.code, result.identity, std::move(result.source), {}};
 }
 
 AudioFileAuthorization::Approval AudioFileAuthorization::approveRoot(const QString& approvedRoot)

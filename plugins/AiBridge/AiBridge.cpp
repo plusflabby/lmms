@@ -1,5 +1,6 @@
 #include "AiBridge.h"
 #include "AiBridgeVocalJobView.h"
+#include "AiBridgeEndpoint.h"
 
 #include <QFormLayout>
 #include <QDialog>
@@ -80,10 +81,11 @@ private:
 };
 
 AiBridge::AiBridge() : ToolPlugin(&aibridge_plugin_descriptor, nullptr), m_vocalJobs(this), m_midiExportJobs(this),
-	m_ipcServer(this, QStringLiteral("lmms-aibridge-v2"), &m_vocalJobs, &m_midiExportJobs,
+	m_ipcServer(this, aiBridgeEndpoint(qEnvironmentVariableIsSet("LMMS_AIBRIDGE_TEST_PIPE_SUFFIX"),
+		qgetenv("LMMS_AIBRIDGE_TEST_PIPE_SUFFIX")), &m_vocalJobs, &m_midiExportJobs,
 		Engine::recordingSessionManager())
 {
-	m_ipcServer.start();
+	if (!m_ipcServer.endpointName().isEmpty()) m_ipcServer.start();
 }
 
 AiBridge::~AiBridge()

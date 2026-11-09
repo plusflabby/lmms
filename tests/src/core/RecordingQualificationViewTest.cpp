@@ -58,9 +58,11 @@ private slots:
   std::ignore=host.requestStop({4,1});deadline.restart();
   while(deadline.elapsed()<3000 && !host.quiescent()){std::ignore=host.poll(100);QTest::qWait(1);}
   QVERIFY(host.quiescent());RecordingProjectIdentity project(nullptr);RecordingQualificationView view(host,project);
-  view.findChild<QTimer*>()->start(1);QTest::qWait(20);
-  QVERIFY(view.findChild<QLabel*>("recordingInputStatus")->text().contains("timestamp observation queue overflow"));
-  QVERIFY(view.findChild<QPlainTextEdit*>("recordingInputDiagnostics")->toPlainText().contains("observations dropped 1"));
+  auto* status=view.findChild<QLabel*>("recordingInputStatus");QVERIFY(status);
+  auto* diagnostics=view.findChild<QPlainTextEdit*>("recordingInputDiagnostics");QVERIFY(diagnostics);
+  auto* timer=view.findChild<QTimer*>();QVERIFY(timer);timer->start(1);
+  QTRY_VERIFY_WITH_TIMEOUT(status->text().contains("timestamp observation queue overflow"),5000);
+  QTRY_VERIFY_WITH_TIMEOUT(diagnostics->toPlainText().contains("observations dropped 1"),5000);
  }
  void initializationFailureDisplaysStageDetailsWithoutOpeningInput()
  {

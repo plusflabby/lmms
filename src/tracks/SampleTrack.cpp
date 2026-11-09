@@ -33,6 +33,7 @@
 #include "PatternStore.h"
 #include "PatternTrack.h"
 #include "SampleClip.h"
+#include "ManagedVocalPlayHandle.h"
 #include "SamplePlayHandle.h"
 #include "SampleRecordHandle.h"
 #include "SampleTrackView.h"
@@ -81,7 +82,7 @@ bool SampleTrack::play( const TimePos & _start, const f_cnt_t _frames,
 	if( _clip_num >= 0 )
 	{
 		auto sClip = dynamic_cast<SampleClip*>(getClip(_clip_num));
-		if (sClip->hasAudioSourceWindow()) return false;
+		if (sClip->hasAudioSourceWindow() || sClip->hasManagedVocalVariant()) return false;
 
 		if (_start > sClip->length())
 		{
@@ -109,6 +110,35 @@ bool SampleTrack::play( const TimePos & _start, const f_cnt_t _frames,
 		{
 			Clip * clip = getClip( i );
 			auto sClip = dynamic_cast<SampleClip*>(clip);
+			if (sClip->hasManagedVocalVariant())
+			{
+				if (trackContainer() == Engine::patternStore())
+				{
+					sClip->setIsPlaying(false);
+					continue;
+				}
+				const auto view = sClip->managedVocalPlaybackView();
+				if (!view)
+				{
+					sClip->setIsPlaying(false);
+					continue;
+				}
+				if (_start >= sClip->startPosition() && _start < sClip->endPosition())
+				{
+					if (!sClip->isPlaying()
+						&& _start >= sClip->startPosition() + sClip->startTimeOffset())
+					{
+						clips.push_back(sClip);
+						sClip->setIsPlaying(true);
+					}
+					nowPlaying = nowPlaying || sClip->isPlaying();
+				}
+				else
+				{
+					sClip->setIsPlaying(false);
+				}
+				continue;
+			}
 			if (sClip->hasAudioSourceWindow())
 			{
 				const auto view=sClip->audioWindowPlaybackView();
@@ -170,6 +200,27 @@ bool SampleTrack::play( const TimePos & _start, const f_cnt_t _frames,
 			}
 			else
 			{
+				if (st->hasManagedVocalVariant())
+				{
+					const auto view = st->managedVocalPlaybackView();
+					if (!view) continue;
+					const auto elapsedTicks = _start - st->startPosition() - st->startTimeOffset();
+					const auto elapsed = qint64(TimePos(elapsedTicks).frames(
+						Engine::framesPerTick(view->sampleRate)));
+					qint64 maximum = -1;
+					const auto& timeline = Engine::getSong()->getTimeline(Song::PlayMode::Song);
+					if (timeline.loopEnabled() && timeline.loopEnd() > _start)
+					{
+						maximum = qint64(TimePos(timeline.loopEnd() - _start).frames(
+							Engine::framesPerTick(view->sampleRate)));
+					}
+					auto managedHandle = new ManagedVocalPlayHandle(this, view, elapsed, maximum);
+					handle = managedHandle;
+					handle->setOffset(_offset);
+					Engine::audioEngine()->addPlayHandle(handle);
+					played_a_note = true;
+					continue;
+				}
 				qint64 elapsed=0,maximum=-1;
 				if(const auto view=st->audioWindowPlaybackView())
 				{

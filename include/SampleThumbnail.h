@@ -38,6 +38,7 @@ class QPainter;
 
 namespace lmms {
 class Sample;
+struct ManagedVocalPlaybackView;
 }
 
 namespace lmms::gui {
@@ -74,6 +75,7 @@ public:
 
 	SampleThumbnail() = default;
 	SampleThumbnail(const Sample& sample);
+	SampleThumbnail(std::shared_ptr<const ManagedVocalPlaybackView> managedView);
 	void visualize(VisualizeParameters parameters, QPainter& painter) const;
 
 private:
@@ -106,6 +108,7 @@ private:
 		Thumbnail() = default;
 		Thumbnail(std::vector<Peak> peaks, double samplesPerPeak);
 		Thumbnail(const float* buffer, size_t size, size_t width);
+		Thumbnail(const float* interleavedBuffer, size_t frames, size_t channels, size_t width);
 
 		Thumbnail zoomOut(float factor) const;
 
@@ -140,6 +143,11 @@ private:
 	using ThumbnailCache = std::vector<Thumbnail>;
 	std::shared_ptr<ThumbnailCache> m_thumbnailCache = std::make_shared<ThumbnailCache>();
 	std::shared_ptr<const SampleBuffer> m_buffer = SampleBuffer::emptyBuffer();
+	std::shared_ptr<const ManagedVocalPlaybackView> m_managedView;
+	const float* m_flatBuffer = nullptr;
+	size_t m_flatBufferSize = 0;
+	size_t m_frameCount = 0;
+	size_t m_channels = 1;
 	inline static std::unordered_map<SampleThumbnailEntry, std::shared_ptr<ThumbnailCache>, Hash> s_sampleThumbnailCacheMap;
 };
 

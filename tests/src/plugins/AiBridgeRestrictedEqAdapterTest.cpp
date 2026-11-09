@@ -74,19 +74,28 @@ private slots:
 			QVERIFY(Engine::getSong()->isStopped());
 			const auto exclusion=Engine::audioEngine()->requestChangesGuard();
 			gain->setValue(1.0f); // Actual native control-thread setter, unchanged signals/journal semantics.
-			QVERIFY(!alive);QVERIFY2(reused,"Native allocation reuse was not obtained; not evidence for this gate");
+			QVERIFY(!alive);
+			if(!reused){std::fputs("EQ_STORAGE_NOT_REUSED\n",stderr);std::fflush(stderr);}
+			QVERIFY2(reused,"Native allocation reuse was not obtained; not evidence for this gate");
 			std::free(recycled);return;
 		}
 		QTemporaryDir dir;QVERIFY(dir.isValid());
-		QProcess child;auto env=QProcessEnvironment::systemEnvironment();
-		env.insert("LMMS_RESTRICTED_EQ_DELETE_CHILD","1");child.setProcessEnvironment(env);
-		child.start(QCoreApplication::applicationFilePath(),{"observerDeletionDoesNotContinueOnFreedModel","-o",dir.filePath("child.log")+",txt"});
-		QVERIFY(child.waitForFinished(30000));
-		const auto diagnostic=child.readAllStandardError();
-		qInfo().noquote()<<"Native callback child exit"<<child.exitCode()<<"status"<<int(child.exitStatus())<<diagnostic;
-		QVERIFY2(diagnostic.contains("REUSED_EQ_STORAGE"),"The native storage reuse precondition was not observed");
-		QCOMPARE(child.exitStatus(),QProcess::NormalExit);
-		QCOMPARE(child.exitCode(),0);
+		for(int attempt=0;attempt<8;++attempt)
+		{
+			QProcess child;auto env=QProcessEnvironment::systemEnvironment();
+			env.insert("LMMS_RESTRICTED_EQ_DELETE_CHILD","1");child.setProcessEnvironment(env);
+			child.start(QCoreApplication::applicationFilePath(),{"observerDeletionDoesNotContinueOnFreedModel","-o",dir.filePath(QString("child-%1.log").arg(attempt))+",txt"});
+			QVERIFY(child.waitForFinished(30000));
+			const auto diagnostic=child.readAllStandardError();
+			qInfo().noquote()<<"Native callback child exit"<<child.exitCode()<<"status"<<int(child.exitStatus())<<diagnostic;
+			if(child.exitStatus()==QProcess::NormalExit && child.exitCode()==1
+				&& diagnostic.contains("EQ_STORAGE_NOT_REUSED")) continue;
+			QVERIFY2(diagnostic.contains("REUSED_EQ_STORAGE"),"The native storage reuse precondition was not observed");
+			QCOMPARE(child.exitStatus(),QProcess::NormalExit);
+			QCOMPARE(child.exitCode(),0);
+			return;
+		}
+		QFAIL("Native storage reuse was unavailable in all isolated attempts");
 	}
 };
 QTEST_MAIN(AiBridgeRestrictedEqAdapterTest)

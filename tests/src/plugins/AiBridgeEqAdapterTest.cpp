@@ -62,17 +62,17 @@ private slots:
 		type->setValue(0,true);QVERIFY(hp12->value() && !hp24->value() && !hp48->value());
 		disconnect(changeConnection);disconnect(unchangedConnection);controls->restoreState(legacy);
 		QCOMPARE(type->value(),0);QVERIFY(hp48->value());changed.clear();unchanged.clear();
-		connect(type,&IntModel::dataChanged,controls,synchronize,Qt::DirectConnection);
-		connect(type,&IntModel::dataUnchanged,controls,synchronize,Qt::DirectConnection);
 		AutomationTrack automation(Engine::getSong());AutomationClip clip(&automation);QVERIFY(clip.addObject(type,false));
-		clip.putValue(0,0,false,false);clip.changeLength(192);
+		clip.putValue(0,0,false,false);clip.putValue(1,1,false,false);clip.changeLength(192);
 		Engine::getSong()->playSong();Engine::getSong()->setPlayPos(0);
 		const auto stop=qScopeGuard([]{Engine::getSong()->stop();});
 		Engine::getSong()->processNextBuffer();
 		QCOMPARE(type->value(),0);QCOMPARE(changed.count(),0);QCOMPARE(unchanged.count(),0);
-		// Feature RED: advertised enum0/12dB must select the actual native stages.
+		// A same-value automation binding still selects the declared native stage.
 		QVERIFY2(hp12->value() && !hp24->value() && !hp48->value(),
-			"Automated enum0 emitted no signal; native DSP still selects the retained HP48 stage. EqControls-only signal sync cannot satisfy this gate.");
+			"Automated enum0 must select the 12 dB native stage without a direct observer on the audio path.");
+		Engine::getSong()->setPlayPos(1);Engine::getSong()->processNextBuffer();
+		QCOMPARE(type->value(),1);QTRY_VERIFY(!hp12->value() && hp24->value() && !hp48->value());
 	}
 	void nativeStageSetterPreservesObserverDispatchBoundary()
 	{

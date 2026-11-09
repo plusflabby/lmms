@@ -65,6 +65,8 @@ AiBridgeAudioClipResult AiBridgeAudioContext::clip(const QString& id) const
 	const auto reference=sample->sampleFile();
 	state.sourceReferenceHash=QCryptographicHash::hash(reference.toUtf8(),QCryptographicHash::Sha256);
 	state.sourceIdentity=sample->sourceFileIdentity();state.sourceDigest=sample->expectedSourceDigest();
+	state.managedVariantAssetId=sample->managedVocalVariantAssetId();
+	state.managedVariantStateDigest=sample->managedVocalVariantStateDigest();
 	if (!sample->usesBoundedSampleSource())
 	{
 		// Cached legacy/embedded content has no authorized OS file identity. Pin its

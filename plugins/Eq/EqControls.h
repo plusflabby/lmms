@@ -25,6 +25,7 @@
 #ifndef EQCONTROLS_H
 #define EQCONTROLS_H
 
+#include <atomic>
 #include "EffectControls.h"
 #include "EqSpectrumView.h"
 
@@ -82,6 +83,8 @@ public:
 	bool visable();
 
 private:
+	void synchronizeHighPassStages();
+	std::atomic_bool m_hpTypeModelDrivesStages{false};
 	EqEffect *m_effect;
 
 	FloatModel m_inGainModel;

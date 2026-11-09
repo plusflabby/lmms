@@ -29,6 +29,7 @@
 #include <QDebug>
 #include <QFile>
 #include <QFileInfo>
+#include <QDir>
 #include <QMessageBox>
 #include <QScopeGuard>
 #include <QThread>
@@ -37,6 +38,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <optional>
 
 #include "AutomationTrack.h"
 #include "AutomationEditor.h"
@@ -59,6 +61,9 @@
 #include "PianoRoll.h"
 #include "ProjectJournal.h"
 #include "ProjectNotes.h"
+#include "ProjectSavePublication.h"
+#include "src/core/vocal/ManagedVocalProjectOwnerStore.h"
+#include <QUuid>
 #include "Scale.h"
 #include "SongEditor.h"
 #include "PeakController.h"
@@ -67,7 +72,69 @@
 namespace lmms
 {
 namespace { thread_local bool automaticLoopJump=false; }
+#ifdef Q_OS_WIN
+namespace {
+bool projectSnapshotEvidence(const QString& fileId, const QByteArray& shaHex, QByteArray& identity, QByteArray& digest)
+{
+	if (fileId.size() != 26 || fileId[8] != ':' || fileId[17] != ':' || shaHex.size() != 64) return false;
+	for (int i = 0; i < fileId.size(); ++i)
+	{
+		if (i == 8 || i == 17) continue;
+		const auto c = fileId[i];
+		if (!((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f'))) return false;
+	}
+	bool volumeOk = false, highOk = false, lowOk = false;
+	const auto volume = fileId.mid(0, 8).toUInt(&volumeOk, 16);
+	const auto high = fileId.mid(9, 8).toUInt(&highOk, 16);
+	const auto low = fileId.mid(18, 8).toUInt(&lowOk, 16);
+	digest = QByteArray::fromHex(shaHex);
+	if (!volumeOk || !highOk || !lowOk || digest.size() != 32 || digest.toHex() != shaHex) return false;
+	const auto material = QByteArray::number(volume) + ':' + QByteArray::number(high) + ':' + QByteArray::number(low);
+	identity = QCryptographicHash::hash(material, QCryptographicHash::Sha256);
+	return true;
+}
+QString recoverManagedVocalSave(ManagedVocalProjectOwnerStore& store, const QString& target)
+{
+	using Recover = QString (ManagedVocalProjectOwnerStore::*)(const QString&) const;
+	const Recover operations[] = {&ManagedVocalProjectOwnerStore::recoverPublishedSnapshot,
+		&ManagedVocalProjectOwnerStore::recoverUnpublishedSnapshot,
+		&ManagedVocalProjectOwnerStore::recoverPublishedSaveAs,
+		&ManagedVocalProjectOwnerStore::recoverUnpublishedSaveAs};
+	bool incomplete = false;
+	for (const auto operation : operations)
+	{
+		const auto code = (store.*operation)(target);
+		if (code == QStringLiteral("ok")) return code;
+		if (code != QStringLiteral("asset_missing")) incomplete = true;
+	}
+	return incomplete ? QStringLiteral("asset_incomplete") : QStringLiteral("asset_missing");
+}
+}
+#endif
 bool Song::isAutomaticLoopJump() const { return automaticLoopJump; }
+bool Song::adoptManagedVocalOwner(const std::shared_ptr<ManagedVocalSaveAsSource>& source)
+{
+#ifdef Q_OS_WIN
+	if (!QCoreApplication::instance() || QThread::currentThread() != QCoreApplication::instance()->thread()
+		|| !source || !source->isAuthorized() || m_fileName.isEmpty()) return false;
+	const auto path = QDir::fromNativeSeparators(QFileInfo(m_fileName).absoluteFilePath());
+	QByteArray identity, digest;
+	if (source->projectPath() != path || !projectSnapshotEvidence(m_projectSourceFileId, m_projectSourceSha256, identity, digest)
+		|| source->projectOwner().fileIdentity.toLatin1() != identity.toHex()
+		|| source->projectOwner().documentSha256.toLatin1() != digest.toHex()) return false;
+	if (m_managedVocalOwner && (m_managedVocalOwner->projectId != source->projectOwner().projectId
+		|| m_managedVocalOwner->rootId != source->projectOwner().rootId
+		|| m_managedVocalOwner->fileIdentity != source->projectOwner().fileIdentity
+		|| m_managedVocalOwner->documentSha256 != source->projectOwner().documentSha256)) return false;
+	if (!m_managedVocalOwner) m_managedVocalOwner = std::make_shared<ManagedVocalProjectOwner>(source->projectOwner());
+	m_managedVocalHolds.erase(std::remove_if(m_managedVocalHolds.begin(), m_managedVocalHolds.end(),
+		[](const auto& hold) { return hold.expired(); }), m_managedVocalHolds.end());
+	m_managedVocalHolds.push_back(source);
+	return true;
+#else
+	Q_UNUSED(source); return false;
+#endif
+}
 void Song::warnAudioWindowCompatibility()
 {
 	if(m_audioWindowCompatibilityWarned || !QCoreApplication::instance()
@@ -886,6 +953,11 @@ void Song::clearProject()
 	// Session owners consume the old copied project identity while revoking their
 	// work. Retire it only after every direct invalidation observer has returned.
 	m_recordingProjectIdentity.resetForNewProject();
+	m_managedVocalOwner.reset();
+	m_pendingManagedSaveAsOwner.reset();
+	m_pendingManagedSaveAsPath.clear();
+	m_managedVocalHolds.clear();
+	m_projectHasRecordingMetadata = false;
 
 	Engine::projectJournal()->setJournalling( false );
 
@@ -1047,6 +1119,46 @@ void Song::loadProject( const QString & fileName )
 {
 	using gui::getGUI;
 
+#ifdef Q_OS_WIN
+	// Resolve a coordinated save before changing the current project. In the
+	// pathname gap the file cannot be opened until its original is restored.
+	const auto recoveryTarget = QDir::fromNativeSeparators(QFileInfo(fileName).absoluteFilePath());
+	bool abortedNewSave = false;
+	if (recoveryTarget.size() >= 3 && recoveryTarget[1] == ':' && recoveryTarget[2] == '/'
+		&& ProjectSavePublication::nativeJournalStatus(recoveryTarget) == QStringLiteral("pending"))
+	{
+		const auto recovered = ProjectSavePublication::resolveNativeJournal(recoveryTarget);
+		abortedNewSave = recovered == QStringLiteral("aborted");
+		if (recovered != QStringLiteral("restored") && recovered != QStringLiteral("committed") && !abortedNewSave)
+		{
+			const auto message = tr("The project has an incomplete save that requires recovery. The current project has not been changed.");
+			if (getGUI() != nullptr) QMessageBox::warning(nullptr, tr("Project recovery required"), message);
+			else qWarning().noquote() << message;
+			return;
+		}
+	}
+	// A managed-owner receipt can remain after the native publication has been
+	// recovered. Reconcile it before replacing the current in-memory project.
+	{
+		auto approval = ManagedVocalAssetRoot::authorizeConfiguredRoot(m_recordingProjectIdentity.managedRootLibraryForOwner());
+		if (approval.root)
+		{
+			ManagedVocalProjectOwnerStore store(approval.root);
+			const auto recovered = recoverManagedVocalSave(store, recoveryTarget);
+			if (recovered != QStringLiteral("ok") && recovered != QStringLiteral("asset_missing"))
+			{
+				const auto message = tr("The project has an incomplete managed vocal save that requires recovery. The current project has not been changed.");
+				if (getGUI() != nullptr) QMessageBox::warning(nullptr, tr("Project recovery required"), message);
+				else qWarning().noquote() << message;
+				return;
+			}
+		}
+	}
+	// An aborted new destination has no document to load. Its managed journal
+	// must be reconciled first, while the current in-memory project stays intact.
+	if (abortedNewSave) return;
+#endif
+
 	QDomNode node;
 	const bool journallingBeforeLoad = Engine::projectJournal()->isJournalling();
 
@@ -1110,6 +1222,28 @@ void Song::loadProject( const QString & fileName )
 
 	clearProject();
 	m_recordingProjectIdentity.acceptLoad(dataFile.head(),m_fileName);
+	m_projectHasRecordingMetadata = !dataFile.head().firstChildElement(QStringLiteral("recording_project")).isNull();
+	// Resolve an already registered independent owner before clips restore their
+	// managed associations. The pin retains the loaded snapshot through load.
+	std::shared_ptr<ManagedVocalSaveAsSource> loadedManagedHold;
+#ifdef Q_OS_WIN
+	{
+		auto approval = ManagedVocalAssetRoot::authorizeConfiguredRoot(m_recordingProjectIdentity.managedRootLibraryForOwner());
+		if (approval.root)
+		{
+			ManagedVocalProjectOwnerStore store(approval.root);
+			const auto owner = store.lookup(m_fileName);
+			QByteArray identity, digest;
+			if (owner.owner && projectSnapshotEvidence(dataFile.sourceFileId(), dataFile.sourceSha256(), identity, digest)
+				&& owner.owner->fileIdentity.toLatin1() == identity.toHex()
+				&& owner.owner->documentSha256.toLatin1() == digest.toHex())
+			{
+				const auto held = store.holdSaveAsSource(m_fileName, *owner.owner);
+				if (held.source) { loadedManagedHold = held.source; m_managedVocalOwner = std::make_shared<ManagedVocalProjectOwner>(*owner.owner); }
+			}
+		}
+	}
+#endif
 
 	clearErrors();
 
@@ -1323,20 +1457,160 @@ QByteArray Song::projectObjectStateHash(SerializingObject &object)
 bool Song::saveProjectFile(const QString & filename, bool withResources, ProjectSavePurpose purpose)
 {
 	warnAudioWindowCompatibility();
+	m_pendingManagedSaveAsOwner.reset();
+	m_pendingManagedSaveAsPath.clear();
+	m_managedVocalHolds.erase(std::remove_if(m_managedVocalHolds.begin(), m_managedVocalHolds.end(),
+		[](const auto& hold) { return hold.expired(); }), m_managedVocalHolds.end());
+	if (m_managedVocalOwner && !m_managedVocalHolds.empty()) { qWarning() << "Managed project is in use"; return false; }
+	DataFile dataFile(DataFile::Type::SongProject);
+#ifdef Q_OS_WIN
+	const auto coordinatedTarget = QDir::fromNativeSeparators(QFileInfo(dataFile.nameWithExtension(filename)).absoluteFilePath());
+	const auto sourcePath = m_fileName.isEmpty() ? QString{} : QDir::fromNativeSeparators(QFileInfo(m_fileName).absoluteFilePath());
+	const bool sameSource = !sourcePath.isEmpty() && sourcePath.compare(coordinatedTarget, Qt::CaseInsensitive) == 0;
+	const auto originalManagedOwner = m_managedVocalOwner;
+	if (originalManagedOwner && (withResources || sourcePath.isEmpty())) return false;
+	const bool coordinateRecordingSave = !withResources && !m_recordingProjectIdentity.cachedIdentity().id.isEmpty()
+		&& coordinatedTarget.size() >= 3 && coordinatedTarget[1] == ':' && coordinatedTarget[2] == '/';
+	const bool coordinateManagedSave = originalManagedOwner && !withResources
+		&& coordinatedTarget.size() >= 3 && coordinatedTarget[1] == ':' && coordinatedTarget[2] == '/';
+	if (originalManagedOwner && !coordinateManagedSave) return false;
+	std::shared_ptr<ManagedVocalAssetRoot> managedRoot;
+	std::unique_ptr<ManagedVocalProjectOwnerStore> managedStore;
+	std::shared_ptr<ManagedVocalSaveAsSource> managedSaveAsSource;
+	if (coordinateManagedSave)
+	{
+		auto approval = ManagedVocalAssetRoot::authorizeConfiguredRoot(m_recordingProjectIdentity.managedRootLibraryForOwner());
+		if (!approval.root || approval.root->rootId() != originalManagedOwner->rootId) { qWarning() << "Managed project root unavailable:" << approval.code; return false; }
+		managedRoot = std::move(approval.root);
+		managedStore = std::make_unique<ManagedVocalProjectOwnerStore>(managedRoot);
+	}
+	if (coordinateRecordingSave || coordinateManagedSave)
+	{
+		const auto status = ProjectSavePublication::nativeJournalStatus(coordinatedTarget);
+		if (status == QStringLiteral("pending"))
+		{
+			const auto recovered = ProjectSavePublication::resolveNativeJournal(coordinatedTarget);
+			if (recovered != QStringLiteral("restored") && recovered != QStringLiteral("committed")
+				&& recovered != QStringLiteral("aborted")) return false;
+		}
+		else if (status != QStringLiteral("none")) { qWarning() << "Native project journal unavailable:" << status; return false; }
+		if (managedStore)
+		{
+			const auto recovered = recoverManagedVocalSave(*managedStore, coordinatedTarget);
+			if (recovered != QStringLiteral("ok") && recovered != QStringLiteral("asset_missing"))
+				{ qWarning() << "Managed project recovery required:" << recovered; return false; }
+		}
+		if (coordinateManagedSave && !sameSource)
+		{
+			const auto held = managedStore->holdSaveAsSource(sourcePath, *originalManagedOwner);
+			if (!held.source) { qWarning() << "Managed Save As source authorization failed:" << held.code; return false; }
+			managedSaveAsSource = held.source;
+		}
+	}
+#endif
+	// Recovery can restore a temporarily absent target; determine whether this
+	// is the current project only after that reconciliation has completed.
 	const auto destinationPath = QFileInfo(filename).canonicalFilePath();
 	const auto currentPath = QFileInfo(m_fileName).canonicalFilePath();
 	const bool recoverySnapshotOfCurrentProject = purpose == ProjectSavePurpose::RecoverySnapshot
 		&& !destinationPath.isEmpty() && !currentPath.isEmpty()
 		&& destinationPath.compare(currentPath, Qt::CaseInsensitive) == 0;
 	const bool updateRecordingIdentity = purpose == ProjectSavePurpose::UserProject || recoverySnapshotOfCurrentProject;
-	DataFile dataFile(DataFile::Type::SongProject);
 	m_savingProject = true;
 	populateProjectDataFile(dataFile);
 	m_savingProject = false;
 
-	if (updateRecordingIdentity && !m_recordingProjectIdentity.beginSave(dataFile,filename,withResources)) { return false; }
+	if (updateRecordingIdentity && !m_recordingProjectIdentity.beginSave(dataFile,filename,withResources)) { qWarning() << "Recording identity save preparation failed"; return false; }
 	const auto recordingRevision=m_recordingProjectIdentity.revision();
 	QPointer<Song> saveOwner(this);
+#ifdef Q_OS_WIN
+	if (coordinateRecordingSave || coordinateManagedSave)
+	{
+		const auto fail = [&]() {
+			if (saveOwner && m_recordingProjectIdentity.revision() == recordingRevision && updateRecordingIdentity)
+				m_recordingProjectIdentity.finishSave(coordinatedTarget, false);
+			return false;
+		};
+		const auto uncertain = [&]() {
+			if (saveOwner && m_recordingProjectIdentity.revision() == recordingRevision && updateRecordingIdentity
+				&& !m_recordingProjectIdentity.cachedIdentity().id.isEmpty())
+				m_recordingProjectIdentity.suspendUncertainSave(coordinatedTarget);
+			return false;
+		};
+		ProjectSavePublication::Result publication;
+		if (sameSource)
+		{
+			QByteArray expectedIdentity, expectedDigest;
+			if (!projectSnapshotEvidence(m_projectSourceFileId, m_projectSourceSha256, expectedIdentity, expectedDigest)) return fail();
+			publication = ProjectSavePublication::acquire(coordinatedTarget, expectedIdentity, expectedDigest);
+		}
+		else
+		{
+			publication = ProjectSavePublication::acquireSelectedTarget(coordinatedTarget);
+			if (!publication.publication) publication = ProjectSavePublication::acquireNewTarget(coordinatedTarget);
+		}
+		if (!publication.publication) { qWarning() << "Project publication acquisition failed:" << publication.code; return fail(); }
+		QByteArray encoded;
+		if (!dataFile.serializeProjectForSave(coordinatedTarget, encoded)) { qWarning() << "Project serialization failed"; return fail(); }
+		const auto transactionId = QUuid::createUuid().toString(QUuid::WithoutBraces);
+		if (const auto code = publication.publication->createStage(transactionId, encoded); code != QStringLiteral("ok")) { qWarning() << "Project staging failed:" << code; return fail(); }
+		if (coordinateManagedSave)
+		{
+			const auto code = sameSource
+				? managedStore->prepareSaveJournal(*publication.publication, *originalManagedOwner).code
+				: managedStore->prepareSaveAsJournal(*managedSaveAsSource, *publication.publication).code;
+			if (code != QStringLiteral("ok")) { qWarning() << "Managed project journal preparation failed:" << code; return fail(); }
+		}
+		if (const auto code = publication.publication->prepareNativeJournal(); code != QStringLiteral("ok")) { qWarning() << "Native project journal preparation failed:" << code; return fail(); }
+		if (const auto code = publication.publication->publishNativePending(); code != QStringLiteral("ok"))
+			{ qWarning() << "Native project publication failed:" << code; return uncertain(); }
+		if (!saveOwner || m_recordingProjectIdentity.revision() != recordingRevision) return false;
+		std::optional<ManagedVocalProjectOwner> rebound;
+		if (coordinateManagedSave)
+		{
+			const auto bound = sameSource
+				? managedStore->bindPublishedSnapshot(*publication.publication, *originalManagedOwner)
+				: managedStore->bindPublishedSaveAs(*managedSaveAsSource, *publication.publication);
+			if (!bound.owner) { qWarning() << "Managed project owner publication failed:" << bound.code; return uncertain(); }
+			rebound = *bound.owner;
+			const auto finished = sameSource
+				? managedStore->finishPublishedSnapshot(*publication.publication, *originalManagedOwner)
+				: managedStore->finishPublishedSaveAs(*managedSaveAsSource, *publication.publication);
+			if (finished != QStringLiteral("ok")) { qWarning() << "Managed project journal finalization failed:" << finished; return uncertain(); }
+		}
+		// The recording protocol has already recorded its pending nonce and
+		// digest. If interrupted after native finalization, loading the new
+		// document can reconcile that pending record against its actual bytes.
+		if (publication.publication->finalizeNativePublication() != QStringLiteral("ok"))
+			return uncertain();
+		if (!updateRecordingIdentity)
+		{
+			if (rebound && sameSource) m_managedVocalOwner = std::make_shared<ManagedVocalProjectOwner>(*rebound);
+			return true;
+		}
+		ProjectSavePublication::Evidence published;
+		if (!publication.publication->publishedEvidence(published))
+			return uncertain();
+		const bool recorded = m_recordingProjectIdentity.finishSave(coordinatedTarget, true, *publication.publication);
+		if (recorded && !sourcePath.isEmpty() && sourcePath.compare(coordinatedTarget, Qt::CaseInsensitive) == 0)
+		{
+			m_projectSourceFileId = published.stageNativeFileId;
+			m_projectSourceSha256 = published.stageSha256.toHex();
+			if (rebound) m_managedVocalOwner = std::make_shared<ManagedVocalProjectOwner>(*rebound);
+		}
+		else if (recorded && rebound && purpose == ProjectSavePurpose::UserProject)
+		{
+			m_pendingManagedSaveAsOwner = std::make_shared<ManagedVocalProjectOwner>(*rebound);
+			m_pendingManagedSaveAsPath = coordinatedTarget;
+		}
+		if (recorded && m_guiSaveInProgress && purpose == ProjectSavePurpose::UserProject)
+		{
+			m_guiSavedHasRecordingMetadata = !dataFile.head().firstChildElement(QStringLiteral("recording_project")).isNull();
+			m_guiSavePublication = std::shared_ptr<ProjectSavePublication>(std::move(publication.publication));
+		}
+		return recorded;
+	}
+#endif
 	const bool nativeSaved=dataFile.writeFile(filename,withResources);
 	if (!saveOwner || m_recordingProjectIdentity.revision()!=recordingRevision) { return false; }
 	if (!updateRecordingIdentity) return nativeSaved;
@@ -1357,12 +1631,29 @@ bool Song::guiSaveProject()
 // Save the current song with the given filename
 bool Song::guiSaveProjectAs(const QString & filename)
 {
+	if (m_guiSaveInProgress) return false;
+	m_guiSaveInProgress = true;
+	QPointer<Song> guiSaveOwner(this);
+	const auto finishGuiSave = qScopeGuard([guiSaveOwner] {
+		if (guiSaveOwner) { guiSaveOwner->m_guiSavePublication.reset(); guiSaveOwner->m_guiSaveInProgress = false; }
+	});
 	DataFile dataFile(DataFile::Type::SongProject);
 	QString fileNameWithExtension = dataFile.nameWithExtension(filename);
 
 	bool withResources = m_saveOptions.saveAsProjectBundle.value();
 
 	bool const saveResult = saveProjectFile(fileNameWithExtension, withResources, ProjectSavePurpose::UserProject);
+	if (!guiSaveOwner) return false;
+	const auto retainedPublication = m_guiSavePublication;
+	const auto pendingOwner = m_pendingManagedSaveAsOwner;
+	const auto pendingPath = m_pendingManagedSaveAsPath;
+	const bool savedHasRecordingMetadata = m_guiSavedHasRecordingMetadata;
+	const auto previousPath = m_fileName;
+	const auto previousOwner = m_managedVocalOwner;
+	const auto previousIdentity = m_recordingProjectIdentity.cachedIdentity().id;
+	const auto previousRevision = m_recordingProjectIdentity.revision();
+	const auto previousFileId = m_projectSourceFileId;
+	const auto previousSha = m_projectSourceSha256;
 
 	// After saving, restore default save options.
 	m_saveOptions.setDefaultOptions();
@@ -1372,10 +1663,49 @@ bool Song::guiSaveProjectAs(const QString & filename)
 	if (saveResult && !withResources)
 	{
 		setModified(false);
+		if (!guiSaveOwner) return false;
+		if (retainedPublication && (m_fileName != previousPath || m_managedVocalOwner != previousOwner
+			|| m_recordingProjectIdentity.cachedIdentity().id != previousIdentity
+			|| m_recordingProjectIdentity.revision() != previousRevision
+			|| m_projectSourceFileId != previousFileId || m_projectSourceSha256 != previousSha)) return false;
+#ifdef Q_OS_WIN
+		if (retainedPublication)
+		{
+			ProjectSavePublication::Evidence evidence;
+			if (!retainedPublication->publishedEvidence(evidence)) return false;
+			m_projectSourceFileId = evidence.stageNativeFileId;
+			m_projectSourceSha256 = evidence.stageSha256.toHex();
+			m_projectHasRecordingMetadata = savedHasRecordingMetadata;
+			if (pendingOwner && pendingPath == QDir::fromNativeSeparators(QFileInfo(fileNameWithExtension).absoluteFilePath()))
+				m_managedVocalOwner = pendingOwner;
+		}
+#endif
+		const auto expectedOwner = m_managedVocalOwner;
 		setProjectFileName(fileNameWithExtension);
-		DataFile savedIdentity(fileNameWithExtension);
-		m_projectSourceSha256 = savedIdentity.sourceSha256();
-		m_projectSourceFileId = savedIdentity.sourceFileId();
+		if (!guiSaveOwner) return false;
+		if (retainedPublication && (m_fileName != fileNameWithExtension || m_managedVocalOwner != expectedOwner
+			|| m_recordingProjectIdentity.cachedIdentity().id != previousIdentity
+			|| m_recordingProjectIdentity.revision() != previousRevision)) return false;
+#ifdef Q_OS_WIN
+		if (retainedPublication)
+		{
+			ProjectSavePublication::Evidence evidence;
+			if (!retainedPublication->publishedEvidence(evidence)
+				|| m_projectSourceFileId != evidence.stageNativeFileId
+				|| m_projectSourceSha256 != evidence.stageSha256.toHex()) return false;
+		}
+		else
+#endif
+		{
+			DataFile savedIdentity(fileNameWithExtension);
+			m_projectSourceSha256 = savedIdentity.sourceSha256();
+			m_projectSourceFileId = savedIdentity.sourceFileId();
+			m_projectHasRecordingMetadata = !savedIdentity.head().firstChildElement(QStringLiteral("recording_project")).isNull();
+		}
+#ifdef Q_OS_WIN
+		m_pendingManagedSaveAsOwner.reset();
+		m_pendingManagedSaveAsPath.clear();
+#endif
 	}
 
 	return saveResult;
@@ -1521,6 +1851,7 @@ void Song::setProjectFileName(QString const & projectFileName)
 		{
 			m_projectSourceSha256.clear();
 			m_projectSourceFileId.clear();
+			m_projectHasRecordingMetadata = false;
 		}
 		emit projectFileNameChanged();
 	}

@@ -1,8 +1,40 @@
 include(CTest)
 find_package(Qt${QT_VERSION_MAJOR} COMPONENTS Network REQUIRED)
 
+if(LMMS_BUILD_WIN32 AND LMMS_REQUIRE_QUALIFIED_VOCAL_RUNTIME)
+	find_package(Python3 COMPONENTS Interpreter QUIET)
+	if(Python3_Interpreter_FOUND)
+		add_test(NAME QualifiedSamplerateSelectionTest
+			COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/scripts/qualified_samplerate_selection_test.py")
+		set_tests_properties(QualifiedSamplerateSelectionTest PROPERTIES
+			ENVIRONMENT "LMMS_QUALIFIED_SAMPLERATE_TEST_PREFIX=${LMMS_QUALIFIED_SAMPLERATE_PREFIX}")
+		add_test(NAME QualifiedSamplerateRuntimeTest
+			COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/scripts/qualified_samplerate_runtime_test.py")
+		set_tests_properties(QualifiedSamplerateRuntimeTest PROPERTIES
+			ENVIRONMENT "LMMS_QUALIFIED_SAMPLERATE_TEST_STAGE=$<TARGET_FILE_DIR:lmms>")
+		add_test(NAME QualifiedSamplerateBuilderTest
+			COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/scripts/qualified_samplerate_builder_test.py")
+		add_test(NAME UnqualifiedVocalRuntimeTest
+			COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/scripts/unqualified_vocal_runtime_test.py")
+		set_tests_properties(UnqualifiedVocalRuntimeTest PROPERTIES
+			ENVIRONMENT "LMMS_UNQUALIFIED_TEST_BIN_DIR=$<TARGET_FILE_DIR:AiBridgeVocalAssetActionsTest>")
+	else()
+		message(WARNING "Python 3 was not found; qualified libsamplerate regression tests are unavailable")
+	endif()
+endif()
+
 set(CMAKE_INCLUDE_CURRENT_DIR ON)
 set(CMAKE_AUTOMOC ON)
+
+if(MSVC AND NOT LMMS_REQUIRE_QUALIFIED_VOCAL_RUNTIME)
+	find_package(Python3 3.9 COMPONENTS Interpreter QUIET)
+	if(NOT Python3_Interpreter_FOUND)
+		message(WARNING "Python 3 is needed to run the unqualified vocal regression tests")
+		set(Python3_EXECUTABLE python)
+	endif()
+	add_test(NAME UnqualifiedVocalCiPolicyTest
+		COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/scripts/unqualified_vocal_ci_policy_test.py")
+endif()
 
 set(LMMS_TESTS
 	src/core/MidiExportPlannerTest.cpp
@@ -20,6 +52,7 @@ set(LMMS_TESTS
 	src/core/RecordingAttachmentTest.cpp
 	src/core/RecordingRecoveryTest.cpp
 	src/core/RecordingProjectIdentityTest.cpp
+	src/core/ProjectSavePublicationTest.cpp
 	src/core/RecordingRingTest.cpp
 	src/core/RecordingPcm16Test.cpp
 	src/core/RecordingInputRuntimeTest.cpp
@@ -44,7 +77,19 @@ set(LMMS_TESTS
 	src/plugins/AiBridgeVocalAnalysisTest.cpp
 	src/plugins/AiBridgeVocalSourceTest.cpp
 	src/core/PcmWaveStreamingTest.cpp
+	src/core/ManagedVocalWaveReaderTest.cpp
+	src/core/ManagedVocalAssetTypesTest.cpp
+	src/core/ManagedVocalAssetStoreTest.cpp
+	src/core/ManagedVocalPlaybackTest.cpp
+	src/core/ManagedVocalPlaybackCacheTest.cpp
+	src/core/SampleClipManagedVocalVariantTest.cpp
 	src/plugins/AiBridgeVocalTypesTest.cpp
+	src/plugins/AiBridgeVocalEditTypesTest.cpp
+	src/plugins/AiBridgeVocalEditPlannerTest.cpp
+	src/plugins/AiBridgeVocalEditWireTest.cpp
+	src/plugins/AiBridgeVocalGainFadeTest.cpp
+	src/plugins/AiBridgeVocalSignalsmithBackendTest.cpp
+	src/plugins/AiBridgeVocalAssetActionsTest.cpp
 	src/core/AudioSourceWindowPersistenceTest.cpp
 	src/core/AudioSourceWindowV2PersistenceTest.cpp
 	src/core/AudioWindowPlaybackTest.cpp
@@ -141,12 +186,36 @@ if(WIN32 AND LMMS_HAVE_PORTAUDIO)
 	list(APPEND LMMS_TESTS src/core/RecordingPortAudioDiagnosticTest.cpp)
 endif()
 
+if(LMMS_BUILD_WIN32 AND LMMS_REQUIRE_QUALIFIED_VOCAL_RUNTIME)
+	get_property(_samplerate_stager GLOBAL PROPERTY LMMS_SAMPLERATE_STAGER)
+	add_custom_target(lmms_prepare_qualified_test_runtime
+		COMMAND powershell.exe -NoProfile -NonInteractive -File "${_samplerate_stager}"
+			-Source "${LMMS_QUALIFIED_SAMPLERATE_PREFIX}/bin/libsamplerate-0.dll"
+			-Destination "${CMAKE_CURRENT_BINARY_DIR}/libsamplerate-0.dll"
+		VERBATIM)
+	add_dependencies(lmms_prepare_qualified_test_runtime lmms_verify_qualified_samplerate)
+endif()
+
 foreach(LMMS_TEST_SRC IN LISTS LMMS_TESTS)
 	# TODO CMake 3.20: Use cmake_path
 	get_filename_component(LMMS_TEST_NAME ${LMMS_TEST_SRC} NAME_WE)
 
 	add_executable(${LMMS_TEST_NAME} ${LMMS_TEST_SRC})
-	add_test(NAME ${LMMS_TEST_NAME} COMMAND ${LMMS_TEST_NAME})
+	if(LMMS_BUILD_WIN32 AND LMMS_REQUIRE_QUALIFIED_VOCAL_RUNTIME)
+		lmms_require_qualified_samplerate(${LMMS_TEST_NAME})
+		add_dependencies(${LMMS_TEST_NAME} lmms_prepare_qualified_test_runtime)
+	endif()
+	if(MSVC AND NOT LMMS_REQUIRE_QUALIFIED_VOCAL_RUNTIME AND
+		(LMMS_TEST_NAME STREQUAL "AiBridgeVocalAssetActionsTest" OR LMMS_TEST_NAME STREQUAL "SampleClipManagedVocalVariantTest"
+			OR LMMS_TEST_NAME STREQUAL "AiBridgeVocalJobSafetyTest"))
+		add_test(NAME ${LMMS_TEST_NAME} COMMAND "${Python3_EXECUTABLE}"
+			"${CMAKE_CURRENT_SOURCE_DIR}/scripts/unqualified_vocal_ci.py" --executable "$<TARGET_FILE:${LMMS_TEST_NAME}>")
+	else()
+		add_test(NAME ${LMMS_TEST_NAME} COMMAND ${LMMS_TEST_NAME})
+	endif()
+	if(LMMS_BUILD_WIN32 AND LMMS_REQUIRE_QUALIFIED_VOCAL_RUNTIME)
+		lmms_guard_qualified_test_runtime(${LMMS_TEST_NAME})
+	endif()
 	if(LMMS_TEST_NAME STREQUAL "AiBridgeIpcServerTest")
 		# This integration test loads the real instrument modules from build/plugins.
 		set_target_properties(${LMMS_TEST_NAME} PROPERTIES ENABLE_EXPORTS ON)
@@ -162,6 +231,59 @@ foreach(LMMS_TEST_SRC IN LISTS LMMS_TESTS)
 
 	# TODO CMake 3.12: Propagate usage requirements by linking to lmmsobjs
 	target_include_directories(${LMMS_TEST_NAME} PRIVATE $<TARGET_PROPERTY:lmmsobjs,INCLUDE_DIRECTORIES>)
+	if(LMMS_TEST_NAME STREQUAL "AiBridgeVocalEditTypesTest" OR LMMS_TEST_NAME STREQUAL "AiBridgeVocalEditWireTest" OR LMMS_TEST_NAME STREQUAL "AiBridgeVocalGainFadeTest")
+		target_include_directories(${LMMS_TEST_NAME} PRIVATE ${CMAKE_SOURCE_DIR}/plugins/AiBridge)
+	endif()
+	if(LMMS_TEST_NAME STREQUAL "AiBridgeVocalEditTypesTest" OR LMMS_TEST_NAME STREQUAL "AiBridgeVocalGainFadeTest")
+		target_sources(${LMMS_TEST_NAME} PRIVATE ${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeVocalEditTypes.cpp)
+	endif()
+	if(LMMS_TEST_NAME STREQUAL "AiBridgeVocalSignalsmithBackendTest")
+		target_include_directories(${LMMS_TEST_NAME} PRIVATE
+			${CMAKE_SOURCE_DIR}/plugins/AiBridge
+			${CMAKE_SOURCE_DIR}/src/3rdparty/signalsmith/stretch
+			${CMAKE_SOURCE_DIR}/src/3rdparty/signalsmith/linear/include)
+		target_sources(${LMMS_TEST_NAME} PRIVATE
+			${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeVocalDspBackend.cpp
+			${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeVocalComp.cpp)
+	endif()
+	if(LMMS_TEST_NAME STREQUAL "AiBridgeVocalGainFadeTest")
+		target_sources(${LMMS_TEST_NAME} PRIVATE ${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeVocalGainFade.cpp)
+	endif()
+	if(LMMS_TEST_NAME STREQUAL "AiBridgeVocalAssetActionsTest")
+		target_include_directories(${LMMS_TEST_NAME} PRIVATE
+			${CMAKE_SOURCE_DIR}/plugins/AiBridge ${CMAKE_SOURCE_DIR}/src/core/vocal
+			${CMAKE_SOURCE_DIR}/src/3rdparty/signalsmith/stretch
+			${CMAKE_SOURCE_DIR}/src/3rdparty/signalsmith/linear/include)
+		target_sources(${LMMS_TEST_NAME} PRIVATE
+			${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeVocalAssetActions.cpp
+			${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeVocalVariantAttachment.cpp
+			${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeVocalTrackActions.cpp
+			${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeMixerRegistry.cpp
+			${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeVocalDspBackend.cpp
+			${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeVocalJobs.cpp
+			${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeVocalJobs.h
+			${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeVocalAnalysis.cpp
+			${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeVocalGainFade.cpp
+			${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeVocalComp.cpp
+			${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeVocalEditTypes.cpp
+			${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeVocalEditPlanner.cpp
+			${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeVocalTypes.cpp
+			${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeVocalContext.cpp
+			${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeVocalSource.cpp
+			${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeAudioTypes.cpp
+			${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeAudioContext.cpp
+			${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeProjectContext.cpp
+			${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeMutationTypes.cpp)
+	endif()
+	if(LMMS_TEST_NAME STREQUAL "ManagedVocalWaveReaderTest" OR LMMS_TEST_NAME STREQUAL "ManagedVocalAssetTypesTest" OR LMMS_TEST_NAME STREQUAL "ManagedVocalAssetStoreTest" OR LMMS_TEST_NAME STREQUAL "ManagedVocalPlaybackTest" OR LMMS_TEST_NAME STREQUAL "ManagedVocalPlaybackCacheTest" OR LMMS_TEST_NAME STREQUAL "SampleClipManagedVocalVariantTest")
+		target_include_directories(${LMMS_TEST_NAME} PRIVATE ${CMAKE_SOURCE_DIR}/src/core/vocal)
+	endif()
+	if(LMMS_TEST_NAME STREQUAL "AiBridgeVocalEditPlannerTest")
+		target_include_directories(${LMMS_TEST_NAME} PRIVATE ${CMAKE_SOURCE_DIR}/plugins/AiBridge)
+		target_sources(${LMMS_TEST_NAME} PRIVATE
+			${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeVocalEditTypes.cpp
+			${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeVocalEditPlanner.cpp)
+	endif()
 	if(LMMS_TEST_NAME STREQUAL "AiBridgeEqAdapterTest" OR LMMS_TEST_NAME STREQUAL "AiBridgeRestrictedEqAdapterTest")
 		target_include_directories(${LMMS_TEST_NAME} PRIVATE ${CMAKE_SOURCE_DIR}/plugins/Eq ${CMAKE_BINARY_DIR}/plugins/Eq)
 		target_compile_definitions(${LMMS_TEST_NAME} PRIVATE PLUGIN_NAME=eq PLUGIN_STATIC_DEFINE)
@@ -208,14 +330,28 @@ foreach(LMMS_TEST_SRC IN LISTS LMMS_TESTS)
 			${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeProjectContext.cpp
 			${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeMutationTypes.cpp)
 		if(LMMS_TEST_NAME STREQUAL "AiBridgeVocalJobsTest" OR LMMS_TEST_NAME STREQUAL "AiBridgeVocalJobSafetyTest" OR LMMS_TEST_NAME STREQUAL "AiBridgeVocalJobViewTest")
+			target_include_directories(${LMMS_TEST_NAME} PRIVATE
+				${CMAKE_SOURCE_DIR}/src/3rdparty/signalsmith/stretch
+				${CMAKE_SOURCE_DIR}/src/3rdparty/signalsmith/linear/include)
 			target_sources(${LMMS_TEST_NAME} PRIVATE ${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeVocalJobs.cpp
-				${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeVocalJobs.h ${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeVocalAnalysis.cpp)
+				${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeVocalJobs.h ${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeVocalAnalysis.cpp
+				${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeVocalAssetActions.cpp
+				${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeVocalVariantAttachment.cpp
+				${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeVocalDspBackend.cpp
+				${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeVocalGainFade.cpp
+				${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeVocalComp.cpp
+				${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeVocalEditTypes.cpp
+				${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeVocalEditPlanner.cpp)
 		endif()
 		if(LMMS_TEST_NAME STREQUAL "AiBridgeVocalJobSafetyTest" OR LMMS_TEST_NAME STREQUAL "AiBridgeVocalJobViewTest")
 			target_sources(${LMMS_TEST_NAME} PRIVATE ${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeVocalWire.cpp
 				${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeProtocol.cpp
 				${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeRecordingTypes.cpp
 				${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeVocalTrackActions.cpp
+				${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeMixerRegistry.cpp)
+		endif()
+		if(LMMS_TEST_NAME STREQUAL "AiBridgeVocalJobsTest")
+			target_sources(${LMMS_TEST_NAME} PRIVATE ${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeVocalTrackActions.cpp
 				${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeMixerRegistry.cpp)
 		endif()
 		if(LMMS_TEST_NAME STREQUAL "AiBridgeVocalJobViewTest")
@@ -726,6 +862,19 @@ foreach(LMMS_TEST_SRC IN LISTS LMMS_TESTS)
 			${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeAudioPlanner.cpp
 			${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeAudioContext.cpp
 			${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeAudioTypes.cpp)
+	endif()
+	if(LMMS_TEST_NAME STREQUAL "AiBridgeIpcServerTest" OR LMMS_TEST_NAME STREQUAL "AiBridgeAudioRangeProtocolTest" OR LMMS_TEST_NAME STREQUAL "AiBridgeViewTest")
+		target_include_directories(${LMMS_TEST_NAME} PRIVATE
+			${CMAKE_SOURCE_DIR}/src/3rdparty/signalsmith/stretch
+			${CMAKE_SOURCE_DIR}/src/3rdparty/signalsmith/linear/include)
+		target_sources(${LMMS_TEST_NAME} PRIVATE
+			${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeVocalAssetActions.cpp
+			${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeVocalVariantAttachment.cpp
+			${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeVocalDspBackend.cpp
+			${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeVocalGainFade.cpp
+			${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeVocalComp.cpp
+			${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeVocalEditTypes.cpp
+			${CMAKE_SOURCE_DIR}/plugins/AiBridge/AiBridgeVocalEditPlanner.cpp)
 	endif()
 	if(LMMS_TEST_NAME STREQUAL "AiBridgeIpcServerTest" OR LMMS_TEST_NAME STREQUAL "AiBridgeAudioRangeProtocolTest")
 			target_sources(${LMMS_TEST_NAME} PRIVATE

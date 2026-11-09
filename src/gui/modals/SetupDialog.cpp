@@ -38,6 +38,7 @@
 #include "Engine.h"
 #include "FileDialog.h"
 #include "MainWindow.h"
+#include "src/core/vocal/ManagedVocalAssetRoot.h"
 #include "MidiSetupWidget.h"
 #include "ProjectJournal.h"
 #include "RecordingSessionManager.h"
@@ -161,6 +162,8 @@ SetupDialog::SetupDialog(ConfigTab tab_to_open) :
 	m_sf2File(QDir::toNativeSeparators(ConfigManager::inst()->sf2File())),
 #endif
 	m_themeDir(QDir::toNativeSeparators(ConfigManager::inst()->themeDir())),
+	m_managedVocalAssetRoot(QDir::toNativeSeparators(ConfigManager::inst()->value(
+		QStringLiteral("vocal_assets"), QStringLiteral("managed_root")))),
 	m_backgroundPicFile(QDir::toNativeSeparators(ConfigManager::inst()->backgroundPicFile()))
 {
 	setWindowIcon(embed::getIconPixmap("setup_general"));
@@ -872,6 +875,10 @@ SetupDialog::SetupDialog(ConfigTab tab_to_open) :
 		SLOT(setThemeDir(const QString&)),
 		SLOT(openThemeDir()),
 		m_themeDirLineEdit);
+	addPathEntry(tr("Managed vocal assets directory"), m_managedVocalAssetRoot,
+		SLOT(setManagedVocalAssetRoot(const QString&)),
+		SLOT(openManagedVocalAssetRoot()),
+		m_managedVocalAssetRootLineEdit, "add_folder");
 	addPathEntry(tr("Background artwork"), m_backgroundPicFile,
 		SLOT(setBackgroundPicFile(const QString&)),
 		SLOT(openBackgroundPicFile()),
@@ -985,6 +992,20 @@ void SetupDialog::accept()
 			return;
 		}
 	}
+	const auto configuredVocalRoot = QDir::cleanPath(QDir::fromNativeSeparators(
+		ConfigManager::inst()->value(QStringLiteral("vocal_assets"), QStringLiteral("managed_root"))));
+	const auto selectedVocalRoot = QDir::cleanPath(
+		QDir::fromNativeSeparators(m_managedVocalAssetRoot.trimmed()));
+	if (!selectedVocalRoot.isEmpty() && selectedVocalRoot != configuredVocalRoot)
+	{
+		auto authorization = ManagedVocalAssetRoot::authorizeLocalRoot(selectedVocalRoot);
+		if (!authorization.root)
+		{
+			QMessageBox::warning(this, tr("Managed vocal assets unavailable"),
+				tr("Choose an available local directory that is separate from an active recording library."));
+			return;
+		}
+	}
 	/* Hide dialog before setting values. This prevents an obscure bug
 	where non-embedded VST windows would steal focus and prevent LMMS
 	from taking mouse input, rendering the application unusable. */
@@ -1062,6 +1083,8 @@ void SetupDialog::accept()
 #endif
 	ConfigManager::inst()->setGIGDir(QDir::fromNativeSeparators(m_gigDir));
 	ConfigManager::inst()->setThemeDir(QDir::fromNativeSeparators(m_themeDir));
+	ConfigManager::inst()->setValue(QStringLiteral("vocal_assets"), QStringLiteral("managed_root"),
+		selectedVocalRoot);
 	ConfigManager::inst()->setBackgroundPicFile(m_backgroundPicFile);
 
 	// Tell all audio-settings-widgets to save their settings.
@@ -1475,6 +1498,21 @@ void SetupDialog::openThemeDir()
 void SetupDialog::setThemeDir(const QString & themeDir)
 {
 	m_themeDir = themeDir;
+}
+
+void SetupDialog::openManagedVocalAssetRoot()
+{
+	const auto selected = FileDialog::getExistingDirectory(this,
+		tr("Choose a local managed vocal assets directory"), m_managedVocalAssetRoot);
+	if (!selected.isEmpty())
+	{
+		m_managedVocalAssetRootLineEdit->setText(selected);
+	}
+}
+
+void SetupDialog::setManagedVocalAssetRoot(const QString& path)
+{
+	m_managedVocalAssetRoot = path;
 }
 
 

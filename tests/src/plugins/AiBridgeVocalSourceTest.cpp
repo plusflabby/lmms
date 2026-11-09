@@ -5,8 +5,10 @@
 #include <QJsonDocument>
 #include <QProcess>
 #include <QtEndian>
+#include <algorithm>
 #include <future>
 #include <cstring>
+#include <vector>
 #include "AiBridgeVocalContext.h"
 #include "AiBridgeVocalSource.h"
 #include "AiBridgeVocalTrackActions.h"
@@ -16,6 +18,7 @@
 #include "ConfigManager.h"
 #include "Engine.h"
 #include "SampleClip.h"
+#include "SampleBuffer.h"
 #include "SampleTrack.h"
 #include "Song.h"
 #ifdef Q_OS_WIN
@@ -98,6 +101,65 @@ private slots:
 		const auto moved=dir->filePath("retained-original.wav");QVERIFY(QFile::rename(path,moved));
 		{QFile file(path);QVERIFY(file.open(QIODevice::WriteOnly|QIODevice::NewOnly));QCOMPARE(file.write(bytes),qint64(bytes.size()));}
 		QCOMPARE(scan(original).code,QString("audio_source_changed"));
+	}
+	void scansAuthorizedRecordedTakeBufferWithoutFilesystemRoots()
+	{
+		std::vector<SampleFrame> source(9000);
+		for (size_t i = 0; i < source.size(); ++i)
+		{
+			const auto value = float(i % 101) / 101.0f;
+			source[i] = SampleFrame(value, -value);
+		}
+		auto immutable = std::make_shared<const SampleBuffer>(source, 48000);
+		VocalSourceTicket ticket;
+		ticket.clipId = QStringLiteral("recorded-clip");
+		ticket.reference = QStringLiteral("recorded_take:11111111-1111-4111-8111-111111111111/22222222-2222-4222-8222-222222222222");
+		ticket.expectedIdentity = QByteArray(16, 'i');
+		ticket.expectedInfo = {quint64(source.size()), quint64(source.size()) * 2 + 44,
+			quint64(source.size()) * 8 + 4172, 1, 48000, QByteArray(32, 'a')};
+		ticket.recordedTakeProjectId = QStringLiteral("11111111-1111-4111-8111-111111111111");
+		ticket.recordedTakeId = QStringLiteral("22222222-2222-4222-8222-222222222222");
+		ticket.authorizedSourceBuffer = immutable;
+		ticket.authorizedSourceBufferRevision = immutable->contentRevision();
+		QCOMPARE(ticket.roots.size(), 0);
+
+		std::vector<SampleFrame> decoded;
+		std::atomic_bool cancelled{false};
+		quint64 nextFrame = 0;
+		size_t chunkCount = 0;
+		size_t maximumChunkFrames = 0;
+		bool contiguous = true;
+		const auto scanned = std::async(std::launch::async, [&] {
+			return scanVocalSource(ticket, [&decoded,&nextFrame,&contiguous,&chunkCount,&maximumChunkFrames](quint64 first, std::span<const SampleFrame> frames) {
+				contiguous = contiguous && first == nextFrame;
+				++chunkCount;
+				maximumChunkFrames = std::max(maximumChunkFrames, frames.size());
+				decoded.insert(decoded.end(), frames.begin(), frames.end());
+				nextFrame += quint64(frames.size());
+				return PcmWaveVisitDecision::Continue;
+			}, cancelled);
+		}).get();
+		QCOMPARE(scanned.code, QStringLiteral("ok"));
+		QVERIFY(contiguous);
+		QCOMPARE(scanned.info.frames, quint64(source.size()));
+		QCOMPARE(scanned.info.sourceSha256, ticket.expectedInfo.sourceSha256);
+		QCOMPARE(decoded.size(), source.size());
+		QCOMPARE(chunkCount, size_t(3));
+		QVERIFY(maximumChunkFrames <= size_t(4096));
+		bool allSamplesMatch = true;
+		for (size_t i = 0; i < source.size(); ++i)
+			allSamplesMatch = allSamplesMatch && decoded[i].left() == source[i].left()
+				&& decoded[i].right() == source[i].right();
+		QVERIFY(allSamplesMatch);
+		const auto cancelledScan = std::async(std::launch::async, [&] {
+			return scanVocalSource(ticket, [](quint64, std::span<const SampleFrame>) {
+				return PcmWaveVisitDecision::Cancelled;
+			}, cancelled);
+		}).get();
+		QCOMPARE(cancelledScan.code, QStringLiteral("cancelled"));
+
+		ticket.authorizedSourceBufferRevision++;
+		QCOMPARE(scan(ticket).code, QStringLiteral("audio_source_changed"));
 	}
 	void workerRejectsJunctionAndMalformedOrTruncatedFile()
 	{

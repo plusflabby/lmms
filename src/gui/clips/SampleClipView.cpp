@@ -56,6 +56,7 @@ SampleClipView::SampleClipView( SampleClip * _clip, TrackView * _tv ) :
 	// track future changes of SampleClip
 	connect(m_clip, SIGNAL(sampleChanged()), this, SLOT(updateSample()));
 	connect(m_clip,&SampleClip::audioWindowStatusChanged,this,[this]{updateSample();});
+	connect(m_clip,&SampleClip::managedVocalVariantStatusChanged,this,[this]{updateSample();});
 
 	connect(m_clip, SIGNAL(wasReversed()), this, SLOT(update()));
 
@@ -66,15 +67,43 @@ void SampleClipView::updateSample()
 {
 	update();
 
-	m_sampleThumbnail = SampleThumbnail{m_clip->m_sample};
+	if (m_clip->hasManagedVocalVariant())
+	{
+		if (const auto managed = m_clip->managedVocalPlaybackView())
+		{
+			m_sampleThumbnail = SampleThumbnail{managed};
+		}
+		else
+		{
+			m_sampleThumbnail = SampleThumbnail{};
+		}
+	}
+	else
+	{
+		m_sampleThumbnail = SampleThumbnail{m_clip->m_sample};
+	}
 
 	// set tooltip to filename so that user can see what sample this
 	// sample-clip contains
-	setToolTip(
-		!m_clip->m_sample.sampleFile().isEmpty()
-			? PathUtil::toAbsolute(m_clip->m_sample.sampleFile())
-			: tr("Double-click to open sample")
-	);
+	if (m_clip->hasManagedVocalVariant())
+	{
+		if (m_clip->managedVocalVariantStatus() == QStringLiteral("vocal_runtime_unqualified"))
+		{
+			setToolTip(tr("Managed vocal variant unavailable: this build's loaded audio runtime is not qualified. The original source is retained; explicit revert restores it."));
+		}
+		else setToolTip(m_clip->managedVocalVariantStatus() == QStringLiteral("ok")
+			? tr("Managed vocal variant. Original source is retained. Playback requires a compatible new LMMS build.")
+			: tr("Managed vocal variant unavailable: %1. Original source is retained and is not used for playback. Compatible new LMMS builds are required for managed playback.")
+				.arg(m_clip->managedVocalVariantStatus()));
+	}
+	else
+	{
+		setToolTip(
+			!m_clip->m_sample.sampleFile().isEmpty()
+				? PathUtil::toAbsolute(m_clip->m_sample.sampleFile())
+				: tr("Double-click to open sample")
+		);
+	}
 	if(m_clip->hasAudioSourceWindow() && m_clip->audioWindowStatus()!="ok")
 		setToolTip(tr("Audio range unavailable: %1").arg(m_clip->audioWindowStatus())+"\n"+toolTip());
 }
@@ -90,19 +119,21 @@ void SampleClipView::constructContextMenu(QMenu* cm)
 				tr( "Set/clear record" ),
 						m_clip, SLOT(toggleRecord()));*/
 
-	cm->addAction(
+	auto reverseAction = cm->addAction(
 		embed::getIconPixmap("flip_x"),
 		tr("Reverse sample"),
 		this,
 		SLOT(reverseSample())
 	);
+	reverseAction->setEnabled(!m_clip->hasManagedVocalVariant());
 
-	cm->addAction(
+	auto ghostAction = cm->addAction(
 		embed::getIconPixmap("automation_ghost_note"),
 		tr("Set as ghost in automation editor"),
 		this,
 		SLOT(setAutomationGhost())
 	);
+	ghostAction->setEnabled(!m_clip->hasManagedVocalVariant());
 
 }
 
@@ -190,7 +221,7 @@ void SampleClipView::mouseReleaseEvent(QMouseEvent *_me)
 
 void SampleClipView::mouseDoubleClickEvent( QMouseEvent * )
 {
-	if(m_clip->hasAudioSourceWindow()) return;
+	if(m_clip->hasAudioSourceWindow() || m_clip->hasManagedVocalVariant()) return;
 	if (m_trackView->trackContainerView()->knifeMode()) { return; }
 
 	const QString selectedAudioFile = FileDialog::openAudioFile();
@@ -291,7 +322,8 @@ void SampleClipView::paintEvent( QPaintEvent * pe )
 
 	const auto sampleRextX = static_cast<int>(offsetStart) - m_paintPixmapXPosition;
 
-	if (sample.sampleSize() > 0)
+	const auto managedView = m_clip->managedVocalPlaybackView();
+	if ((managedView && managedView->frames > 0) || (!m_clip->hasManagedVocalVariant() && sample.sampleSize() > 0))
 	{
 		const auto param = SampleThumbnail::VisualizeParameters{
 			.sampleRect = QRect(sampleRextX, spacing, sampleLength, height() - spacing),
@@ -303,7 +335,8 @@ void SampleClipView::paintEvent( QPaintEvent * pe )
 		m_sampleThumbnail.visualize(param, p);
 	}
 
-	QString name = PathUtil::cleanName(m_clip->m_sample.sampleFile());
+	QString name = m_clip->hasManagedVocalVariant()
+		? tr("Managed vocal variant") : PathUtil::cleanName(m_clip->m_sample.sampleFile());
 	paintTextLabel(name, p);
 
 	// disable antialiasing for borders, since its not needed
@@ -360,7 +393,7 @@ void SampleClipView::paintEvent( QPaintEvent * pe )
 
 void SampleClipView::reverseSample()
 {
-	if(m_clip->hasAudioSourceWindow()) return;
+	if(m_clip->hasAudioSourceWindow() || m_clip->hasManagedVocalVariant()) return;
 	m_clip->m_sample.setReversed(!m_clip->m_sample.reversed());
 	m_clip->setStartTimeOffset(m_clip->length() - m_clip->startTimeOffset() - m_clip->sampleLength());
 	Engine::getSong()->setModified();
@@ -371,6 +404,7 @@ void SampleClipView::reverseSample()
 
 void SampleClipView::setAutomationGhost()
 {
+	if (m_clip->hasManagedVocalVariant()) return;
 	auto aEditor = gui::getGUI()->automationEditor();
 	aEditor->setGhostSample(m_clip);
 	aEditor->parentWidget()->show();

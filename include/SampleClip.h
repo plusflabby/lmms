@@ -26,6 +26,7 @@
 #define LMMS_SAMPLE_CLIP_H
 
 #include <QByteArray>
+#include <QTimer>
 
 #include <atomic>
 #include <memory>
@@ -34,6 +35,8 @@
 #include "AudioSourceWindow.h"
 #include "AudioImportPolicy.h"
 #include "RecordedTakeSource.h"
+#include "src/core/vocal/ManagedVocalAssetTypes.h"
+#include "src/core/vocal/ManagedVocalPlayback.h"
 
 namespace lmms
 {
@@ -42,6 +45,7 @@ namespace recording { class RecordingAttachment; }
 
 class SampleBuffer;
 class SampleTrack;
+class ManagedVocalPlaybackLoadTicket;
 
 namespace gui
 {
@@ -55,6 +59,7 @@ class LMMS_EXPORT SampleClip : public Clip
 {
 	Q_OBJECT
 	Q_PROPERTY(QString audioWindowStatus READ audioWindowStatus NOTIFY audioWindowStatusChanged)
+	Q_PROPERTY(QString managedVocalVariantStatus READ managedVocalVariantStatus NOTIFY managedVocalVariantStatusChanged)
 	mapPropertyFromModel(bool,isRecord,setRecord,m_recordModel);
 public:
 	SampleClip(Track* track, Sample sample, bool isPlaying);
@@ -71,12 +76,28 @@ public:
 	const QString& sourceLoadError() const { return m_sourceLoadError; }
 	bool usesBoundedSampleSource() const { return m_boundedSampleSource; }
 	bool isRecordedTake() const { return m_recordedTakeMetadataPresent; }
+	bool recordedTakeSourceCurrent() const;
 	const std::optional<recording::RecordedTakeReference>& recordedTakeReference() const { return m_recordedTakeReference; }
 	bool hasAudioSourceWindow() const { return m_audioWindowStorage.kind != AudioWindowStorageKind::Legacy; }
 	const AudioWindowStorage& audioWindowStorage() const { return m_audioWindowStorage; }
 	QString audioWindowStatus() const;
 	QString applyAudioWindow(const AudioSourceWindowV2&, const AudioWindowGeometry&);
 	std::shared_ptr<const struct AudioWindowPlaybackView> audioWindowPlaybackView() const;
+	bool hasManagedVocalVariant() const
+	{
+		return m_managedVocalAssociation.has_value() || !m_unavailableManagedVocalVariants.isNull();
+	}
+	QString managedVocalVariantStatus() const { return m_managedVocalVariantStatus; }
+	QString managedVocalVariantAssetId() const;
+	QByteArray managedVocalVariantStateDigest() const;
+	const std::optional<ManagedVocalVariantAssociation>& managedVocalVariantAssociation() const
+	{
+		return m_managedVocalAssociation;
+	}
+	std::shared_ptr<const ManagedVocalPlaybackView> managedVocalPlaybackView() const;
+	QString preloadManagedVocalVariant(const ManagedVocalVariantReference& reference);
+	QString applyManagedVocalVariantAssociation(const ManagedVocalVariantAssociation& association);
+	QString revertManagedVocalVariant();
 	QString adoptAuthorizedAudio(std::unique_ptr<AudioImportPolicy::Prepared> audio);
 	const QByteArray& sourceFileIdentity() const { return m_boundedSourceIdentity; }
 	const QByteArray& expectedSourceDigest() const { return m_boundedSourceDigest; }
@@ -119,7 +140,11 @@ public slots:
 	void tempoChanged();
 
 protected:
-	bool allowsGenericClipEdits() const override { return !hasAudioSourceWindow() || m_loadingAudioWindow; }
+	bool allowsGenericClipEdits() const override
+	{
+		return (!hasAudioSourceWindow() || m_loadingAudioWindow)
+			&& (!hasManagedVocalVariant() || m_loadingManagedVocalAssociation);
+	}
 	SampleClip( const SampleClip& orig );
 	SampleClip(const SampleClip& orig, Track* target);
 
@@ -127,9 +152,41 @@ private:
 	friend class recording::RecordingAttachment;
 	void initializeAudioWindowConnections();
 	void refreshAudioWindowPlayback();
+	void initializeManagedVocalConnections();
+	void refreshManagedVocalPlayback();
+	void pollManagedVocalPlaybackLoad();
+	QString requestManagedVocalAsset(const ManagedVocalVariantReference& reference,
+		std::shared_ptr<const std::vector<float>>& samples);
+	void invalidateManagedVocalPlayback();
+	ManagedVocalPlaybackPreparation prepareManagedVocalPlayback(
+		const ManagedVocalVariantAssociation& association,
+		std::shared_ptr<const std::vector<float>> samples,
+		std::shared_ptr<const ManagedVocalPlaybackGuard> guard,
+		quint64 expectedEpoch,
+		bool autoResize,
+		bool checkGeometry) const;
+	QString applyManagedVocalVariantAssociationInternal(
+		const ManagedVocalVariantAssociation& association,
+		bool retainCurrentForRevert);
+	void resetManagedVocalVariant();
+	void setManagedVocalVariantStatus(const QString& status);
 	AudioWindowEligibility audioWindowEligibility() const;
 	std::atomic_bool m_loadingAudioWindow{false};
+	std::atomic_bool m_loadingManagedVocalAssociation{false};
 	std::shared_ptr<const struct AudioWindowPlaybackView> m_audioWindowView;
+	std::optional<ManagedVocalVariantAssociation> m_managedVocalAssociation;
+	QDomDocument m_unavailableManagedVocalVariants;
+	QString m_managedVocalVariantStatus = QStringLiteral("ok");
+	std::shared_ptr<ManagedVocalPlaybackGuard> m_managedVocalPlaybackGuard =
+		std::make_shared<ManagedVocalPlaybackGuard>();
+	std::shared_ptr<const ManagedVocalPlaybackView> m_managedVocalPlaybackView;
+	QTimer m_managedVocalPlaybackLoadTimer;
+	std::shared_ptr<ManagedVocalPlaybackLoadTicket> m_managedVocalPlaybackLoadTicket;
+	ManagedVocalVariantReference m_managedVocalPlaybackLoadingReference;
+	QString m_managedVocalPlaybackLoadingProjectId;
+	ManagedVocalVariantReference m_managedVocalPreloadedReference;
+	QString m_managedVocalPreloadedProjectId;
+	std::shared_ptr<const std::vector<float>> m_managedVocalPreloadedSamples;
 	void setSampleFileImpl(const QString& source, const QByteArray& expectedDigest, const QByteArray& expectedIdentity = {});
 	QString adoptRecordedTakeAudio(std::unique_ptr<AudioImportPolicy::Prepared>, const recording::RecordedTakeReference&, bool notify);
 	void resetRecordedTakeSource();
@@ -157,6 +214,7 @@ private:
 
 signals:
 	void audioWindowStatusChanged(const QString& code);
+	void managedVocalVariantStatusChanged(const QString& code);
 	void sampleChanged();
 	void wasReversed();
 } ;

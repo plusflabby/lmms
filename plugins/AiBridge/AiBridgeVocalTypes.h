@@ -5,14 +5,19 @@
 #include "AudioSourceWindow.h"
 #include "SampleDecoder.h"
 #include <array>
+#include <functional>
+#include <memory>
 #include <optional>
 #include <vector>
 #include <QStringList>
 
 namespace lmms {
+class SampleBuffer;
 namespace VocalLimits {
-inline constexpr size_t selections=8, retainedJobs=8;
+inline constexpr size_t selections=8, retainedJobs=8, retainedPlans=8;
 inline constexpr quint64 seconds=120, jobBytes=256ULL*1024*1024, sessionBytes=16ULL*1024*1024;
+inline constexpr quint64 stagedOutputBytes=256ULL*1024*1024, planRecordCharge=128ULL*1024;
+inline constexpr quint64 planIdleMilliseconds=15ULL*60*1000;
 inline constexpr quint64 selectionRecords=4096, jobRecords=8192;
 inline constexpr int page=256, tracks=128, idBytes=256, pathChars=32768, rootCount=32, rootChars=65536;
 inline constexpr size_t projectTracks=4096, projectClips=4096, automationBindings=65536;
@@ -32,6 +37,9 @@ struct VocalSourceTicket
 	SampleDecoder::PcmWaveInfo expectedInfo;
 	QByteArray expectedIdentity;
 	QString sourceRevision, sourceStatus;
+	QString recordedTakeProjectId, recordedTakeId;
+	std::shared_ptr<const SampleBuffer> authorizedSourceBuffer;
+	quint64 authorizedSourceBufferRevision=0;
 	std::optional<AudioSourceWindowV2> window;
 	AudioWindowWorld world;
 	AudioWindowGeometry geometry;
@@ -87,12 +95,16 @@ struct VocalAnalysisResult
 	std::vector<VocalAnalysisRecord> records;
 	quint64 accountedBytes=0;
 };
+enum class VocalJobKind { Analysis, Render };
 enum class VocalJobState { Queued, Running, CancelRequested, Cancelled, Succeeded, Failed, Invalidated };
-enum class VocalJobPhase { Authorizing, Scanning, Analyzing, Publishing };
+enum class VocalJobPhase { Authorizing, Scanning, Analyzing, Rendering, Publishing };
+using VocalPhaseCallback=std::function<void(VocalJobPhase)>;
 struct VocalJobSnapshot
 {
 	QString jobId, inputHash, analysisId, failureCode;
+	QString variantId;
 	quint64 generation=0;
+	VocalJobKind kind=VocalJobKind::Analysis;
 	VocalJobState state=VocalJobState::Queued;
 	VocalJobPhase phase=VocalJobPhase::Authorizing;
 	std::optional<double> progress;

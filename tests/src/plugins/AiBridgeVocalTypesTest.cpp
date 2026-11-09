@@ -1,6 +1,7 @@
 #include <QtTest>
 #include <limits>
 #include "AiBridgeVocalTypes.h"
+#include "SampleBuffer.h"
 using namespace lmms;
 
 class AiBridgeVocalTypesTest : public QObject
@@ -61,6 +62,40 @@ private slots:
 		QCOMPARE(estimateVocalBudget(s).code,QString("resource_limit"));
 		s=snapshot(); s.sources[0].limits={};
 		QCOMPARE(estimateVocalBudget(s).code,QString("audio_resource_limits_not_configured"));
+	}
+	void authorizedRecordedTakeBufferIsBoundedAndHashed()
+	{
+		auto s = snapshot();
+		auto& ticket = s.sources[0];
+		ticket.reference = QStringLiteral("recorded_take:11111111-1111-4111-8111-111111111111/22222222-2222-4222-8222-222222222222");
+		ticket.roots.clear();
+		ticket.recordedTakeProjectId = QStringLiteral("11111111-1111-4111-8111-111111111111");
+		ticket.recordedTakeId = QStringLiteral("22222222-2222-4222-8222-222222222222");
+		std::vector<SampleFrame> frames(44100, SampleFrame(0.125f));
+		ticket.authorizedSourceBuffer = std::make_shared<const SampleBuffer>(std::move(frames), 44100);
+		ticket.authorizedSourceBufferRevision = ticket.authorizedSourceBuffer->contentRevision();
+		QCOMPARE(estimateVocalBudget(s).code, QStringLiteral("ok"));
+		const auto budget = estimateVocalBudget(s);
+		auto imported = snapshot();
+		QVERIFY(budget.jobBytes > estimateVocalBudget(imported).jobBytes);
+		const auto hash = vocalInputHash(s);
+		QVERIFY(!hash.isEmpty());
+		auto changed = s;
+		changed.sources[0].recordedTakeId = QStringLiteral("33333333-3333-4333-8333-333333333333");
+		QVERIFY(hash != vocalInputHash(changed));
+		changed = s;
+		changed.sources[0].authorizedSourceBuffer = std::make_shared<const SampleBuffer>(
+			std::vector<SampleFrame>(44100, SampleFrame(0.25f)), 44100);
+		changed.sources[0].authorizedSourceBufferRevision = changed.sources[0].authorizedSourceBuffer->contentRevision();
+		QCOMPARE(estimateVocalBudget(changed).code, QStringLiteral("ok"));
+		QVERIFY(hash != vocalInputHash(changed));
+		changed = s;
+		changed.sources[0].authorizedSourceBuffer.reset();
+		QCOMPARE(estimateVocalBudget(changed).code, QStringLiteral("invalid_parameter"));
+		changed = s;
+		changed.sources[0].authorizedSourceBuffer = std::make_shared<const SampleBuffer>(std::vector<SampleFrame>(44100), 48000);
+		changed.sources[0].authorizedSourceBufferRevision = changed.sources[0].authorizedSourceBuffer->contentRevision();
+		QCOMPARE(estimateVocalBudget(changed).code, QStringLiteral("invalid_parameter"));
 	}
 	void trackHashTracksNativeFloatAndLifetime()
 	{

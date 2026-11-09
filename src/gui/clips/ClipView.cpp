@@ -655,7 +655,7 @@ void ClipView::mousePressEvent( QMouseEvent * me )
 			{
 				if(!m_clip->allowsTimeGeometryEdits() && (knifeMode || pos.x()>=width()-resizeGripWidth() || pos.x()<resizeGripWidth()))
 				{
-					setToolTip(tr("Generic trim/split is unavailable for source-frame audio windows."));
+					setToolTip(tr("Generic trim/split is unavailable for source-frame audio windows or managed vocal variants."));
 					me->ignore();return;
 				}
 				getGUI()->songEditor()->m_editor->selectAllClips( false );

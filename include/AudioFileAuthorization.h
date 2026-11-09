@@ -32,7 +32,19 @@ public:
 		QByteArray identity;
 		std::unique_ptr<QIODevice> source;
 	};
+	struct PinnedResult
+	{
+		QString code;
+		QByteArray identity;
+		std::unique_ptr<QIODevice> source;
+		std::shared_ptr<void> pin;
+	};
 	static Result acquire(const QString& approvedRoot, const QString& path);
+	// The independent native pin may be released on a worker after the source
+	// device has been destroyed on its owning thread. Directory handles permit
+	// sibling creation but deny directory replacement; the final file still
+	// denies writes and replacement.
+	static PinnedResult acquireWithRetainedPin(const QString& approvedRoot, const QString& path);
 	static Approval approveRoot(const QString& approvedRoot);
 	static Result acquire(const Root& approvedRoot, const QString& path);
 };

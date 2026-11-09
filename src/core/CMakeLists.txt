@@ -2,6 +2,15 @@ set(LMMS_SRCS
 	${LMMS_SRCS}
 
 	core/AudioBuffer.cpp
+	core/vocal/ManagedVocalWaveReader.cpp
+	core/vocal/ManagedVocalAssetTypes.cpp
+	core/vocal/ManagedVocalAssetRoot.cpp
+	core/vocal/ManagedVocalProjectOwnerStore.cpp
+	core/vocal/ManagedVocalAssetStore.cpp
+	core/vocal/ManagedVocalPlayback.cpp
+	core/vocal/ManagedVocalPlaybackCache.cpp
+	core/vocal/VocalRuntimeQualification.cpp
+	core/ManagedVocalPlayHandle.cpp
 	core/recording/RecordingDuplexTypes.cpp
 	core/recording/RecordingOutputQueue.cpp
 	core/recording/RecordingTypes.cpp
@@ -24,6 +33,7 @@ set(LMMS_SRCS
 	core/recording/RecordingServiceHost.cpp
 	core/recording/RecordingAudioBackendPolicy.cpp
 	core/AudioFileAuthorization.cpp
+	core/ProjectSavePublication.cpp
 	core/midi/StandardMidiWriter.cpp
 	core/midi/MidiExportService.cpp
 	core/midi/MidiExportOutput.cpp

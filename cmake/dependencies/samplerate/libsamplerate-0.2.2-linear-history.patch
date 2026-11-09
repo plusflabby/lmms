@@ -1,0 +1,18 @@
+diff --git a/src/src_linear.c b/src/src_linear.c
+index 11707d2..cfdf1f4 100644
+--- a/src/src_linear.c
++++ b/src/src_linear.c
+@@ -118,9 +118,11 @@ linear_vari_process (SRC_STATE *state, SRC_DATA *data)
+ 			} ;
+ #endif
+ 
++		const float *previous_data = priv->in_used < state->channels ? priv->last_value : data->data_in + priv->in_used - state->channels;
++
+ 		for (ch = 0 ; ch < state->channels ; ch++)
+-		{	data->data_out [priv->out_gen] = (float) (data->data_in [priv->in_used - state->channels + ch] + input_index *
+-						((double) data->data_in [priv->in_used + ch] - data->data_in [priv->in_used - state->channels + ch])) ;
++		{	data->data_out [priv->out_gen] = (float) (previous_data [ch] + input_index *
++						((double) data->data_in [priv->in_used + ch] - previous_data [ch])) ;
+ 			priv->out_gen ++ ;
+ 			} ;
+ 

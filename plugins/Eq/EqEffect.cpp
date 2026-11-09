@@ -93,8 +93,10 @@ Effect::ProcessStatus EqEffect::processImpl(SampleFrame* buf, const f_cnt_t fram
 
 
 	bool hpActive = m_eqControls.m_hpActiveModel.value();
-	bool hp24Active = m_eqControls.m_hp24Model.value();
-	bool hp48Active = m_eqControls.m_hp48Model.value();
+	const bool hpTypeDrivesStages=m_eqControls.m_hpTypeModelDrivesStages.load(std::memory_order_acquire);
+	const int hpType=m_eqControls.m_hpTypeModel.value();
+	bool hp24Active = hpTypeDrivesStages ? hpType>=1 : m_eqControls.m_hp24Model.value();
+	bool hp48Active = hpTypeDrivesStages ? hpType>=2 : m_eqControls.m_hp48Model.value();
 	bool lowShelfActive = m_eqControls.m_lowShelfActiveModel.value();
 	bool para1Active = m_eqControls.m_para1ActiveModel.value();
 	bool para2Active = m_eqControls.m_para2ActiveModel.value();

@@ -11,6 +11,7 @@
 #include <QScopeGuard>
 #include <QtEndian>
 #include <array>
+#include <cmath>
 #include <cstring>
 #include "ConfigManager.h"
 #include "RecordingRing.h"
@@ -22,8 +23,12 @@
 #include "SampleClip.h"
 
 #include "AiBridgeIpcServer.h"
+#include "AiBridgeAudioContext.h"
 #include "AiBridgeVocalJobs.h"
 #include "AiBridgeProjectContext.h"
+#include "AiBridgeVocalContext.h"
+#include "AiBridgeVocalTrackActions.h"
+#include "src/core/vocal/VocalRuntimeQualification.h"
 #include "Engine.h"
 #include "Instrument.h"
 #include "InstrumentTrack.h"
@@ -137,19 +142,41 @@ private slots:
 	{
 		using namespace lmms;
 		const auto nativeReady=qEnvironmentVariable("LMMS_PHASE3JA_HOST_READY");
-		const bool nativeHost=!nativeReady.isEmpty();
+		const auto nativeVocalReady=qEnvironmentVariable("LMMS_PHASE3JB_HOST_READY");
+		const auto nativeVocalSuffix=qEnvironmentVariable("LMMS_PHASE3JB_HOST_SUFFIX");
+		const auto nativeVocalRequested=!nativeVocalReady.isEmpty() || !nativeVocalSuffix.isEmpty();
+		const auto nativeVocalSuffixValid=QRegularExpression(QStringLiteral("^[A-Za-z0-9_-]{16,64}$"))
+			.match(nativeVocalSuffix).hasMatch();
+		QVERIFY2(!nativeVocalRequested || (!nativeVocalReady.isEmpty() && nativeVocalSuffixValid),
+			"The explicit Phase 3J-B harness requires a readiness path and a bounded ASCII pipe suffix");
+		const bool nativeVocalHost=nativeVocalRequested;
+		const bool nativeHost=!nativeReady.isEmpty() || nativeVocalHost;
 		QTemporaryDir root(QCoreApplication::applicationDirPath()+"/audio-ipc-XXXXXX");QVERIFY(root.isValid());
 		const QStringList keys{"audio_import_roots","audio_import_max_file_bytes","audio_import_max_decoded_bytes"};QStringList old;
+		const auto oldManagedRoot=ConfigManager::inst()->value("vocal_assets","managed_root","absent");
 		for(const auto& key:keys)old<<ConfigManager::inst()->value("aibridge",key,"absent");
-		auto restore=qScopeGuard([&]{for(int i=0;i<keys.size();++i){if(old[i]=="absent")ConfigManager::inst()->deleteValue("aibridge",keys[i]);else ConfigManager::inst()->setValue("aibridge",keys[i],old[i]);}AudioImportPolicy::configured().refresh();});
+		auto restore=qScopeGuard([&]{for(int i=0;i<keys.size();++i){if(old[i]=="absent")ConfigManager::inst()->deleteValue("aibridge",keys[i]);else ConfigManager::inst()->setValue("aibridge",keys[i],old[i]);}
+			if(oldManagedRoot=="absent")ConfigManager::inst()->deleteValue("vocal_assets","managed_root");
+			else ConfigManager::inst()->setValue("vocal_assets","managed_root",oldManagedRoot);
+			AudioImportPolicy::configured().refresh();});
 		const int pcmBytes=88200*(nativeHost?120:1);
 		QByteArray wav(pcmBytes+44,0);std::memcpy(wav.data(),"RIFF",4);std::memcpy(wav.data()+8,"WAVEfmt ",8);std::memcpy(wav.data()+36,"data",4);
 		qToLittleEndian<quint32>(pcmBytes+36,wav.data()+4);qToLittleEndian<quint32>(16,wav.data()+16);qToLittleEndian<quint16>(1,wav.data()+20);qToLittleEndian<quint16>(1,wav.data()+22);qToLittleEndian<quint32>(44100,wav.data()+24);qToLittleEndian<quint32>(88200,wav.data()+28);qToLittleEndian<quint16>(2,wav.data()+32);qToLittleEndian<quint16>(16,wav.data()+34);qToLittleEndian<quint32>(pcmBytes,wav.data()+40);
+		if(nativeVocalHost)
+		{
+			for(int frame=0;frame<44100;++frame)
+			{
+				const auto sample=static_cast<qint16>(std::lround(12000.0*std::sin(2.0*3.14159265358979323846*220.0*frame/44100.0)));
+				qToLittleEndian<qint16>(sample,wav.data()+44+frame*sizeof(qint16));
+			}
+		}
 		const auto path=root.filePath("Verse.wav");{QFile f(path);QVERIFY(f.open(QIODevice::WriteOnly|QIODevice::NewOnly));QCOMPARE(f.write(wav),qint64(wav.size()));}
 		ConfigManager::inst()->setValue("aibridge",keys[0],QString::fromUtf8(QJsonDocument(QJsonArray{root.path()}).toJson(QJsonDocument::Compact)));for(int i=1;i<3;++i)ConfigManager::inst()->setValue("aibridge",keys[i],nativeHost?"134217728":"1000000");
 		QCOMPARE(AudioImportPolicy::configured().refresh(), QStringLiteral("ok"));
 		AiBridgeVocalJobs vocalJobs;
-		AiBridgeIpcServer server(nullptr,nativeHost?"lmms-aibridge-v2":"lmms-audio-wire-test",&vocalJobs);QVERIFY(server.start());QLocalSocket socket;socket.connectToServer(server.endpointName());QVERIFY(socket.waitForConnected(1000));
+		const auto endpoint=nativeVocalHost?QStringLiteral("lmms-aibridge-v2-%1").arg(nativeVocalSuffix)
+			:(nativeHost?QStringLiteral("lmms-aibridge-v2"):QStringLiteral("lmms-audio-wire-test"));
+		AiBridgeIpcServer server(nullptr,endpoint,&vocalJobs);QVERIFY(server.start());QLocalSocket socket;socket.connectToServer(server.endpointName());QVERIFY(socket.waitForConnected(1000));
 		auto call=[&](const QString& action,QJsonObject p){socket.write(QJsonDocument(QJsonObject{{"version",2},{"request_id","audio"},{"action",action},{"parameters",p}}).toJson(QJsonDocument::Compact)+'\n');socket.flush();QElapsedTimer t;t.start();QByteArray bytes;while(!bytes.endsWith('\n') && t.elapsed()<3000){QTest::qWait(1);bytes+=socket.readAll();}return QJsonDocument::fromJson(bytes).object();};
 		auto caps=call("get_audio_capabilities",{});QCOMPARE(caps.value("code").toString(),QStringLiteral("ok"));QVERIFY(caps.value("data").toObject().value("import_roots_configured").toBool());QVERIFY(!QJsonDocument(caps).toJson().contains(root.path().toUtf8()));
 		const auto tracks=Engine::getSong()->tracks().size();QCOMPARE(call("create_audio_track",{{"name","Voice"},{"dry_run",true}}).value("code").toString(),QStringLiteral("ok"));QCOMPARE(Engine::getSong()->tracks().size(),tracks);
@@ -159,7 +186,7 @@ private slots:
 		auto read=call("get_audio_clip",{{"clip_id",id}}).value("data").toObject();QCOMPARE(read.value("position_ticks").toInt(),3840);QCOMPARE(read.value("sample_rate").toInt(),44100);QCOMPARE(read.value("source_status").toString(),QStringLiteral("available"));
 		const QJsonObject vocalSelection{{"clip_id",id},{"expected_audio_state_hash",read["audio_state_hash"]},{"source_frames",QJsonObject{{"in_frame","0"},{"out_frame","44100"}}}};
 		const QJsonObject vocalRequest{{"kind","levels"},{"selections",QJsonArray{vocalSelection}}};
-		if(nativeHost)
+		if(nativeHost && !nativeVocalHost)
 		{
 			// Explicit test-harness mode only. Expose no additional production route.
 			socket.disconnectFromServer();QTRY_VERIFY(socket.state()==QLocalSocket::UnconnectedState);QTest::qWait(5);
@@ -169,6 +196,157 @@ private slots:
 			QVERIFY2(QFile::exists(nativeReady+".done"),"Explicit native MCP harness timed out");
 			vocalJobs.shutdown();QFile unchanged(path);QVERIFY(unchanged.open(QIODevice::ReadOnly));QCOMPARE(unchanged.readAll(),wav);
 			QCOMPARE(clip->startPosition().getTicks(),3840);QCOMPARE(track->numOfClips(),1);return;
+		}
+		auto identityRoot=recording::RecordingLibrary::authorizeLocalRoot(root.path());
+		QVERIFY(identityRoot.library);
+		const auto projectIdentity=Engine::getSong()->recordingProjectIdentity().getOrCreateForCurrentProject(*identityRoot.library);
+		QCOMPARE(projectIdentity.code,QStringLiteral("ok"));
+		QTemporaryDir projectDirectory;QVERIFY(projectDirectory.isValid());
+		QVERIFY2(Engine::getSong()->guiSaveProjectAs(projectDirectory.filePath(QStringLiteral("vocal-ipc-project.mmp"))),
+			qPrintable(Engine::getSong()->recordingProjectIdentity().lastCode()));
+		identityRoot.library.reset();
+		QTemporaryDir managedRootDirectory;QVERIFY(managedRootDirectory.isValid());
+		ConfigManager::inst()->setValue(QStringLiteral("vocal_assets"),QStringLiteral("managed_root"),managedRootDirectory.path());
+		const auto publicWorldHash=call("get_vocal_capabilities",{}).value("data").toObject().value("vocal_edit_world_hash").toString();
+		QCOMPARE(publicWorldHash,vocalEditWorldHash(captureVocalEditWorld()));
+		QVERIFY(!publicWorldHash.isEmpty());
+		if(nativeVocalHost)
+		{
+			socket.disconnectFromServer();QTRY_VERIFY(socket.state()==QLocalSocket::UnconnectedState);QTest::qWait(5);
+			SampleTrack comparisonTrack(Engine::getSong());
+			SampleTrack compSourceTrack(Engine::getSong());
+			const int compPcmBytes=44100*sizeof(qint16);
+			QByteArray compWav(compPcmBytes+44,0);std::memcpy(compWav.data(),"RIFF",4);std::memcpy(compWav.data()+8,"WAVEfmt ",8);std::memcpy(compWav.data()+36,"data",4);
+			qToLittleEndian<quint32>(compPcmBytes+36,compWav.data()+4);qToLittleEndian<quint32>(16,compWav.data()+16);
+			qToLittleEndian<quint16>(1,compWav.data()+20);qToLittleEndian<quint16>(1,compWav.data()+22);
+			qToLittleEndian<quint32>(44100,compWav.data()+24);qToLittleEndian<quint32>(88200,compWav.data()+28);
+			qToLittleEndian<quint16>(2,compWav.data()+32);qToLittleEndian<quint16>(16,compWav.data()+34);
+			qToLittleEndian<quint32>(compPcmBytes,compWav.data()+40);
+			for(int frame=0;frame<44100;++frame)
+			{
+				const auto sample=static_cast<qint16>(std::lround(11000.0*std::sin(2.0*3.14159265358979323846*330.0*frame/44100.0)));
+				qToLittleEndian<qint16>(sample,compWav.data()+44+frame*sizeof(qint16));
+			}
+			const auto compPath=root.filePath("VerseAlt.wav");
+			{QFile f(compPath);QVERIFY(f.open(QIODevice::WriteOnly|QIODevice::NewOnly));QCOMPARE(f.write(compWav),qint64(compWav.size()));}
+			auto compImport=AudioImportPolicy::configured().prepare(compPath);QCOMPARE(compImport.code,QStringLiteral("ok"));QVERIFY(compImport.audio);
+			SampleClip compSourceClip(&compSourceTrack);
+			QCOMPARE(compSourceClip.adoptAuthorizedAudio(std::move(compImport.audio)),QStringLiteral("ok"));
+			compSourceClip.setAutoResize(false);compSourceClip.movePosition(3840);
+			const auto destinationTrackId=ids.idForTrack(&comparisonTrack);
+			const auto compTrackId=ids.idForTrack(&compSourceTrack),compClipId=ids.idForClip(&compSourceClip);
+			const auto originalAudio=AiBridgeAudioContext{}.clip(id);QVERIFY(originalAudio.value);
+			const auto compAudio=AiBridgeAudioContext{}.clip(compClipId);QVERIFY(compAudio.value);
+			const auto sourceTrack=captureVocalTrack(trackId);QVERIFY(sourceTrack.value);
+			const auto destinationTrack=captureVocalTrack(destinationTrackId);QVERIFY(destinationTrack.value);
+			const auto compTrack=captureVocalTrack(compTrackId);QVERIFY(compTrack.value);
+			const auto generation=Engine::getSong()->recordingProjectIdentity().revision();
+			const auto worldHash=vocalEditWorldHash(captureVocalEditWorld());
+			const auto sourceSha256=QCryptographicHash::hash(wav,QCryptographicHash::Sha256);
+			const auto readyTemporaryPath=nativeVocalReady+QStringLiteral(".tmp");
+			QFile ready(readyTemporaryPath);QVERIFY(ready.open(QIODevice::WriteOnly|QIODevice::NewOnly));
+			const auto readiness=QJsonDocument(QJsonObject{
+				{"pid",double(QCoreApplication::applicationPid())},{"clip_id",id},{"track_id",trackId},
+				{"destination_track_id",destinationTrackId},{"comp_clip_id",compClipId},{"comp_track_id",compTrackId},
+				{"expected_project_generation",QString::number(generation)},
+				{"expected_world_hash",worldHash},{"source_sha256",QString::fromLatin1(sourceSha256.toHex())},
+				{"original_audio_state_hash",originalAudio.value->stateHash},{"source_track_state_hash",sourceTrack.value->hash},
+				{"destination_track_state_hash",destinationTrack.value->hash},
+				{"comp_source_sha256",QString::fromLatin1(QCryptographicHash::hash(compWav,QCryptographicHash::Sha256).toHex())},
+				{"comp_audio_state_hash",compAudio.value->stateHash},{"comp_track_state_hash",compTrack.value->hash}
+			}).toJson(QJsonDocument::Compact);
+			QCOMPARE(ready.write(readiness),qint64(readiness.size()));ready.close();
+			QVERIFY(QFile::rename(readyTemporaryPath,nativeVocalReady));
+			QElapsedTimer timer;timer.start();while(!QFile::exists(nativeVocalReady+".done") && timer.elapsed()<60000)QTest::qWait(5);
+			QVERIFY2(QFile::exists(nativeVocalReady+".done"),"Explicit Phase 3J-B MCP harness timed out");
+			vocalJobs.shutdown();
+			QFile unchanged(path);QVERIFY(unchanged.open(QIODevice::ReadOnly));const auto unchangedBytes=unchanged.readAll();
+			QCOMPARE(unchangedBytes,wav);QCOMPARE(QCryptographicHash::hash(unchangedBytes,QCryptographicHash::Sha256),sourceSha256);
+			QFile unchangedComp(compPath);QVERIFY(unchangedComp.open(QIODevice::ReadOnly));const auto unchangedCompBytes=unchangedComp.readAll();
+			QCOMPARE(unchangedCompBytes,compWav);QCOMPARE(QCryptographicHash::hash(unchangedCompBytes,QCryptographicHash::Sha256),
+				QCryptographicHash::hash(compWav,QCryptographicHash::Sha256));
+			const auto restored=AiBridgeAudioContext{}.clip(id);QVERIFY(restored.value);
+			QCOMPARE(restored.value->stateHash,originalAudio.value->stateHash);
+			const auto restoredComp=AiBridgeAudioContext{}.clip(compClipId);QVERIFY(restoredComp.value);
+			QCOMPARE(restoredComp.value->stateHash,compAudio.value->stateHash);
+			QCOMPARE(track->numOfClips(),1);QCOMPARE(compSourceTrack.numOfClips(),1);
+			QCOMPARE(Engine::getSong()->recordingProjectIdentity().revision(),generation);
+			return;
+		}
+		QDir managedRoot(managedRootDirectory.path());const auto filesBeforeDryRun=managedRoot.entryList(QDir::AllEntries|QDir::NoDotAndDotDot);
+		QJsonObject planParameters{{"recipe_version",1},{"expected_project_generation",QString::number(Engine::getSong()->recordingProjectIdentity().revision())},
+			{"expected_world_hash",publicWorldHash},
+			{"selections",QJsonArray{QJsonObject{{"clip_id",id},{"expected_audio_state_hash",read.value("audio_state_hash")},
+				{"source_basis","source_pcm"},{"source_frames",QJsonObject{{"in_frame","0"},{"out_frame","44100"}}}}}},
+			{"input_kind","direct_source"},{"input_selection_index",0},
+			{"operations",QJsonArray{QJsonObject{{"operation","gain_envelope"},{"points",QJsonArray{
+				QJsonObject{{"render_input_frame","0"},{"gain_db",0.0}},
+				QJsonObject{{"render_input_frame","44100"},{"gain_db",0.0}}}}}}}};
+		const auto vocalPlan=call("plan_vocal_edit",planParameters);
+		if (!qualifiedVocalSamplerateRuntime())
+		{
+			QCOMPARE(vocalPlan.value("code").toString(),QStringLiteral("feature_unavailable"));
+			QCOMPARE(managedRoot.entryList(QDir::AllEntries|QDir::NoDotAndDotDot),filesBeforeDryRun);
+			QCOMPARE(call("get_audio_clip",{{"clip_id",id}}).value("data").toObject().value("audio_state_hash"),read.value("audio_state_hash"));
+		}
+		else
+		{
+		QCOMPARE(vocalPlan.value("code").toString(),QStringLiteral("ok"));
+		const auto planData=vocalPlan.value("data").toObject();const auto planId=planData.value("plan_id").toString();
+		const auto planHash=planData.value("plan_hash").toString();QVERIFY(!planId.isEmpty());QVERIFY(!planHash.isEmpty());
+		const auto dryRun=call("render_vocal_variant",{{"plan_id",planId},{"plan_hash",planHash},{"dry_run",true}});
+		QCOMPARE(dryRun.value("code").toString(),QStringLiteral("ok"));QVERIFY(!dryRun.value("data").toObject().contains("job_id"));
+		QCOMPARE(managedRoot.entryList(QDir::AllEntries|QDir::NoDotAndDotDot),filesBeforeDryRun);
+		const auto renderStart=call("render_vocal_variant",{{"plan_id",planId},{"plan_hash",planHash},{"dry_run",false}});
+		QCOMPARE(renderStart.value("code").toString(),QStringLiteral("ok"));
+		const auto renderJobId=renderStart.value("data").toObject().value("job_id").toString();QVERIFY(!renderJobId.isEmpty());
+		QJsonObject renderStatus;
+		QTRY_VERIFY_WITH_TIMEOUT((renderStatus=call("get_vocal_job",{{"job_id",renderJobId},{"mode","status"}}))
+			.value("data").toObject().value("state").toString()==QStringLiteral("succeeded"),5000);
+		QCOMPARE(renderStatus.value("data").toObject().value("kind").toString(),QStringLiteral("render"));
+		const auto variantId=renderStatus.value("data").toObject().value("variant_id").toString();QVERIFY(!variantId.isEmpty());
+		const auto variant=call("get_vocal_variant",{{"variant_id",variantId}});QCOMPARE(variant.value("code").toString(),QStringLiteral("ok"));
+		QVERIFY(!QJsonDocument(variant).toJson().contains(root.path().toUtf8()));
+		const auto compareTrackCreated=call("create_audio_track",{{"name","Vocal comparison"}});
+		QCOMPARE(compareTrackCreated.value("code").toString(),QStringLiteral("ok"));
+		const auto compareTrackId=compareTrackCreated.value("data").toObject().value("track_id").toString();QVERIFY(!compareTrackId.isEmpty());
+		const auto vocalCapabilities=call("get_vocal_capabilities",{}).value("data").toObject();
+		auto trackHash=[&](const QString& track){
+			for(const auto& value:vocalCapabilities.value("tracks").toArray())
+			{
+				if(value.toObject().value("track_id").toString()==track)
+					return value.toObject().value("track_state_hash").toString();
+			}
+			return QString{};
+		};
+		QVERIFY(!trackHash(trackId).isEmpty());QVERIFY(!trackHash(compareTrackId).isEmpty());
+		const QJsonObject compareApplyParameters{{"variant_id",variantId},{"clip_id",id},{"mode","compare"},
+			{"destination_track_id",compareTrackId},{"expected_project_generation",planData.value("project_generation")},
+			{"expected_world_hash",planData.value("world_hash")},{"expected_audio_state_hash",read.value("audio_state_hash")},
+			{"expected_track_state_hash",trackHash(trackId)},{"expected_destination_track_state_hash",trackHash(compareTrackId)},
+			{"dry_run",false}};
+		QJsonObject compareApply;
+		for(int attempt=0;attempt<250;++attempt)
+		{
+			compareApply=call("apply_vocal_variant",compareApplyParameters);
+			if(compareApply.value("code").toString()!=QStringLiteral("asset_loading"))break;
+			QTest::qWait(20);
+		}
+		QCOMPARE(compareApply.value("code").toString(),QStringLiteral("ok"));
+		const auto replaceApply=call("apply_vocal_variant",{{"variant_id",variantId},{"clip_id",id},{"mode","replace"},
+			{"expected_project_generation",planData.value("project_generation")},{"expected_world_hash",planData.value("world_hash")},
+			{"expected_audio_state_hash",read.value("audio_state_hash")},{"expected_track_state_hash",trackHash(trackId)},
+			{"dry_run",false}});
+		QCOMPARE(replaceApply.value("code").toString(),QStringLiteral("ok"));
+		auto replacedRead=call("get_audio_clip",{{"clip_id",id}}).value("data").toObject();
+		QVERIFY(replacedRead.value("audio_state_hash").toString()!=read.value("audio_state_hash").toString());
+		const auto revertApply=call("apply_vocal_variant",{{"variant_id",variantId},{"clip_id",id},{"mode","revert"},
+			{"expected_project_generation",planData.value("project_generation")},{"expected_world_hash",planData.value("world_hash")},
+			{"expected_audio_state_hash",replacedRead.value("audio_state_hash")},{"expected_track_state_hash",trackHash(trackId)},
+			{"dry_run",false}});
+		QCOMPARE(revertApply.value("code").toString(),QStringLiteral("ok"));
+		QCOMPARE(call("get_audio_clip",{{"clip_id",id}}).value("data").toObject().value("audio_state_hash"),read.value("audio_state_hash"));
+		QCOMPARE(call("get_vocal_job",{{"job_id",renderJobId},{"mode","release"}}).value("code").toString(),QStringLiteral("ok"));
 		}
 		QCOMPARE(call("get_vocal_capabilities",{}).value("code").toString(),QString("ok"));
 		const auto vocalStart=call("analyze_vocal_audio",vocalRequest);QCOMPARE(vocalStart["code"].toString(),QString("ok"));

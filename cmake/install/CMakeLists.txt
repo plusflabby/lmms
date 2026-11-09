@@ -39,6 +39,33 @@ IF(LMMS_BUILD_WIN32 OR LMMS_INSTALL_DEPENDENCIES)
 	)
 ENDIF()
 
+# The Windows dependency scanner can find the installed system DLL even when
+# LMMS was linked against an explicitly selected project-local SampleRate
+# package. Install the imported target's own runtime image after dependency
+# collection so the staged package uses the same qualified DLL as the link.
+if(LMMS_BUILD_WIN32 AND LMMS_REQUIRE_QUALIFIED_VOCAL_RUNTIME AND TARGET SampleRate::samplerate)
+	get_target_property(SAMPLERATE_RUNTIME_IMAGE SampleRate::samplerate IMPORTED_LOCATION_RELEASE)
+	if(NOT SAMPLERATE_RUNTIME_IMAGE)
+		get_target_property(SAMPLERATE_RUNTIME_IMAGE SampleRate::samplerate IMPORTED_LOCATION)
+	endif()
+	if(NOT SAMPLERATE_RUNTIME_IMAGE OR NOT EXISTS "${SAMPLERATE_RUNTIME_IMAGE}")
+		message(FATAL_ERROR "The selected SampleRate target has no installable runtime/import image")
+	endif()
+
+	get_filename_component(SAMPLERATE_LIBRARY_DIRECTORY "${SAMPLERATE_RUNTIME_IMAGE}" DIRECTORY)
+	get_filename_component(SAMPLERATE_PREFIX_DIRECTORY "${SAMPLERATE_LIBRARY_DIRECTORY}" DIRECTORY)
+	set(SAMPLERATE_LICENSE "${SAMPLERATE_PREFIX_DIRECTORY}/share/licenses/libsamplerate/COPYING")
+	if(NOT EXISTS "${SAMPLERATE_LICENSE}")
+		message(FATAL_ERROR "The selected SampleRate package has no BSD license at ${SAMPLERATE_LICENSE}")
+	endif()
+
+	if(SAMPLERATE_RUNTIME_IMAGE MATCHES "\\.[Dd][Ll][Ll]$")
+		install(FILES "${SAMPLERATE_RUNTIME_IMAGE}" DESTINATION "${BIN_DIR}")
+	endif()
+	install(FILES "${SAMPLERATE_LICENSE}" DESTINATION "${DATA_DIR}/licenses/libsamplerate")
+	lmms_verify_installed_samplerate("${BIN_DIR}")
+endif()
+
 # Install STK rawwaves
 if(LMMS_HAVE_STK AND (LMMS_BUILD_WIN32 OR LMMS_BUILD_APPLE))
 	if(STK_RAWWAVE_ROOT)
@@ -49,4 +76,12 @@ if(LMMS_HAVE_STK AND (LMMS_BUILD_WIN32 OR LMMS_BUILD_APPLE))
 		message(WARNING "Can't find STK rawwave root!")
 	endif()
 endif()
+
+# Ship licenses for the header-only Signalsmith backend with binary installers.
+install(FILES "${CMAKE_SOURCE_DIR}/src/3rdparty/signalsmith/stretch/LICENSE.txt"
+	DESTINATION "${DATA_DIR}/licenses/signalsmith" RENAME "SignalsmithStretch-LICENSE.txt")
+install(FILES "${CMAKE_SOURCE_DIR}/src/3rdparty/signalsmith/linear/LICENSE.txt"
+	DESTINATION "${DATA_DIR}/licenses/signalsmith" RENAME "SignalsmithLinear-LICENSE.txt")
+install(FILES "${CMAKE_SOURCE_DIR}/src/3rdparty/signalsmith/README.md"
+	DESTINATION "${DATA_DIR}/licenses/signalsmith" RENAME "README.txt")
 

@@ -5,6 +5,7 @@
 #include <QString>
 #include <QJsonObject>
 #include <memory>
+#include <functional>
 #include "RecordingWriter.h"
 #include "RecordingTakeReceipt.h"
 #include "lmms_export.h"
@@ -52,7 +53,11 @@ public:
   RecordingFileIdentity audioIdentity,journalIdentity;
   bool sealed=false;
  };
+ // Internal, explicit sharing capability. It does not reopen or broaden the
+ // exclusive recording-library lock and is never exposed through IPC.
+ struct ManagedRootGrant {QString code,selectedPath;std::shared_ptr<void> lock;std::function<bool()> valid;};
  static Approval authorizeLocalRoot(const QString&);
+ ManagedRootGrant managedRootGrant() const;
  ~RecordingLibrary() override;
  QString prepareProjectFolder(const ProjectIdentity&);
  NewFileResult createUniquePartial(const ProjectIdentity&,const TakeIdentity&);

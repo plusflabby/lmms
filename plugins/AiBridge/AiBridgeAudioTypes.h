@@ -11,6 +11,8 @@ struct AiBridgeAudioClipState
 {
 	QString id, trackId, sourceStatus, color;
 	QString nativeName;
+	QString managedVariantAssetId;
+	QByteArray managedVariantStateDigest;
 	QByteArray sourceReferenceHash, sourceIdentity, sourceDigest;
 	qint64 position = 0, length = 0, offset = 0;
 	bool muted = false, reversed = false, autoResize = false;

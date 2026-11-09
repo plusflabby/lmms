@@ -148,6 +148,10 @@ IF(LMMS_HAVE_WINMM)
 	SET(EXTRA_LIBRARIES "winmm")
 ENDIF()
 
+IF(WIN32)
+	list(APPEND EXTRA_LIBRARIES crypt32 advapi32)
+ENDIF()
+
 IF(LMMS_BUILD_APPLE)
 	SET(EXTRA_LIBRARIES "-framework CoreMIDI -framework CoreFoundation")
 ENDIF()
@@ -200,6 +204,10 @@ SET(LMMS_REQUIRED_LIBS ${LMMS_REQUIRED_LIBS}
 target_link_libraries(lmmsobjs
 	${LMMS_REQUIRED_LIBS}
 )
+if(LMMS_BUILD_WIN32 AND LMMS_REQUIRE_QUALIFIED_VOCAL_RUNTIME)
+	lmms_stage_qualified_samplerate(lmms)
+	lmms_require_qualified_samplerate(lmmsobjs)
+endif()
 target_static_libraries(lmmsobjs ringbuffer)
 
 set_target_properties(lmms PROPERTIES

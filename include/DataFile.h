@@ -75,6 +75,9 @@ public:
 	QString nameWithExtension( const QString& fn ) const;
 
 	void write( QTextStream& strm );
+	// Serialize the exact project payload used by the recording save protocol.
+	// Returns false when the uncompressed XML exceeds its existing size limit.
+	bool serializeProjectForSave(const QString& filename, QByteArray& output);
 	bool writeFile(const QString& fn, bool withResources = false);
 	bool copyResources(const QString& resourcesDir); //!< Copies resources to the resourcesDir and changes the DataFile to use local paths to them
 	bool hasLocalPlugins(QDomElement parent = QDomElement(), bool firstCall = true) const;

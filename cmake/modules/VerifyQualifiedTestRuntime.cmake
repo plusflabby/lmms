@@ -1,0 +1,8 @@
+if(NOT EXISTS "${LMMS_QUALIFIED_TEST_RUNTIME}")
+	message(FATAL_ERROR "Qualified test runtime is missing; build the test targets first")
+endif()
+file(SHA256 "${LMMS_QUALIFIED_TEST_RUNTIME}" _actual)
+string(TOUPPER "${_actual}" _actual)
+if(NOT _actual STREQUAL "BF275A0636DC7DADAC8A691842C06B460109EFC213C68B5EF6576A216E55D734")
+	message(FATAL_ERROR "Qualified test runtime SHA-256 mismatch")
+endif()
